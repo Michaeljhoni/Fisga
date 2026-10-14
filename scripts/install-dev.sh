@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Builds LDM, installs it in ~/.local/bin and registers the browser host.
-# Works on any distro with a Rust toolchain (Arch: pacman -S rust; others: rustup).
+# Works on any distro with a Rust toolchain and the GTK4 headers (>= 4.10):
+#   Arch: pacman -S rust gtk4   Debian/Ubuntu: libgtk-4-dev   Fedora: gtk4-devel
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PREFIX="${PREFIX:-$HOME/.local}"
 cargo build --release --workspace
-install -Dm755 target/release/ldm target/release/ldmd target/release/ldm-native-host -t "$PREFIX/bin"
+install -Dm755 target/release/ldm target/release/ldmd target/release/ldm-native-host target/release/ldm-gui -t "$PREFIX/bin"
+install -Dm644 crates/ldm-gui/data/io.ldm.Ldm.desktop -t "$PREFIX/share/applications"
 "$PREFIX/bin/ldm" install-hosts
 bash extension/build.sh
 

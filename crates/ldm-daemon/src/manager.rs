@@ -29,6 +29,8 @@ struct Job {
     info: DownloadInfo,
     request: AddRequest,
     cancel: Option<CancellationToken>,
+    /// "Baixar agora": start even when MAX_PARALLEL downloads are running.
+    forced: bool,
 }
 
 struct Inner {
@@ -91,7 +93,8 @@ impl Manager {
                     info.state = State::Paused;
                 }
                 info.speed = 0.0;
-                inner.jobs.insert(info.id, Job { info, request, cancel: None });
+                info.probing = false;
+                inner.jobs.insert(info.id, Job { info, request, cancel: None, forced: false });
             }
         }
         Ok(Arc::new(Self {
@@ -119,17 +122,23 @@ impl Manager {
         if request.kind == SourceKind::Direct && looks_like_manifest(&request.url) {
             request.kind = SourceKind::Stream;
         }
+        let probe = request.confirm && request.kind == SourceKind::Direct;
         let id = {
             let mut inner = self.inner.lock().unwrap();
             let id = inner.next_id;
             inner.next_id += 1;
+            let state = match (request.confirm, request.start) {
+                (true, _) => State::Pending,
+                (false, true) => State::Queued,
+                (false, false) => State::Paused,
+            };
             let info = DownloadInfo {
                 id,
                 url: request.url.clone(),
                 kind: request.kind,
                 name: display_name(&request),
                 path: None,
-                state: if request.start { State::Queued } else { State::Paused },
+                state,
                 downloaded: 0,
                 total: None,
                 speed: 0.0,
@@ -137,15 +146,79 @@ impl Manager {
                 resumable: false,
                 error: None,
                 created_at: now(),
+                dir: Some(request.output_dir.clone().unwrap_or_else(default_download_dir)),
+                probing: probe,
             };
             let _ = self.updates.send(Response::Update { item: info.clone() });
-            inner.jobs.insert(id, Job { info, request, cancel: None });
+            inner.jobs.insert(id, Job { info, request, cancel: None, forced: false });
             id
         };
         tracing::info!(id, "download adicionado");
         self.save();
         self.schedule();
+        if probe {
+            tokio::spawn(self.clone().probe_pending(id));
+        }
         Ok(id)
+    }
+
+    pub fn state(&self, id: u64) -> Option<State> {
+        self.inner.lock().unwrap().jobs.get(&id).map(|j| j.info.state)
+    }
+
+    /// Fills in the size and server-side file name of a pending download, so the
+    /// "Novo download" window can show them.
+    async fn probe_pending(self: Arc<Self>, id: u64) {
+        let Some(request) = self.inner.lock().unwrap().jobs.get(&id).map(|j| j.request.clone()) else {
+            return;
+        };
+        let spec = RequestSpec { url: request.url.clone(), headers: request_headers(&request) };
+        let result = ldm_core::probe(&self.client, &spec).await;
+        self.update(id, |info| {
+            info.probing = false;
+            match result {
+                Ok(probe) => {
+                    info.total = probe.total;
+                    info.resumable = probe.ranges;
+                    if request.file_name.is_none() && info.state == State::Pending {
+                        info.name = probe.file_name;
+                    }
+                }
+                Err(e) => tracing::info!(id, error = %e, "não foi possível sondar o download pendente"),
+            }
+        });
+    }
+
+    /// Answers a pending download: queue it, or start it right away (`now`).
+    pub fn confirm(
+        self: &Arc<Self>,
+        id: u64,
+        now: bool,
+        file_name: Option<String>,
+        output_dir: Option<PathBuf>,
+    ) -> anyhow::Result<()> {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
+            if job.info.state != State::Pending {
+                bail!("o download #{id} não está aguardando confirmação");
+            }
+            if let Some(name) = file_name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
+                job.info.name = name.clone();
+                job.request.file_name = Some(name);
+            }
+            if let Some(dir) = output_dir {
+                job.info.dir = Some(dir.clone());
+                job.request.output_dir = Some(dir);
+            }
+            job.info.state = State::Queued;
+            job.forced = now;
+            let _ = self.updates.send(Response::Update { item: job.info.clone() });
+        }
+        tracing::info!(id, now, "download confirmado");
+        self.save();
+        self.schedule();
+        Ok(())
     }
 
     pub fn pause(&self, id: u64) -> anyhow::Result<()> {
@@ -205,23 +278,29 @@ impl Manager {
         Ok(())
     }
 
-    /// Starts queued downloads while there is a free slot.
+    /// Starts queued downloads while there is a free slot ("Baixar agora" ones
+    /// start regardless).
     pub fn schedule(self: &Arc<Self>) {
         let mut inner = self.inner.lock().unwrap();
-        let mut running = inner.jobs.values().filter(|j| j.info.state == State::Running).count();
-        let queued: Vec<u64> =
-            inner.jobs.values().filter(|j| j.info.state == State::Queued).map(|j| j.info.id).collect();
-        for id in queued {
-            if running >= MAX_PARALLEL {
-                break;
-            }
+        let running = inner.jobs.values().filter(|j| j.info.state == State::Running).count();
+        // Forced first, then by id.
+        let mut queued: Vec<(bool, u64)> = inner
+            .jobs
+            .values()
+            .filter(|j| j.info.state == State::Queued)
+            .map(|j| (!j.forced, j.info.id))
+            .collect();
+        queued.sort();
+        let forced = queued.iter().filter(|(not_forced, _)| !not_forced).count();
+        let to_start = forced + MAX_PARALLEL.saturating_sub(running + forced);
+        for (_, id) in queued.into_iter().take(to_start) {
             let job = inner.jobs.get_mut(&id).expect("id from map");
             let cancel = CancellationToken::new();
             job.cancel = Some(cancel.clone());
+            job.forced = false;
             job.info.state = State::Running;
             job.info.error = None;
             let _ = self.updates.send(Response::Update { item: job.info.clone() });
-            running += 1;
             tokio::spawn(self.clone().run_job(id, cancel));
         }
         self.dirty.store(true, Ordering::Relaxed);
@@ -421,4 +500,89 @@ pub fn request_headers(request: &AddRequest) -> Vec<(String, String)> {
     }
     headers.extend(request.headers.iter().cloned());
     headers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Nothing listens on port 9 (discard), so jobs that do start fail fast.
+    const URL: &str = "http://127.0.0.1:9/file.iso";
+
+    fn manager() -> Arc<Manager> {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("ldmd-test-{}-{nanos}", std::process::id()));
+        Manager::load(dir.join("downloads.json")).unwrap()
+    }
+
+    fn add(manager: &Arc<Manager>, confirm: bool) -> u64 {
+        manager.add(AddRequest { url: URL.into(), confirm, start: true, ..Default::default() }).unwrap()
+    }
+
+    #[tokio::test]
+    async fn confirm_flag_creates_pending_download_that_does_not_start() {
+        let manager = manager();
+        let mut updates = manager.subscribe();
+        let id = add(&manager, true);
+        assert_eq!(manager.state(id), Some(State::Pending));
+        let Ok(Response::Update { item }) = updates.try_recv() else { panic!("no update broadcast") };
+        assert_eq!(item.state, State::Pending);
+        assert!(item.probing, "direct downloads are probed for size");
+        assert!(item.dir.is_some());
+        manager.schedule();
+        assert_eq!(manager.state(id), Some(State::Pending));
+    }
+
+    #[tokio::test]
+    async fn without_confirm_the_download_starts() {
+        let manager = manager();
+        let id = add(&manager, false);
+        assert_eq!(manager.state(id), Some(State::Running));
+    }
+
+    #[tokio::test]
+    async fn confirm_applies_name_and_folder() {
+        let manager = manager();
+        let id = add(&manager, true);
+        manager.confirm(id, false, Some("outro.iso".into()), Some("/tmp/x".into())).unwrap();
+        let info = manager.list().into_iter().find(|i| i.id == id).unwrap();
+        assert_eq!(info.name, "outro.iso");
+        assert_eq!(info.dir.as_deref(), Some(Path::new("/tmp/x")));
+        // A free slot: queued downloads start immediately.
+        assert_eq!(info.state, State::Running);
+        // Only pending downloads can be confirmed.
+        assert!(manager.confirm(id, true, None, None).is_err());
+        assert!(manager.confirm(999, true, None, None).is_err());
+    }
+
+    #[tokio::test]
+    async fn queue_waits_for_a_slot_but_download_now_does_not() {
+        let manager = manager();
+        for _ in 0..MAX_PARALLEL {
+            add(&manager, false);
+        }
+        let queued = add(&manager, true);
+        let now = add(&manager, true);
+        manager.confirm(queued, false, None, None).unwrap();
+        manager.confirm(now, true, None, None).unwrap();
+        assert_eq!(manager.state(queued), Some(State::Queued));
+        assert_eq!(manager.state(now), Some(State::Running));
+    }
+
+    #[tokio::test]
+    async fn cancel_removes_the_pending_download() {
+        let manager = manager();
+        let id = add(&manager, true);
+        manager.remove(id, false).await.unwrap();
+        assert_eq!(manager.state(id), None);
+    }
+
+    #[tokio::test]
+    async fn pending_survives_a_restart() {
+        let manager = manager();
+        let id = add(&manager, true);
+        manager.save();
+        let reloaded = Manager::load(manager.store.clone()).unwrap();
+        assert_eq!(reloaded.state(id), Some(State::Pending));
+    }
 }

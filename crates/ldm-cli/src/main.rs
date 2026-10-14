@@ -60,6 +60,9 @@ enum Command {
         /// Acompanha o progresso até terminar
         #[arg(short, long)]
         wait: bool,
+        /// Pede confirmação na janela "Novo download" (ldm-gui) antes de começar
+        #[arg(long, conflicts_with = "wait")]
+        confirm: bool,
     },
     /// Baixa em primeiro plano, sem o daemon
     Get {
@@ -68,6 +71,19 @@ enum Command {
     },
     /// Lista os downloads
     List,
+    /// Confirma um download que aguarda na janela "Novo download"
+    Confirm {
+        id: u64,
+        /// Coloca na fila em vez de começar agora
+        #[arg(long)]
+        queue: bool,
+        /// Pasta de destino
+        #[arg(short = 'o', long)]
+        dir: Option<PathBuf>,
+        /// Nome do arquivo
+        #[arg(short, long)]
+        name: Option<String>,
+    },
     /// Pausa um download
     Pause { id: u64 },
     /// Retoma um download pausado ou com erro
@@ -97,7 +113,11 @@ enum Command {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
-        Command::Add { source, wait } => add(source, wait).await,
+        Command::Add { source, wait, confirm } => add(source, wait, confirm).await,
+        Command::Confirm { id, queue, dir, name } => {
+            let output_dir = dir.map(|d| std::path::absolute(&d).unwrap_or(d));
+            simple(Request::Confirm { id, now: !queue, file_name: name, output_dir }).await
+        }
         Command::Get { source } => get(source).await,
         Command::List => list().await,
         Command::Pause { id } => simple(Request::Pause { id }).await,
@@ -183,7 +203,7 @@ async fn get(source: Source) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn add(source: Source, wait: bool) -> anyhow::Result<()> {
+async fn add(source: Source, wait: bool, confirm: bool) -> anyhow::Result<()> {
     ldm_ipc::ensure_daemon().await?;
     let request = AddRequest {
         url: source.url.clone(),
@@ -194,19 +214,24 @@ async fn add(source: Source, wait: bool) -> anyhow::Result<()> {
         user_agent: source.user_agent.clone(),
         headers: source.headers()?,
         start: true,
+        confirm,
         ..Default::default()
     };
     let mut connection = Connection::open().await?;
     let Response::Added { id } = connection.call(&Request::Add(request)).await? else {
         bail!("resposta inesperada do daemon");
     };
-    println!("download #{id} adicionado");
+    if confirm {
+        println!("download #{id} aguardando confirmação");
+    } else {
+        println!("download #{id} adicionado");
+    }
     if !wait {
         return Ok(());
     }
 
     let mut connection = Connection::open().await?;
-    connection.send(&Request::Subscribe).await?;
+    connection.send(&Request::Subscribe { confirmer: false }).await?;
     let bar = ProgressBar::new_spinner();
     bar.enable_steady_tick(Duration::from_millis(120));
     while let Some(message) = connection.recv().await? {
@@ -250,6 +275,7 @@ async fn add(source: Source, wait: bool) -> anyhow::Result<()> {
 
 fn state_label(state: State) -> &'static str {
     match state {
+        State::Pending => "aguardando",
         State::Queued => "na fila",
         State::Running => "baixando",
         State::Paused => "pausado",
@@ -295,7 +321,7 @@ async fn simple(request: Request) -> anyhow::Result<()> {
 
 async fn watch() -> anyhow::Result<()> {
     let mut connection = Connection::open().await?;
-    connection.send(&Request::Subscribe).await?;
+    connection.send(&Request::Subscribe { confirmer: false }).await?;
     while let Some(message) = connection.recv().await? {
         match message {
             Response::Downloads { items } => items.iter().for_each(|i| println!("{}", row(i))),

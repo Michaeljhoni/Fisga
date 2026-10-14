@@ -1,6 +1,7 @@
 //! `ldmd`: owns the download list and runs the downloads. Clients (CLI, GUI,
 //! browser host) talk to it over a Unix socket; see `ldm-ipc`.
 
+mod gui;
 mod manager;
 mod notify;
 mod ytdlp;
@@ -16,6 +17,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
 
+use crate::gui::Gui;
 use crate::manager::Manager;
 
 fn init_logging() {
@@ -52,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
 
     let store = dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("ldm").join("downloads.json");
     let manager = Manager::load(store)?;
+    let gui = Gui::from_env();
     let shutdown = CancellationToken::new();
     tracing::info!(socket = %socket.display(), "ldmd {} pronto", ldm_ipc::VERSION);
 
@@ -64,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
-                    tokio::spawn(serve_client(manager.clone(), stream, shutdown.clone()));
+                    tokio::spawn(serve_client(manager.clone(), gui.clone(), stream, shutdown.clone()));
                 }
                 Err(e) => tracing::warn!(error = %e, "accept falhou"),
             },
@@ -87,7 +90,7 @@ async fn write(writer: &mut tokio::net::unix::OwnedWriteHalf, response: &Respons
     writer.write_all(&line).await
 }
 
-async fn serve_client(manager: Arc<Manager>, stream: UnixStream, shutdown: CancellationToken) {
+async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: UnixStream, shutdown: CancellationToken) {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
     while let Ok(Some(line)) = lines.next_line().await {
@@ -100,10 +103,21 @@ async fn serve_client(manager: Arc<Manager>, stream: UnixStream, shutdown: Cance
         };
         let response = match request {
             Request::Ping => Response::Pong { version: ldm_ipc::VERSION.to_string() },
-            Request::Add(add) => match manager.add(add) {
-                Ok(id) => Response::Added { id },
-                Err(e) => Response::Error { message: e.to_string() },
-            },
+            Request::Add(add) => {
+                let confirm = add.confirm;
+                match manager.add(add) {
+                    Ok(id) => {
+                        if confirm {
+                            gui.request_confirmation(&manager, id);
+                        }
+                        Response::Added { id }
+                    }
+                    Err(e) => Response::Error { message: e.to_string() },
+                }
+            }
+            Request::Confirm { id, now, file_name, output_dir } => {
+                result(manager.confirm(id, now, file_name, output_dir))
+            }
             Request::List => Response::Downloads { items: manager.list() },
             Request::Pause { id } => result(manager.pause(id)),
             Request::Resume { id } => result(manager.resume(id)),
@@ -115,7 +129,8 @@ async fn serve_client(manager: Arc<Manager>, stream: UnixStream, shutdown: Cance
                 shutdown.cancel();
                 Response::Ok
             }
-            Request::Subscribe => {
+            Request::Subscribe { confirmer } => {
+                let _confirmer = confirmer.then(|| gui.attach());
                 // Subscribe before taking the snapshot so no update is lost.
                 let mut updates = manager.subscribe();
                 if write(&mut writer, &Response::Downloads { items: manager.list() }).await.is_err() {

@@ -367,7 +367,7 @@
     try {
       const res = await api.runtime.sendMessage({ type: "download-media", choice, ...mediaInfo(active) });
       if (res?.ok) {
-        setState("ok", t("sent", "Enviado"));
+        setState("ok", res.pending ? t("sentConfirm", "Confirme no LDM") : t("sent", "Enviado"));
       } else {
         setState("err", t("failed", "Erro"));
         showToast(res?.error || "Erro desconhecido");

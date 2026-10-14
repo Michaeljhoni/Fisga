@@ -7,11 +7,11 @@ for (const el of document.querySelectorAll("[data-i18n]")) {
 }
 
 async function init() {
-  const prefs = await api.storage.local.get({ overlay: true, intercept: true });
-  $("overlay").checked = prefs.overlay !== false;
-  $("intercept").checked = prefs.intercept !== false;
-  $("overlay").addEventListener("change", (e) => api.storage.local.set({ overlay: e.target.checked }));
-  $("intercept").addEventListener("change", (e) => api.storage.local.set({ intercept: e.target.checked }));
+  const prefs = await api.storage.local.get({ overlay: true, intercept: true, confirm: true });
+  for (const key of ["overlay", "intercept", "confirm"]) {
+    $(key).checked = prefs[key] !== false;
+    $(key).addEventListener("change", (e) => api.storage.local.set({ [key]: e.target.checked }));
+  }
 
   // Firefox treats host permissions as optional: without them no button and no sniffing.
   const all = { origins: ["<all_urls>"] };
@@ -48,7 +48,7 @@ async function init() {
       button.addEventListener("click", async () => {
         const reply = await api.runtime.sendMessage({ type: "popup-download", tabId: tab.id, item });
         button.classList.add(reply?.ok ? "sent" : "failed");
-        small.textContent = reply?.ok ? `✓ ${t("sent")}` : reply?.error ?? t("failed");
+        small.textContent = reply?.ok ? `✓ ${t(reply.pending ? "sentConfirm" : "sent")}` : reply?.error ?? t("failed");
       });
       li.append(button);
       return li;

@@ -48,13 +48,14 @@ async fn handle(message: Incoming) -> Value {
             json!({ "type": "pong", "version": ldm_ipc::VERSION, "daemon": daemon })
         }
         Incoming::Download(request) => {
+            let pending = request.confirm;
             let result = async {
                 ldm_ipc::ensure_daemon().await?;
                 ldm_ipc::call(&Request::Add(request)).await
             }
             .await;
             match result {
-                Ok(Response::Added { id }) => json!({ "type": "added", "id": id }),
+                Ok(Response::Added { id }) => json!({ "type": "added", "id": id, "pending": pending }),
                 Ok(other) => json!({ "type": "error", "message": format!("resposta inesperada: {other:?}") }),
                 Err(e) => json!({ "type": "error", "message": e.to_string() }),
             }
@@ -62,12 +63,24 @@ async fn handle(message: Incoming) -> Value {
     }
 }
 
+/// Downloads from the browser open the "Novo download" window unless the
+/// extension sends `"confirm": false` (its "começar sem confirmação" option).
+fn parse(body: &[u8]) -> serde_json::Result<Incoming> {
+    let mut value: Value = serde_json::from_slice(body)?;
+    if let Some(object) = value.as_object_mut() {
+        if object.get("type").and_then(Value::as_str) == Some("download") {
+            object.entry("confirm").or_insert(Value::Bool(true));
+        }
+    }
+    serde_json::from_value(value)
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let mut stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
     while let Some(body) = read_message(&mut stdin)? {
-        let reply = match serde_json::from_slice::<Incoming>(&body) {
+        let reply = match parse(&body) {
             Ok(message) => handle(message).await,
             Err(e) => {
                 eprintln!("ldm-native-host: mensagem inválida: {e}");
@@ -77,4 +90,45 @@ async fn main() -> anyhow::Result<()> {
         write_message(&mut stdout, &reply)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn download(body: &str) -> AddRequest {
+        match parse(body.as_bytes()).unwrap() {
+            Incoming::Download(request) => request,
+            Incoming::Ping => panic!("expected a download"),
+        }
+    }
+
+    #[test]
+    fn browser_downloads_ask_for_confirmation_by_default() {
+        let request = download(r#"{"type":"download","url":"https://e.com/a.mp4","kind":"direct","title":"A"}"#);
+        assert!(request.confirm);
+        assert_eq!(request.title.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn extension_can_skip_confirmation() {
+        let request = download(r#"{"type":"download","url":"https://e.com/a.mp4","confirm":false}"#);
+        assert!(!request.confirm);
+    }
+
+    #[test]
+    fn ping_and_invalid_messages() {
+        assert!(matches!(parse(br#"{"type":"ping"}"#).unwrap(), Incoming::Ping));
+        assert!(parse(br#"{"type":"nope"}"#).is_err());
+        assert!(parse(b"[1,2]").is_err());
+    }
+
+    #[test]
+    fn framing_roundtrip() {
+        let mut buffer = Vec::new();
+        write_message(&mut buffer, &json!({"type": "pong"})).unwrap();
+        let body = read_message(&mut buffer.as_slice()).unwrap().unwrap();
+        assert_eq!(body, br#"{"type":"pong"}"#);
+        assert!(read_message(&mut &b""[..]).unwrap().is_none());
+    }
 }

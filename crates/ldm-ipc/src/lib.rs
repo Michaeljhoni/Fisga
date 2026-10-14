@@ -82,6 +82,10 @@ pub struct AddRequest {
     /// Start right away (true) or only add to the list (false).
     #[serde(default = "yes")]
     pub start: bool,
+    /// Ask the user first: the download is created as `State::Pending` and the
+    /// GUI shows the "Novo download" window. `start` is ignored.
+    #[serde(default)]
+    pub confirm: bool,
 }
 
 fn yes() -> bool {
@@ -91,6 +95,8 @@ fn yes() -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
+    /// Waiting for the user to confirm it in the "Novo download" window.
+    Pending,
     Queued,
     Running,
     Paused,
@@ -117,6 +123,12 @@ pub struct DownloadInfo {
     pub error: Option<String>,
     /// Unix seconds.
     pub created_at: u64,
+    /// Destination folder.
+    #[serde(default)]
+    pub dir: Option<PathBuf>,
+    /// True while the daemon fetches the size and name of a pending download.
+    #[serde(default)]
+    pub probing: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,7 +145,24 @@ pub enum Request {
         delete_file: bool,
     },
     /// Keep the connection open and receive `Update` messages.
-    Subscribe,
+    Subscribe {
+        /// This client shows the "Novo download" window for pending downloads
+        /// (the GUI). While one is connected, the daemon does not launch `ldm-gui`.
+        #[serde(default)]
+        confirmer: bool,
+    },
+    /// Answer to a pending download: start it now or put it in the queue,
+    /// optionally with another file name or folder. To cancel, use `Remove`.
+    Confirm {
+        id: u64,
+        /// Start immediately, even when the queue is full.
+        #[serde(default)]
+        now: bool,
+        #[serde(default)]
+        file_name: Option<String>,
+        #[serde(default)]
+        output_dir: Option<PathBuf>,
+    },
     Shutdown,
 }
 
@@ -251,4 +280,54 @@ pub async fn ensure_daemon() -> anyhow::Result<()> {
         }
     }
     bail!("o ldmd não respondeu após ser iniciado")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_request_defaults() {
+        let add: AddRequest = serde_json::from_str(r#"{"url":"https://example.com/a.iso"}"#).unwrap();
+        assert!(add.start);
+        assert!(!add.confirm);
+        assert_eq!(add.kind, SourceKind::Direct);
+    }
+
+    #[test]
+    fn subscribe_without_fields_is_not_a_confirmer() {
+        let request: Request = serde_json::from_str(r#"{"type":"subscribe"}"#).unwrap();
+        assert!(matches!(request, Request::Subscribe { confirmer: false }));
+        let request: Request = serde_json::from_str(r#"{"type":"subscribe","confirmer":true}"#).unwrap();
+        assert!(matches!(request, Request::Subscribe { confirmer: true }));
+    }
+
+    #[test]
+    fn confirm_roundtrip() {
+        let request = Request::Confirm {
+            id: 7,
+            now: true,
+            file_name: Some("a.iso".into()),
+            output_dir: Some("/tmp".into()),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains(r#""type":"confirm""#), "{json}");
+        let back: Request = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, Request::Confirm { id: 7, now: true, .. }));
+        let minimal: Request = serde_json::from_str(r#"{"type":"confirm","id":3}"#).unwrap();
+        assert!(matches!(minimal, Request::Confirm { id: 3, now: false, file_name: None, output_dir: None }));
+    }
+
+    #[test]
+    fn pending_state_and_old_download_info() {
+        assert_eq!(serde_json::to_string(&State::Pending).unwrap(), r#""pending""#);
+        // downloads.json written before `dir`/`probing` existed still loads.
+        let info: DownloadInfo = serde_json::from_str(
+            r#"{"id":1,"url":"https://e.com/a","kind":"direct","name":"a","path":null,"state":"paused",
+                "downloaded":0,"total":null,"speed":0.0,"connections":0,"resumable":false,"error":null,"createdAt":1}"#,
+        )
+        .unwrap();
+        assert_eq!(info.dir, None);
+        assert!(!info.probing);
+    }
 }

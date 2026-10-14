@@ -11,6 +11,8 @@ const HOST = "io.ldm.native";
 const DEFAULT_SETTINGS = {
   intercept: true,
   overlay: true,
+  // Open the "Novo download" window in the app before starting (like IDM).
+  confirm: true,
   extensions:
     "3gp 7z aac apk appimage avi bin bz2 deb dmg epub exe flac flatpak flv gz img iso jar m4a m4v mkv " +
     "mov mp3 mp4 mpeg mpg msi ogg ogv opus pkg rar rpm run tar tgz wav webm wma wmv xz zip zst",
@@ -242,10 +244,12 @@ async function cookiesFor(url) {
   }
 }
 
+/** Resolves to { id, pending }: pending = the app is asking the user to confirm. */
 async function sendToApp(payload) {
+  const prefs = await settings();
   let reply;
   try {
-    reply = await api.runtime.sendNativeMessage(HOST, { type: "download", ...payload });
+    reply = await api.runtime.sendNativeMessage(HOST, { type: "download", confirm: prefs.confirm !== false, ...payload });
   } catch (err) {
     const text = String(err?.message || err);
     if (/not found|no such native application|access to the specified native messaging host is forbidden/i.test(text)) {
@@ -253,7 +257,7 @@ async function sendToApp(payload) {
     }
     throw new Error(text);
   }
-  if (reply?.type === "added") return reply.id;
+  if (reply?.type === "added") return { id: reply.id, pending: Boolean(reply.pending) };
   throw new Error(reply?.message || "resposta inválida do app");
 }
 
@@ -282,12 +286,12 @@ async function downloadMedia(msg, sender) {
   } else {
     target = await resolveTarget(msg, sender);
   }
-  const id = await sendMedia(target, {
+  const { id, pending } = await sendMedia(target, {
     referrer: sender.url || msg.pageUrl,
     pageUrl: sender.tab?.url || msg.pageUrl,
     title: msg.title,
   });
-  return { ok: true, id };
+  return { ok: true, id, pending };
 }
 
 async function ping() {
@@ -311,8 +315,8 @@ async function handle(msg, sender) {
     }
     case "popup-download": {
       const tab = await api.tabs.get(msg.tabId);
-      const id = await sendMedia(msg.item, { referrer: tab.url, pageUrl: tab.url, title: tab.title });
-      return { ok: true, id };
+      const { id, pending } = await sendMedia(msg.item, { referrer: tab.url, pageUrl: tab.url, title: tab.title });
+      return { ok: true, id, pending };
     }
     case "ping":
       return ping();

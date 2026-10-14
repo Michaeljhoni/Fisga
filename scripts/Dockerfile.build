@@ -1,0 +1,7 @@
+# Build image used by scripts/docker-cargo.sh: the official Rust image plus the
+# GTK4 headers needed by ldm-gui. Debian trixie ships GTK 4.18 (ldm-gui needs >= 4.10).
+FROM rust:1-slim-trixie
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libgtk-4-dev pkg-config \
+ && rm -rf /var/lib/apt/lists/* \
+ && rustup component add clippy rustfmt

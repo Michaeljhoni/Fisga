@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=LDM
+GenericName=Gerenciador de downloads
+Comment=Baixe arquivos, vídeos e músicas com várias conexões
+Exec=ldm-gui
+Icon=folder-download
+Terminal=false
+Categories=Network;FileTransfer;GTK;
+Keywords=download;downloads;idm;gerenciador;
+StartupNotify=true
+DBusActivatable=false

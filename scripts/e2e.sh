@@ -8,6 +8,8 @@ set -euo pipefail
 BIN="$(cd "${1:-target/debug}" && pwd)"
 SANDBOX="$(mktemp -d)"
 export HOME="$SANDBOX/home" XDG_RUNTIME_DIR="$SANDBOX/run" XDG_DATA_HOME="$SANDBOX/data" XDG_CONFIG_HOME="$SANDBOX/home/.config"
+# Stand-in for ldm-gui: starts fine but never connects, like a GUI without a display.
+export LDM_GUI=true
 mkdir -p "$HOME/Downloads" "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME"
 chmod 700 "$XDG_RUNTIME_DIR"
 
@@ -64,11 +66,34 @@ cmp "$HOME/Downloads/104857600.bin" "$SANDBOX/reference/104857600.bin" && echo "
 step "native host: ping"
 host '{"type":"ping"}'
 
-step "native host: download sent by the extension"
+step "native host: download sent by the extension waits for confirmation"
 reply="$(host "{\"type\":\"download\",\"url\":\"$SMALL\",\"kind\":\"direct\",\"referrer\":\"https://example.com/page\",\"title\":\"Teste\",\"userAgent\":\"Mozilla/5.0 (X11; Linux x86_64)\",\"cookies\":[{\"name\":\"session\",\"value\":\"abc\",\"domain\":\"127.0.0.1\",\"path\":\"/\",\"secure\":true,\"hostOnly\":true}]}")"
 echo "$reply"
 echo "$reply" | grep -q '"type":"added"'
+echo "$reply" | grep -q '"pending":true'
+wait_state 3 aguardando 5
+"$BIN/ldm" list
+# What the "Baixar agora" button sends, with another name and folder.
+"$BIN/ldm" confirm 3 --name confirmado.bin -o "$SANDBOX/escolhida"
 wait_state 3 concluído 120
+test "$(stat -c %s "$SANDBOX/escolhida/confirmado.bin")" -eq 10485760; echo "confirmed download ok"
+
+step "native host: \"Cancelar\" in the confirmation window"
+host "{\"type\":\"download\",\"url\":\"$SMALL\",\"kind\":\"direct\"}" | grep -q '"pending":true'
+wait_state 4 aguardando 5
+"$BIN/ldm" rm 4
+test -z "$(state_of 4)"; echo "cancelled download removed"
+
+step "native host: extension option to start without confirmation"
+reply="$(host "{\"type\":\"download\",\"url\":\"$SMALL\",\"kind\":\"direct\",\"confirm\":false}")"
+echo "$reply"
+echo "$reply" | grep -q '"pending":false'
+wait_state 5 concluído 120
+
+step "no GUI connects: the download is queued anyway after 15 s"
+host "{\"type\":\"download\",\"url\":\"$SMALL\",\"kind\":\"direct\"}" | grep -q '"pending":true'
+wait_state 6 aguardando 5
+wait_state 6 concluído 60
 ls -la "$HOME/Downloads"
 
 step "native host: invalid message"

@@ -1,0 +1,308 @@
+mod hosts;
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+use anyhow::{bail, Context};
+use clap::{Parser, Subcommand};
+use indicatif::{ProgressBar, ProgressStyle};
+use ldm_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
+use ldm_ipc::{AddRequest, Connection, DownloadInfo, Request, Response, State};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+
+#[derive(Parser)]
+#[command(name = "ldm", version, about = "LDM: gerenciador de downloads para Linux")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(clap::Args)]
+struct Source {
+    url: String,
+    /// Pasta de destino (padrão: pasta de Downloads)
+    #[arg(short = 'o', long)]
+    dir: Option<PathBuf>,
+    /// Nome do arquivo (padrão: detectado pelo servidor)
+    #[arg(short, long)]
+    name: Option<String>,
+    /// Número máximo de conexões
+    #[arg(short, long)]
+    connections: Option<usize>,
+    #[arg(long)]
+    referer: Option<String>,
+    #[arg(long)]
+    user_agent: Option<String>,
+    /// Cabeçalho extra, no formato "Nome: valor" (pode repetir)
+    #[arg(short = 'H', long = "header")]
+    headers: Vec<String>,
+}
+
+impl Source {
+    fn headers(&self) -> anyhow::Result<Vec<(String, String)>> {
+        self.headers
+            .iter()
+            .map(|h| {
+                let (name, value) = h.split_once(':').with_context(|| format!("cabeçalho inválido: {h}"))?;
+                Ok((name.trim().to_string(), value.trim().to_string()))
+            })
+            .collect()
+    }
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Envia um download para o daemon (ldmd)
+    Add {
+        #[command(flatten)]
+        source: Source,
+        /// Acompanha o progresso até terminar
+        #[arg(short, long)]
+        wait: bool,
+    },
+    /// Baixa em primeiro plano, sem o daemon
+    Get {
+        #[command(flatten)]
+        source: Source,
+    },
+    /// Lista os downloads
+    List,
+    /// Pausa um download
+    Pause { id: u64 },
+    /// Retoma um download pausado ou com erro
+    Resume { id: u64 },
+    /// Remove um download da lista
+    Rm {
+        id: u64,
+        /// Apaga também o arquivo (ou as partes baixadas)
+        #[arg(long)]
+        delete_file: bool,
+    },
+    /// Mostra as mudanças em tempo real
+    Watch,
+    /// Registra o host nativo nos navegadores (Chrome, Chromium, Brave, Edge, Vivaldi, Firefox...)
+    InstallHosts {
+        /// ID extra de extensão Chrome autorizada (ex.: ao carregar sem a chave do manifesto)
+        #[arg(long = "chrome-id")]
+        chrome_ids: Vec<String>,
+        /// Remove os registros em vez de criar
+        #[arg(long)]
+        uninstall: bool,
+    },
+    /// Encerra o daemon (pausa os downloads em andamento)
+    Stop,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    match Cli::parse().command {
+        Command::Add { source, wait } => add(source, wait).await,
+        Command::Get { source } => get(source).await,
+        Command::List => list().await,
+        Command::Pause { id } => simple(Request::Pause { id }).await,
+        Command::Resume { id } => simple(Request::Resume { id }).await,
+        Command::Rm { id, delete_file } => simple(Request::Remove { id, delete_file }).await,
+        Command::Watch => watch().await,
+        Command::InstallHosts { chrome_ids, uninstall } => hosts::install(&chrome_ids, uninstall),
+        Command::Stop => match ldm_ipc::call(&Request::Shutdown).await {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                eprintln!("o daemon não está rodando");
+                Ok(())
+            }
+        },
+    }
+}
+
+fn bytes(n: u64) -> String {
+    indicatif::HumanBytes(n).to_string()
+}
+
+fn bar_style() -> ProgressStyle {
+    ProgressStyle::with_template("{spinner} [{bar:32}] {bytes}/{total_bytes} {binary_bytes_per_sec} ETA {eta} {msg}")
+        .expect("valid template")
+        .progress_chars("=> ")
+}
+
+async fn get(source: Source) -> anyhow::Result<()> {
+    let client = ldm_core::build_client()?;
+    let mut headers = source.headers()?;
+    if let Some(r) = &source.referer {
+        headers.push(("Referer".into(), r.clone()));
+    }
+    if let Some(ua) = &source.user_agent {
+        headers.push(("User-Agent".into(), ua.clone()));
+    }
+    let spec = RequestSpec { url: source.url.clone(), headers };
+    let dir = source.dir.clone().unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let opts = DownloadOptions { connections: source.connections.unwrap_or(8), ..Default::default() };
+    let cancel = CancellationToken::new();
+    let ctrl_c = cancel.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            ctrl_c.cancel();
+        }
+    });
+
+    let (tx, mut events) = mpsc::unbounded_channel();
+    let bar = ProgressBar::new_spinner();
+    bar.enable_steady_tick(Duration::from_millis(120));
+    let target = Target::Dir { dir, file_name: source.name.clone() };
+    let download = ldm_core::download(&client, &spec, target, &opts, tx, cancel);
+    tokio::pin!(download);
+    let outcome = loop {
+        tokio::select! {
+            Some(event) = events.recv() => match event {
+                EngineEvent::Started { path, total, resumable } => {
+                    if let Some(total) = total {
+                        bar.set_length(total);
+                        bar.set_style(bar_style());
+                    }
+                    bar.println(format!(
+                        "→ {} {}",
+                        path.display(),
+                        if resumable { "(retomável)" } else { "(sem retomada: o servidor não aceita Range)" }
+                    ));
+                }
+                EngineEvent::Progress(p) => {
+                    bar.set_position(p.downloaded);
+                    bar.set_message(format!("{} conexões", p.active_connections));
+                }
+            },
+            outcome = &mut download => break outcome,
+        }
+    };
+    bar.finish_and_clear();
+    match outcome {
+        Ok(Outcome::Completed(path)) => println!("✓ {}", path.display()),
+        Ok(Outcome::Paused(path)) => println!("⏸ pausado: {} (rode o mesmo comando para retomar)", path.display()),
+        Err(ldm_core::Error::Cancelled) => println!("cancelado"),
+        Err(e) => bail!(e),
+    }
+    Ok(())
+}
+
+async fn add(source: Source, wait: bool) -> anyhow::Result<()> {
+    ldm_ipc::ensure_daemon().await?;
+    let request = AddRequest {
+        url: source.url.clone(),
+        output_dir: source.dir.clone().map(|d| std::path::absolute(&d).unwrap_or(d)),
+        file_name: source.name.clone(),
+        connections: source.connections,
+        referrer: source.referer.clone(),
+        user_agent: source.user_agent.clone(),
+        headers: source.headers()?,
+        start: true,
+        ..Default::default()
+    };
+    let mut connection = Connection::open().await?;
+    let Response::Added { id } = connection.call(&Request::Add(request)).await? else {
+        bail!("resposta inesperada do daemon");
+    };
+    println!("download #{id} adicionado");
+    if !wait {
+        return Ok(());
+    }
+
+    let mut connection = Connection::open().await?;
+    connection.send(&Request::Subscribe).await?;
+    let bar = ProgressBar::new_spinner();
+    bar.enable_steady_tick(Duration::from_millis(120));
+    while let Some(message) = connection.recv().await? {
+        let item = match message {
+            Response::Update { item } if item.id == id => item,
+            Response::Downloads { items } => match items.into_iter().find(|i| i.id == id) {
+                Some(item) => item,
+                None => continue,
+            },
+            Response::Removed { id: removed } if removed == id => bail!("o download foi removido"),
+            _ => continue,
+        };
+        if let Some(total) = item.total {
+            if bar.length() != Some(total) {
+                bar.set_length(total);
+                bar.set_style(bar_style());
+            }
+        }
+        bar.set_position(item.downloaded);
+        bar.set_message(item.name.clone());
+        match item.state {
+            State::Completed => {
+                bar.finish_and_clear();
+                println!("✓ {}", item.path.map(|p| p.display().to_string()).unwrap_or(item.name));
+                return Ok(());
+            }
+            State::Failed => {
+                bar.finish_and_clear();
+                bail!(item.error.unwrap_or_else(|| "falhou".into()));
+            }
+            State::Paused => {
+                bar.finish_and_clear();
+                println!("⏸ pausado");
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn state_label(state: State) -> &'static str {
+    match state {
+        State::Queued => "na fila",
+        State::Running => "baixando",
+        State::Paused => "pausado",
+        State::Completed => "concluído",
+        State::Failed => "erro",
+    }
+}
+
+fn row(item: &DownloadInfo) -> String {
+    let progress = match item.total {
+        Some(total) if total > 0 => format!(
+            "{:>5.1}% de {}",
+            item.downloaded as f64 * 100.0 / total as f64,
+            bytes(total)
+        ),
+        _ => bytes(item.downloaded),
+    };
+    let speed = if item.state == State::Running { format!("{}/s", bytes(item.speed as u64)) } else { String::new() };
+    let mut line = format!("{:>4}  {:<10} {:<20} {:>11}  {}", item.id, state_label(item.state), progress, speed, item.name);
+    if let Some(error) = &item.error {
+        line.push_str(&format!("\n      └ {error}"));
+    }
+    line
+}
+
+async fn list() -> anyhow::Result<()> {
+    let Response::Downloads { items } = ldm_ipc::call(&Request::List).await? else {
+        bail!("resposta inesperada do daemon");
+    };
+    if items.is_empty() {
+        println!("nenhum download");
+    }
+    for item in &items {
+        println!("{}", row(item));
+    }
+    Ok(())
+}
+
+async fn simple(request: Request) -> anyhow::Result<()> {
+    ldm_ipc::call(&request).await?;
+    Ok(())
+}
+
+async fn watch() -> anyhow::Result<()> {
+    let mut connection = Connection::open().await?;
+    connection.send(&Request::Subscribe).await?;
+    while let Some(message) = connection.recv().await? {
+        match message {
+            Response::Downloads { items } => items.iter().for_each(|i| println!("{}", row(i))),
+            Response::Update { item } => println!("{}", row(&item)),
+            Response::Removed { id } => println!("{id:>4}  removido"),
+            other => println!("{}", serde_json::to_string(&other)?),
+        }
+    }
+    Ok(())
+}

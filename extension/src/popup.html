@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <img src="icons/icon-32.png" alt="" width="20" height="20" />
+      <strong data-i18n="extName">LDM</strong>
+      <span id="status" class="status"></span>
+    </header>
+    <p id="hint" class="hint" hidden data-i18n="popupInstallHint"></p>
+    <section id="grant" class="grant" hidden>
+      <p data-i18n="popupGrantHint"></p>
+      <button id="grant-button" type="button" data-i18n="popupGrant"></button>
+    </section>
+
+    <label class="toggle"><input type="checkbox" id="overlay" /> <span data-i18n="popupOverlay"></span></label>
+    <label class="toggle"><input type="checkbox" id="intercept" /> <span data-i18n="popupIntercept"></span></label>
+
+    <h2 data-i18n="popupMedia"></h2>
+    <ul id="media"></ul>
+    <p id="empty" class="hint" hidden data-i18n="popupNoMedia"></p>
+    <script src="popup.js"></script>
+  </body>
+</html>

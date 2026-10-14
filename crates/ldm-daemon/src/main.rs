@@ -1,0 +1,151 @@
+//! `ldmd`: owns the download list and runs the downloads. Clients (CLI, GUI,
+//! browser host) talk to it over a Unix socket; see `ldm-ipc`.
+
+mod manager;
+mod notify;
+mod ytdlp;
+
+use std::io::IsTerminal;
+use std::os::unix::fs::PermissionsExt;
+use std::sync::Arc;
+
+use anyhow::Context;
+use ldm_ipc::{Request, Response};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{UnixListener, UnixStream};
+use tokio::signal::unix::{signal, SignalKind};
+use tokio_util::sync::CancellationToken;
+
+use crate::manager::Manager;
+
+fn init_logging() {
+    let filter = tracing_subscriber::EnvFilter::try_from_env("LDM_LOG")
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let builder = tracing_subscriber::fmt().with_env_filter(filter);
+    if std::io::stderr().is_terminal() {
+        builder.init();
+        return;
+    }
+    let log_dir = dirs::state_dir().unwrap_or_else(std::env::temp_dir).join("ldm");
+    let file = std::fs::create_dir_all(&log_dir)
+        .and_then(|_| std::fs::OpenOptions::new().create(true).append(true).open(log_dir.join("ldmd.log")));
+    match file {
+        Ok(file) => builder.with_ansi(false).with_writer(std::sync::Mutex::new(file)).init(),
+        Err(_) => builder.init(),
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    init_logging();
+
+    let runtime_dir = ldm_ipc::runtime_dir();
+    std::fs::create_dir_all(&runtime_dir)?;
+    std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))?;
+    let socket = ldm_ipc::socket_path();
+    if UnixStream::connect(&socket).await.is_ok() {
+        tracing::info!("ldmd já está rodando");
+        return Ok(());
+    }
+    let _ = std::fs::remove_file(&socket);
+    let listener = UnixListener::bind(&socket).with_context(|| format!("bind {}", socket.display()))?;
+
+    let store = dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("ldm").join("downloads.json");
+    let manager = Manager::load(store)?;
+    let shutdown = CancellationToken::new();
+    tracing::info!(socket = %socket.display(), "ldmd {} pronto", ldm_ipc::VERSION);
+
+    tokio::spawn(manager.clone().autosave(shutdown.clone()));
+    manager.schedule();
+
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
+    loop {
+        tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok((stream, _)) => {
+                    tokio::spawn(serve_client(manager.clone(), stream, shutdown.clone()));
+                }
+                Err(e) => tracing::warn!(error = %e, "accept falhou"),
+            },
+            _ = sigterm.recv() => break,
+            _ = sigint.recv() => break,
+            _ = shutdown.cancelled() => break,
+        }
+    }
+
+    tracing::info!("encerrando");
+    shutdown.cancel();
+    manager.shutdown().await;
+    let _ = std::fs::remove_file(&socket);
+    Ok(())
+}
+
+async fn write(writer: &mut tokio::net::unix::OwnedWriteHalf, response: &Response) -> std::io::Result<()> {
+    let mut line = serde_json::to_vec(response)?;
+    line.push(b'\n');
+    writer.write_all(&line).await
+}
+
+async fn serve_client(manager: Arc<Manager>, stream: UnixStream, shutdown: CancellationToken) {
+    let (reader, mut writer) = stream.into_split();
+    let mut lines = BufReader::new(reader).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let request = match serde_json::from_str::<Request>(&line) {
+            Ok(request) => request,
+            Err(e) => {
+                let _ = write(&mut writer, &Response::Error { message: format!("pedido inválido: {e}") }).await;
+                continue;
+            }
+        };
+        let response = match request {
+            Request::Ping => Response::Pong { version: ldm_ipc::VERSION.to_string() },
+            Request::Add(add) => match manager.add(add) {
+                Ok(id) => Response::Added { id },
+                Err(e) => Response::Error { message: e.to_string() },
+            },
+            Request::List => Response::Downloads { items: manager.list() },
+            Request::Pause { id } => result(manager.pause(id)),
+            Request::Resume { id } => result(manager.resume(id)),
+            Request::Remove { id, delete_file } => match manager.remove(id, delete_file).await {
+                Ok(()) => Response::Removed { id },
+                Err(e) => Response::Error { message: e.to_string() },
+            },
+            Request::Shutdown => {
+                shutdown.cancel();
+                Response::Ok
+            }
+            Request::Subscribe => {
+                // Subscribe before taking the snapshot so no update is lost.
+                let mut updates = manager.subscribe();
+                if write(&mut writer, &Response::Downloads { items: manager.list() }).await.is_err() {
+                    return;
+                }
+                loop {
+                    tokio::select! {
+                        update = updates.recv() => match update {
+                            Ok(update) => if write(&mut writer, &update).await.is_err() { return },
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                let items = manager.list();
+                                if write(&mut writer, &Response::Downloads { items }).await.is_err() { return }
+                            }
+                            Err(_) => return,
+                        },
+                        line = lines.next_line() => if !matches!(line, Ok(Some(_))) { return },
+                        _ = shutdown.cancelled() => return,
+                    }
+                }
+            }
+        };
+        if write(&mut writer, &response).await.is_err() {
+            return;
+        }
+    }
+}
+
+fn result(r: anyhow::Result<()>) -> Response {
+    match r {
+        Ok(()) => Response::Ok,
+        Err(e) => Response::Error { message: e.to_string() },
+    }
+}

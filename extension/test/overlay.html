@@ -1,0 +1,62 @@
+<!doctype html>
+<!--
+  Manual/automated test page for the floating download button (src/content.js).
+  It stubs the extension API, so it runs in any browser without installing the
+  extension: open it, hover the video, click "Baixar" and check the log.
+-->
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>LDM overlay test</title>
+    <style>
+      body { font: 15px system-ui, sans-serif; margin: 24px; background: #f1f5f9; }
+      .player { position: relative; width: 640px; max-width: 100%; background: #000; }
+      .player video { display: block; width: 100%; }
+      /* Like real players: a layer on top of the <video> catches the pointer. */
+      .player .controls { position: absolute; inset: 0; }
+      .spacer { height: 600px; }
+      #log { white-space: pre-wrap; background: #0f172a; color: #e2e8f0; padding: 10px; border-radius: 8px; min-height: 60px; }
+    </style>
+    <script>
+      window.__ldmLog = [];
+      const log = (m) => {
+        window.__ldmLog.push(m);
+        document.getElementById("log").textContent += JSON.stringify(m) + "\n";
+      };
+      window.chrome = {
+        i18n: { getMessage: () => "" },
+        storage: { local: { get: async (d) => d }, onChanged: { addListener() {} } },
+        runtime: {
+          async sendMessage(msg) {
+            log(msg);
+            await new Promise((r) => setTimeout(r, 300));
+            if (msg.type === "media-candidates") {
+              return {
+                ok: true,
+                items: [
+                  { url: location.href, kind: "page", label: "Detectar automaticamente (melhor qualidade)", detail: "localhost" },
+                  { url: "https://cdn.example.com/master.m3u8", kind: "stream", label: "master.m3u8", detail: "HLS · cdn.example.com" },
+                  { url: msg.src, kind: "direct", label: "flower.mp4", detail: "MP4 · 1.1 MB" },
+                ],
+              };
+            }
+            return window.__ldmFail ? { ok: false, error: "App LDM não encontrado. Instale-o e rode: ldm install-hosts" } : { ok: true, id: 1 };
+          },
+        },
+      };
+    </script>
+    <script src="../src/content.js"></script>
+  </head>
+  <body>
+    <h1>Teste do botão flutuante</h1>
+    <div class="player" id="player">
+      <video id="video" src="https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4" muted loop playsinline></video>
+      <div class="controls"></div>
+    </div>
+    <p><button onclick="document.getElementById('player').requestFullscreen()">Tela cheia</button></p>
+    <audio id="audio" controls src="https://interactive-examples.mdn.mozilla.net/media/cc0-audio/t-rex-roar.mp3"></audio>
+    <h2>Log</h2>
+    <div id="log"></div>
+    <div class="spacer"></div>
+  </body>
+</html>

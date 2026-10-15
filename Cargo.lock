@@ -1023,6 +1023,7 @@ dependencies = [
  "anyhow",
  "gtk4",
  "ldm-ipc",
+ "libc",
  "tokio",
 ]
 

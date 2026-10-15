@@ -29,7 +29,7 @@ trap cleanup EXIT
 step() { printf '\n== %s\n' "$*"; }
 # Native messaging framing: 32-bit little-endian length + JSON.
 frame() {
-  local n=${#1}
+  local n; n=$(printf %s "$1" | wc -c)  # bytes, not characters (UTF-8 locales)
   printf "\\x$(printf %02x $((n & 255)))\\x$(printf %02x $(((n >> 8) & 255)))\\x00\\x00%s" "$1"
 }
 host() { frame "$1" | "$BIN/ldm-native-host" | tail -c +5; echo; }

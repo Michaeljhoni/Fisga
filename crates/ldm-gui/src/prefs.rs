@@ -25,13 +25,14 @@ fn row(grid: &gtk::Grid, index: i32, caption: &str, widget: &impl IsA<gtk::Widge
     }
     grid.attach(&text, 0, index, 1, 1);
     widget.set_valign(gtk::Align::Center);
+    widget.set_halign(gtk::Align::End);
     grid.attach(widget, 1, index, 1, 1);
 }
 
 fn folder_text(dir: &Option<PathBuf>) -> String {
     match dir {
         Some(dir) => dir.display().to_string(),
-        None => "Pasta de Downloads do sistema".into(),
+        None => "Downloads do sistema".into(),
     }
 }
 
@@ -52,7 +53,7 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
         .xalign(1.0)
         .build();
     let choose = gtk::Button::with_label("Alterar…");
-    let reset = gtk::Button::builder().icon_name("edit-undo-symbolic").tooltip_text("Usar a pasta padrão").build();
+    let reset = gtk::Button::builder().label("Padrão").tooltip_text("Usar a pasta de Downloads do sistema").build();
     let dir_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     dir_box.append(&dir_label);
     dir_box.append(&choose);

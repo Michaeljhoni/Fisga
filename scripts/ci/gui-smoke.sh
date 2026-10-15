@@ -26,7 +26,11 @@ for _ in $(seq 1 50); do [ -s "$SANDBOX/server.url" ] && break; sleep 0.1; done
 BASE="$(cat "$SANDBOX/server.url")"
 URL="$BASE/files/52428800.bin"
 
-frame() { local n=${#1}; printf "\\x$(printf %02x $((n & 255)))\\x$(printf %02x $(((n >> 8) & 255)))\\x00\\x00%s" "$1"; }
+# Native messaging framing: 32-bit little-endian length (in bytes, not characters) + JSON.
+frame() {
+  local n; n=$(printf %s "$1" | wc -c)
+  printf "\x$(printf %02x $((n & 255)))\x$(printf %02x $(((n >> 8) & 255)))\x00\x00%s" "$1"
+}
 host() { frame "$1" | "$BIN/ldm-native-host" | tail -c +5; echo; }
 state_of() { "$BIN/ldm" list | awk -v id="$1" '$1 == id { print $2 }'; }
 find_window() { for _ in $(seq 1 75); do w="$(xdotool search --name "$1" 2>/dev/null | head -1)"; [ -n "$w" ] && { echo "$w"; return 0; }; sleep 0.2; done; echo "window '$1' not found" >&2; return 1; }

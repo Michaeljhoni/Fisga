@@ -150,6 +150,8 @@ impl ConfirmDialog {
         });
         dialog.show_dir();
         dialog.update(info);
+        // Start in the name field (the selectable URL label would grab focus and look selected).
+        GtkWindowExt::set_focus(&dialog.window, Some(&dialog.name));
 
         let d = Rc::downgrade(&dialog);
         now.connect_clicked(move |_| {

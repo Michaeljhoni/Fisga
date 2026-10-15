@@ -66,7 +66,6 @@ impl ProgressWindow {
             .xalign(0.0)
             .ellipsize(pango::EllipsizeMode::Middle)
             .max_width_chars(50)
-            .selectable(true)
             .build();
         name.add_css_class("title-4");
         let url = gtk::Label::builder()

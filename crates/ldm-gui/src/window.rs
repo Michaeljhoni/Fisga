@@ -173,8 +173,10 @@ impl MainWindow {
             .menu_model(&main_menu())
             .build();
         header.pack_end(&menu);
-        header.pack_end(&header_button("folder-open-symbolic", "Abrir pasta", "win.open-folder"));
-        header.pack_end(&header_button("document-open-symbolic", "Abrir arquivo", "win.open-file"));
+        header.pack_end(&header_button("folder-symbolic", "Abrir pasta", "win.open-folder"));
+        header.pack_end(
+            &gtk::Button::builder().label("Abrir").tooltip_text("Abrir o arquivo").action_name("win.open-file").build(),
+        );
         window.set_titlebar(Some(&header));
 
         // Sidebar: views and categories.

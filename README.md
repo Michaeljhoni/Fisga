@@ -58,8 +58,9 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
   Documentos, Compactados, Programas, Outros), cada uma com a contagem. À direita, a lista com nome,
   tamanho, progresso, velocidade, tempo restante e estado, atualizada em tempo real. Botões para
   adicionar URL (Ctrl+N; sugere o link da área de transferência), retomar, pausar, remover (Delete;
-  pergunta se apaga também o arquivo), abrir o arquivo e abrir a pasta. No menu (☰): *Remover
-  concluídos da lista*, *Preferências* (Ctrl+,) e *Sobre*. Clique duplo: confirma um download
+  pergunta se apaga também o arquivo), abrir o arquivo e abrir a pasta. No menu (☰): *Retomar
+  todos*, *Pausar todos*, *Copiar endereço* (Ctrl+C), *Remover concluídos da lista*,
+  *Preferências* (Ctrl+,) e *Sobre*. Clique duplo: confirma um download
   pendente, abre um concluído ou mostra o progresso dos demais.
 - **Novo download**: aparece para cada download vindo do navegador, com endereço, nome (editável),
   pasta (botão "Alterar…") e tamanho. **Baixar agora** começa na hora, mesmo com a fila cheia;

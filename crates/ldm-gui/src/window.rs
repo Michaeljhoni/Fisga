@@ -140,6 +140,11 @@ fn sidebar_row(view: View) -> (gtk::ListBoxRow, gtk::Label) {
 fn main_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     let section = gio::Menu::new();
+    section.append(Some("Retomar todos"), Some("win.resume-all"));
+    section.append(Some("Pausar todos"), Some("win.pause-all"));
+    menu.append_section(None, &section);
+    let section = gio::Menu::new();
+    section.append(Some("Copiar endereço"), Some("win.copy-url"));
     section.append(Some("Remover concluídos da lista"), Some("win.clear-completed"));
     menu.append_section(None, &section);
     let section = gio::Menu::new();
@@ -324,6 +329,29 @@ impl MainWindow {
         );
         let parent = window.clone();
         simple("about", Box::new(move || about(&parent)));
+        // Pause or resume every download in a given state (IDM's "Parar/Iniciar todos").
+        let bulk = |states: &'static [State], make: fn(u64) -> Request| {
+            let store = self.store.clone();
+            Box::new(move || {
+                for item in store.iter::<DownloadItem>().flatten() {
+                    let (id, state) = item.with_info(|info| (info.id, info.state));
+                    if states.contains(&state) {
+                        send(make(id), None);
+                    }
+                }
+            }) as Box<dyn Fn()>
+        };
+        simple("pause-all", bulk(&[State::Running, State::Queued], |id| Request::Pause { id }));
+        simple("resume-all", bulk(&[State::Paused, State::Failed], |id| Request::Resume { id }));
+        let (parent, s) = (window.clone(), selection.clone());
+        simple(
+            "copy-url",
+            Box::new(move || {
+                if let Some(info) = Self::selected(&s) {
+                    parent.clipboard().set_text(&info.url);
+                }
+            }),
+        );
         let (parent, store) = (window.clone(), self.store.clone());
         simple(
             "clear-completed",

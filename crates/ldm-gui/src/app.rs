@@ -54,6 +54,7 @@ impl App {
         self.app.set_accels_for_action("win.add", &["<Control>n"]);
         self.app.set_accels_for_action("win.remove", &["Delete"]);
         self.app.set_accels_for_action("win.preferences", &["<Control>comma"]);
+        self.app.set_accels_for_action("win.copy-url", &["<Control>c"]);
         self.app.set_accels_for_action("window.close", &["<Control>w"]);
         self.startup_hold.replace(Some(self.app.hold()));
 

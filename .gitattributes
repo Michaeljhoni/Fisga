@@ -1,0 +1,4 @@
+# Shell scripts must keep LF even when checked out on Windows (autocrlf),
+# or bash in the build container rejects them.
+*.sh text eol=lf
+scripts/Dockerfile.build text eol=lf

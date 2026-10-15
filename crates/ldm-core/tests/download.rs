@@ -69,7 +69,9 @@ async fn handle(
         let head = String::from_utf8_lossy(&pending[..head_end]).to_string();
         pending.drain(..head_end);
 
-        if opts.fail_first.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok() {
+        #[allow(deprecated)] // try_update needs a newer Rust than our MSRV (1.80)
+        let failing = opts.fail_first.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok();
+        if failing {
             socket
                 .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
                 .await?;

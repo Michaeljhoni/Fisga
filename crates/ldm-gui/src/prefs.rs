@@ -65,6 +65,8 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
     let connections = gtk::SpinButton::with_range(1.0, 32.0, 1.0);
     connections.set_value(settings.connections as f64);
     let progress = gtk::Switch::builder().active(settings.show_progress).build();
+    let limit = gtk::SpinButton::with_range(0.0, 1_000_000.0, 64.0);
+    limit.set_value((settings.speed_limit / 1024) as f64);
 
     let subfolders: Vec<&str> = Category::ALL.iter().filter_map(|c| c.folder()).collect();
     let subfolders_hint = format!("Subpastas: {}. Os demais ficam na pasta de downloads.", subfolders.join(", "));
@@ -74,6 +76,13 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
     row(&grid, 2, "Downloads ao mesmo tempo", &parallel, Some("Os outros esperam na fila."));
     row(&grid, 3, "Conexões por arquivo", &connections, Some("Para links diretos; vídeos de sites usam o yt-dlp."));
     row(&grid, 4, "Mostrar a janela de progresso", &progress, Some("Ao clicar em \u{201c}Baixar agora\u{201d}."));
+    row(
+        &grid,
+        5,
+        "Limite de velocidade (KB/s)",
+        &limit,
+        Some("Todos os downloads juntos; 0 = sem limite. Vale na hora, até para os que estão baixando."),
+    );
 
     let cancel = gtk::Button::with_label("Cancelar");
     let save = gtk::Button::with_label("Salvar");
@@ -127,6 +136,7 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
             max_parallel: parallel.value() as usize,
             connections: connections.value() as usize,
             show_progress: progress.is_active(),
+            speed_limit: limit.value() as u64 * 1024,
         };
         button.set_sensitive(false);
         let (w, button) = (w.clone(), button.clone());

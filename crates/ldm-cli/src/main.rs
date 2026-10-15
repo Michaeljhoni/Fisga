@@ -123,6 +123,9 @@ enum Command {
         /// Abrir a janela de progresso ao confirmar um download
         #[arg(long)]
         show_progress: Option<bool>,
+        /// Limite de velocidade de todos os downloads juntos, em KB/s (0 = sem limite)
+        #[arg(long)]
+        speed_limit: Option<u64>,
     },
     /// Encerra o daemon (pausa os downloads em andamento)
     Stop,
@@ -143,8 +146,8 @@ async fn main() -> anyhow::Result<()> {
         Command::Rm { id, delete_file } => simple(Request::Remove { id, delete_file }).await,
         Command::Watch => watch().await,
         Command::InstallHosts { chrome_ids, uninstall } => hosts::install(&chrome_ids, uninstall),
-        Command::Settings { dir, category_folders, max_parallel, connections, show_progress } => {
-            settings(dir, category_folders, max_parallel, connections, show_progress).await
+        Command::Settings { dir, category_folders, max_parallel, connections, show_progress, speed_limit } => {
+            settings(dir, category_folders, max_parallel, connections, show_progress, speed_limit).await
         }
         Command::Stop => match ldm_ipc::call(&Request::Shutdown).await {
             Ok(_) => Ok(()),
@@ -300,6 +303,7 @@ async fn settings(
     max_parallel: Option<usize>,
     connections: Option<usize>,
     show_progress: Option<bool>,
+    speed_limit: Option<u64>,
 ) -> anyhow::Result<()> {
     ldm_ipc::ensure_daemon().await?;
     let Response::Settings { settings: mut current } = ldm_ipc::call(&Request::GetSettings).await? else {
@@ -309,7 +313,8 @@ async fn settings(
         || category_folders.is_some()
         || max_parallel.is_some()
         || connections.is_some()
-        || show_progress.is_some();
+        || show_progress.is_some()
+        || speed_limit.is_some();
     if let Some(dir) = dir {
         current.download_dir = if dir.as_os_str() == "padrao" { None } else { Some(std::path::absolute(&dir)?) };
     }
@@ -317,6 +322,7 @@ async fn settings(
     current.max_parallel = max_parallel.unwrap_or(current.max_parallel);
     current.connections = connections.unwrap_or(current.connections);
     current.show_progress = show_progress.unwrap_or(current.show_progress);
+    current.speed_limit = speed_limit.map(|kb| kb * 1024).unwrap_or(current.speed_limit);
     if changed {
         ldm_ipc::call(&Request::SetSettings { settings: current.clone() }).await?;
     }
@@ -326,6 +332,10 @@ async fn settings(
     println!("downloads ao mesmo tempo: {}", current.max_parallel);
     println!("conexões por arquivo:    {}", current.connections);
     println!("janela de progresso:     {}", if current.show_progress { "sim" } else { "não" });
+    match current.speed_limit {
+        0 => println!("limite de velocidade:    sem limite"),
+        limit => println!("limite de velocidade:    {}/s", bytes(limit)),
+    }
     Ok(())
 }
 

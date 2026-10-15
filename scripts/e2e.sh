@@ -113,6 +113,15 @@ step "settings: no category subfolders"
 test "$(stat -c %s "$HOME/Downloads/10485760.bin")" -eq 10485760; echo "saved in the base folder"
 "$BIN/ldm" settings
 
+step "settings: speed limit (1 MiB/s for all downloads)"
+"$BIN/ldm" settings --speed-limit 1024 | grep "limite de velocidade"
+start=$(date +%s.%N)
+"$BIN/ldm" add "$BASE/files/4194304.bin" --wait >/dev/null
+elapsed=$(echo "$(date +%s.%N) $start" | awk '{ printf "%.1f", $1 - $2 }')
+echo "4 MiB took ${elapsed}s"
+awk -v t="$elapsed" 'BEGIN { exit !(t >= 3.0) }'; echo "limit respected"
+"$BIN/ldm" settings --speed-limit 0 >/dev/null
+
 step "list"
 "$BIN/ldm" list
 echo; echo "E2E OK"

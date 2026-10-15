@@ -67,6 +67,8 @@ pub struct MainWindow {
     counts: Vec<(View, gtk::Label)>,
     status: gtk::Label,
     actions: Actions,
+    /// From the settings, for the status bar.
+    pub speed_limit: Cell<u64>,
 }
 
 #[derive(Clone)]
@@ -279,6 +281,7 @@ impl MainWindow {
             counts,
             status,
             actions,
+            speed_limit: Cell::new(app.settings().speed_limit),
         };
         this.connect(app, &view);
 
@@ -426,6 +429,9 @@ impl MainWindow {
                 };
                 if running > 0 {
                     text.push_str(&format!(" · {running} baixando · {}/s", format::bytes(speed as u64)));
+                }
+                if self.speed_limit.get() > 0 {
+                    text.push_str(&format!(" · limite de {}/s", format::bytes(self.speed_limit.get())));
                 }
                 text
             }

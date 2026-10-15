@@ -70,7 +70,10 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
   baixou, velocidade, tempo restante, se dá para retomar, a pasta e **Pausar/Retomar**. Ao terminar
   vira **Download concluído**, com **Abrir** e **Abrir pasta**. Pode ser desligada nas Preferências.
 - **Preferências**: pasta de downloads, subpastas por tipo de arquivo, downloads ao mesmo tempo,
-  conexões por arquivo e a janela de progresso. Ficam no daemon, em `~/.config/ldm/settings.json`.
+  conexões por arquivo, a janela de progresso e o **limite de velocidade** (KB/s para todos os
+  downloads juntos; muda na hora, até nos que estão baixando, e aparece na barra de status). Ficam
+  no daemon, em `~/.config/ldm/settings.json`. Vídeos de sites (yt-dlp) recebem o limite por
+  processo (`--limit-rate`).
 
 ### Categorias e pastas
 
@@ -120,6 +123,7 @@ ldm rm 3 --delete-file
 ldm watch                                        # mudanças em tempo real
 ldm settings                                     # configurações (pasta, subpastas, fila, conexões)
 ldm settings --category-folders false --max-parallel 5
+ldm settings --speed-limit 2048                  # 2 MB/s para tudo (0 = sem limite)
 ```
 
 ## Desenvolvimento
@@ -176,6 +180,7 @@ Hyprland, `windowrulev2 = float, class:^(io\.ldm\.Ldm)$, title:negative:^LDM$`.
 - [x] Interface gráfica (GTK4): janela "Novo download" ao clicar no botão, lista com ações
 - [x] Janela de progresso e de download concluído, categorias por tipo de arquivo (barra lateral e
       subpastas), Preferências
-- [ ] Ícone na bandeja, limite de velocidade, agendador
+- [x] Limite de velocidade global (muda na hora)
+- [ ] Ícone na bandeja, agendador
 - [ ] HLS/DASH nativo (hoje via yt-dlp), FTP
 - [ ] Pacotes (AUR, Flatpak, .deb/.rpm)

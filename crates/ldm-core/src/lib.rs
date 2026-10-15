@@ -10,12 +10,14 @@ pub mod control;
 pub mod engine;
 pub mod filename;
 mod fileio;
+pub mod limit;
 pub mod probe;
 
 use std::time::Duration;
 
 pub use control::SegmentState;
 pub use engine::{download, DownloadOptions, EngineEvent, Outcome, Progress, Target};
+pub use limit::RateLimiter;
 pub use probe::{probe, ProbeResult};
 
 /// What to fetch and which extra headers (Referer, Cookie, User-Agent...) to send.

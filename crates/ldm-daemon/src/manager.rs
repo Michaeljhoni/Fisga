@@ -58,6 +58,8 @@ pub struct Manager {
     /// Never locked while `inner` is held: take a copy first.
     settings: Mutex<Settings>,
     settings_path: PathBuf,
+    /// Speed limit shared by every direct download.
+    limiter: Arc<ldm_core::RateLimiter>,
 }
 
 /// Where a download of `category` goes when the user did not pick a folder.
@@ -129,9 +131,14 @@ impl Manager {
             client: ldm_core::build_client()?,
             store,
             dirty: AtomicBool::new(false),
+            limiter: Arc::new(ldm_core::RateLimiter::new(0)),
             settings: Mutex::new(load_settings(&settings_path)),
             settings_path,
         }))
+        .map(|manager: Arc<Self>| {
+            manager.limiter.set_rate(manager.settings().speed_limit);
+            manager
+        })
     }
 
     pub fn settings(&self) -> Settings {
@@ -147,6 +154,7 @@ impl Manager {
         }
         write_json(&self.settings_path, &settings, 0o644)?;
         *self.settings.lock().unwrap() = settings.clone();
+        self.limiter.set_rate(settings.speed_limit);
         tracing::info!(?settings, "configurações alteradas");
         let _ = self.updates.send(Response::Settings { settings });
         self.refresh_pending_dirs();
@@ -457,6 +465,7 @@ impl Manager {
         };
         let opts = DownloadOptions {
             connections: request.connections.unwrap_or(settings.connections).clamp(1, 32),
+            limiter: Some(self.limiter.clone()),
             ..Default::default()
         };
         let (events_tx, mut events) = mpsc::unbounded_channel();
@@ -739,6 +748,16 @@ mod tests {
         manager.confirm(iso, false, None, None).unwrap();
         manager.set_settings(Settings { category_folders: true, ..manager.settings() }).unwrap();
         assert_eq!(dir_of(iso), base, "confirmed downloads keep their folder");
+    }
+
+    #[tokio::test]
+    async fn speed_limit_follows_the_settings() {
+        let manager = manager();
+        assert_eq!(manager.limiter.rate(), 0);
+        manager.set_settings(Settings { speed_limit: 512 * 1024, ..manager.settings() }).unwrap();
+        assert_eq!(manager.limiter.rate(), 512 * 1024);
+        let reloaded = Manager::load(manager.store.clone(), manager.settings_path.clone()).unwrap();
+        assert_eq!(reloaded.limiter.rate(), 512 * 1024);
     }
 
     #[tokio::test]

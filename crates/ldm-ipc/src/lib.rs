@@ -183,11 +183,20 @@ pub struct Settings {
     pub connections: usize,
     /// Open the progress window when a confirmed download starts.
     pub show_progress: bool,
+    /// Speed limit for all downloads together, in bytes per second; 0 = none.
+    pub speed_limit: u64,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { download_dir: None, category_folders: true, max_parallel: 3, connections: 8, show_progress: true }
+        Self {
+            download_dir: None,
+            category_folders: true,
+            max_parallel: 3,
+            connections: 8,
+            show_progress: true,
+            speed_limit: 0,
+        }
     }
 }
 

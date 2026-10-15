@@ -61,7 +61,13 @@ pub async fn run(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel: 
         .args(["--progress-template", PROGRESS_TEMPLATE])
         .args(["--print", "before_dl:LDMNAME %(title)s"])
         .args(["--print", "after_move:LDMFILE %(filepath)s"])
-        .args(["--concurrent-fragments", "4"])
+        .args(["--concurrent-fragments", "4"]);
+    // Per yt-dlp process: with several site videos at once the total is higher.
+    let limit = manager.settings().speed_limit;
+    if limit > 0 {
+        command.args(["--limit-rate", &limit.to_string()]);
+    }
+    command
         .arg("--paths")
         .arg(&dir)
         .args(["--output", &template]);

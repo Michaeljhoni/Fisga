@@ -115,7 +115,12 @@ impl App {
                 self.remove(id);
                 structural = true;
             }
-            Event::Settings(settings) => *self.settings.borrow_mut() = settings,
+            Event::Settings(settings) => {
+                if let Some(window) = self.window.borrow().as_ref() {
+                    window.speed_limit.set(settings.speed_limit);
+                }
+                *self.settings.borrow_mut() = settings;
+            }
             Event::Disconnected(reason) => {
                 *self.connection.borrow_mut() = Err(reason);
                 self.startup_hold.replace(None);

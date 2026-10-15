@@ -16,7 +16,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libgtk-4-dev pkg-config xvfb xdotool imagemagick dbus-x11 adwaita-icon-theme fonts-dejavu-core
+            libgtk-4-dev pkg-config xvfb xdotool imagemagick dbus-x11 adwaita-icon-theme fonts-dejavu-core shared-mime-info
 
       - uses: dtolnay/rust-toolchain@stable
         with:

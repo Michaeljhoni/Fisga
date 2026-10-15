@@ -10,7 +10,7 @@ use gtk::{gdk, glib, pango};
 use ldm_ipc::{DownloadInfo, Request, State};
 
 use crate::format;
-use crate::window::{open_file, open_folder, send};
+use crate::window::{open_file_then, open_folder, send};
 
 pub struct ProgressWindow {
     window: gtk::Window,
@@ -159,12 +159,17 @@ impl ProgressWindow {
             send(request, Some(this.window.clone()));
         });
         let w = Rc::downgrade(&this);
-        open.connect_clicked(move |_| {
+        open.connect_clicked(move |button| {
             let Some(this) = w.upgrade() else { return };
-            if let Some(path) = this.info.borrow().path.clone() {
-                open_file(&this.window, path);
-            }
-            this.window.close();
+            let Some(path) = this.info.borrow().path.clone() else {
+                this.window.close();
+                return;
+            };
+            button.set_sensitive(false);
+            let (window, button) = (this.window.clone(), button.clone());
+            // Close only once the app was launched (see open_file_then).
+            open_file_then(&this.window, path, move || window.close());
+            glib::timeout_add_local_once(std::time::Duration::from_secs(5), move || button.set_sensitive(true));
         });
         let w = Rc::downgrade(&this);
         folder_button.connect_clicked(move |_| {

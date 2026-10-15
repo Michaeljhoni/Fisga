@@ -521,12 +521,19 @@ async fn confirm_remove(window: gtk::ApplicationWindow, info: DownloadInfo) {
 }
 
 pub fn open_file(window: &gtk::Window, path: PathBuf) {
+    open_file_then(window, path, || {});
+}
+
+/// Opens the file with its default app, then runs `then`. The launch is
+/// asynchronous and `window` is its parent (the desktop portal asks for it):
+/// closing the window before the launch finishes silently cancels it, so a
+/// window that should close afterwards does it in `then`.
+pub fn open_file_then(window: &gtk::Window, path: PathBuf, then: impl FnOnce() + 'static) {
     let launcher = gtk::FileLauncher::new(Some(&gio::File::for_path(&path)));
     let parent = window.clone();
-    launcher.launch(Some(window), gio::Cancellable::NONE, move |result| {
-        if let Err(e) = result {
-            show_error(Some(&parent), "Não foi possível abrir o arquivo", &e.to_string());
-        }
+    launcher.launch(Some(window), gio::Cancellable::NONE, move |result| match result {
+        Ok(()) => then(),
+        Err(e) => show_error(Some(&parent), "Não foi possível abrir o arquivo", &e.to_string()),
     });
 }
 

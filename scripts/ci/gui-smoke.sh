@@ -14,6 +14,21 @@ mkdir -p "$OUT"
 SANDBOX="$(mktemp -d)"
 export HOME="$SANDBOX/home" XDG_RUNTIME_DIR="$SANDBOX/run" XDG_DATA_HOME="$SANDBOX/data" XDG_CONFIG_HOME="$SANDBOX/home/.config"
 mkdir -p "$HOME/Downloads" "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+# Fake default app for .bin files: records what "Abrir" asked to open.
+mkdir -p "$XDG_DATA_HOME/applications" "$XDG_CONFIG_HOME"
+printf '#!/bin/sh
+echo "$1" > "%s/opened"
+' "$SANDBOX" > "$SANDBOX/fake-open"
+chmod +x "$SANDBOX/fake-open"
+printf '[Desktop Entry]
+Type=Application
+Name=Abridor de teste
+Exec=%s %%f
+MimeType=application/octet-stream;
+'   "$SANDBOX/fake-open" > "$XDG_DATA_HOME/applications/ldm-test-open.desktop"
+printf '[Default Applications]
+application/octet-stream=ldm-test-open.desktop
+' > "$XDG_CONFIG_HOME/mimeapps.list"
 export DISPLAY=:99 GDK_BACKEND=x11 GSK_RENDERER=cairo LIBGL_ALWAYS_SOFTWARE=1 NO_AT_BRIDGE=1
 Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
 XVFB=$!
@@ -56,7 +71,13 @@ test -f "$HOME/Downloads/Programas/52428800.bin"; echo "saved in Downloads/Progr
 done_win="$(find_window "^Download concluído$")"
 sleep 1
 shot 3-concluido
-xdotool windowfocus --sync "$done_win" key Escape
+# Enter = "Abrir": the file opens in its default app, then the window closes.
+xdotool windowfocus --sync "$done_win" key Return
+for _ in $(seq 1 50); do [ -s "$SANDBOX/opened" ] && break; sleep 0.2; done
+grep -q "Programas/52428800.bin" "$SANDBOX/opened"; echo "Abrir opened $(cat "$SANDBOX/opened")"
+for _ in $(seq 1 25); do xdotool search --name "^Download concluído$" >/dev/null 2>&1 || break; sleep 0.2; done
+if xdotool search --name "^Download concluído$" >/dev/null 2>&1; then echo "window still open"; exit 1; fi
+echo "window closed after opening"
 
 echo "== Escape cancels"
 host "{\"type\":\"download\",\"url\":\"$BASE/files/1048576.bin\",\"kind\":\"direct\"}"

@@ -101,14 +101,14 @@ impl ProgressWindow {
         let error = gtk::Label::builder().xalign(0.0).wrap(true).visible(false).selectable(true).build();
         error.add_css_class("error");
 
-        let open_folder = gtk::Button::with_label("Abrir pasta");
+        let folder_button = gtk::Button::with_label("Abrir pasta");
         let open = gtk::Button::with_label("Abrir");
         open.add_css_class("suggested-action");
         let pause = gtk::Button::with_label("Pausar");
         let close = gtk::Button::with_label("Fechar");
         let buttons = gtk::Box::builder().spacing(8).margin_top(6).build();
         let spacer = gtk::Box::builder().hexpand(true).build();
-        buttons.append(&open_folder);
+        buttons.append(&folder_button);
         buttons.append(&spacer);
         buttons.append(&pause);
         buttons.append(&close);
@@ -143,7 +143,7 @@ impl ProgressWindow {
             error,
             pause: pause.clone(),
             open: open.clone(),
-            open_folder: open_folder.clone(),
+            open_folder: folder_button.clone(),
             info: RefCell::new(info.clone()),
             on_closed: RefCell::default(),
         });
@@ -168,7 +168,7 @@ impl ProgressWindow {
             this.window.close();
         });
         let w = Rc::downgrade(&this);
-        open_folder.connect_clicked(move |_| {
+        folder_button.connect_clicked(move |_| {
             if let Some(this) = w.upgrade() {
                 open_folder(&this.window, &this.info.borrow());
             }

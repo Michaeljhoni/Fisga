@@ -106,6 +106,24 @@ enum Command {
         #[arg(long)]
         uninstall: bool,
     },
+    /// Mostra ou altera as configurações do daemon
+    Settings {
+        /// Pasta de downloads ("padrao" volta para a pasta de Downloads do sistema)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Separar por tipo de arquivo em subpastas (Vídeos, Músicas, Programas...)
+        #[arg(long)]
+        category_folders: Option<bool>,
+        /// Downloads ao mesmo tempo
+        #[arg(long)]
+        max_parallel: Option<usize>,
+        /// Conexões por arquivo
+        #[arg(long)]
+        connections: Option<usize>,
+        /// Abrir a janela de progresso ao confirmar um download
+        #[arg(long)]
+        show_progress: Option<bool>,
+    },
     /// Encerra o daemon (pausa os downloads em andamento)
     Stop,
 }
@@ -125,6 +143,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Rm { id, delete_file } => simple(Request::Remove { id, delete_file }).await,
         Command::Watch => watch().await,
         Command::InstallHosts { chrome_ids, uninstall } => hosts::install(&chrome_ids, uninstall),
+        Command::Settings { dir, category_folders, max_parallel, connections, show_progress } => {
+            settings(dir, category_folders, max_parallel, connections, show_progress).await
+        }
         Command::Stop => match ldm_ipc::call(&Request::Shutdown).await {
             Ok(_) => Ok(()),
             Err(_) => {
@@ -270,6 +291,41 @@ async fn add(source: Source, wait: bool, confirm: bool) -> anyhow::Result<()> {
             _ => {}
         }
     }
+    Ok(())
+}
+
+async fn settings(
+    dir: Option<PathBuf>,
+    category_folders: Option<bool>,
+    max_parallel: Option<usize>,
+    connections: Option<usize>,
+    show_progress: Option<bool>,
+) -> anyhow::Result<()> {
+    ldm_ipc::ensure_daemon().await?;
+    let Response::Settings { settings: mut current } = ldm_ipc::call(&Request::GetSettings).await? else {
+        bail!("resposta inesperada do daemon");
+    };
+    let changed = dir.is_some()
+        || category_folders.is_some()
+        || max_parallel.is_some()
+        || connections.is_some()
+        || show_progress.is_some();
+    if let Some(dir) = dir {
+        current.download_dir = if dir.as_os_str() == "padrao" { None } else { Some(std::path::absolute(&dir)?) };
+    }
+    current.category_folders = category_folders.unwrap_or(current.category_folders);
+    current.max_parallel = max_parallel.unwrap_or(current.max_parallel);
+    current.connections = connections.unwrap_or(current.connections);
+    current.show_progress = show_progress.unwrap_or(current.show_progress);
+    if changed {
+        ldm_ipc::call(&Request::SetSettings { settings: current.clone() }).await?;
+    }
+    let dir = current.download_dir.map(|d| d.display().to_string()).unwrap_or_else(|| "(Downloads do sistema)".into());
+    println!("pasta de downloads:      {dir}");
+    println!("subpastas por tipo:      {}", if current.category_folders { "sim" } else { "não" });
+    println!("downloads ao mesmo tempo: {}", current.max_parallel);
+    println!("conexões por arquivo:    {}", current.connections);
+    println!("janela de progresso:     {}", if current.show_progress { "sim" } else { "não" });
     Ok(())
 }
 

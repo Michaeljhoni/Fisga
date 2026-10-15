@@ -11,6 +11,8 @@ export HOME="$SANDBOX/home" XDG_RUNTIME_DIR="$SANDBOX/run" XDG_DATA_HOME="$SANDB
 # Stand-in for ldm-gui: starts fine but never connects, like a GUI without a display.
 export LDM_GUI=true
 mkdir -p "$HOME/Downloads" "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME"
+# .bin files belong to the "Programas" category, saved in its own subfolder.
+DL="$HOME/Downloads/Programas"
 chmod 700 "$XDG_RUNTIME_DIR"
 
 # 16 KiB every 10 ms per connection (~1.6 MB/s each): slow enough to pause mid-download.
@@ -47,21 +49,21 @@ wait_state() {
 
 step "add + wait (daemon starts automatically)"
 "$BIN/ldm" add "$SMALL" --wait
-test "$(stat -c %s "$HOME/Downloads/10485760.bin")" -eq 10485760 && echo "size ok"
+test "$(stat -c %s "$DL/10485760.bin")" -eq 10485760; echo "size ok"
 
 step "pause / resume"
 "$BIN/ldm" add "$LARGE" >/dev/null
 sleep 2
 "$BIN/ldm" pause 2
 wait_state 2 pausado 20
-ls "$HOME/Downloads" | grep -q '104857600.bin.ldm-part.json' && echo "control file kept"
+ls "$DL" | grep -q '104857600.bin.ldm-part.json'; echo "control file kept"
 "$BIN/ldm" list
 "$BIN/ldm" resume 2
 wait_state 2 concluído 300
-test "$(stat -c %s "$HOME/Downloads/104857600.bin")" -eq 104857600 && echo "size ok after resume"
+test "$(stat -c %s "$DL/104857600.bin")" -eq 104857600; echo "size ok after resume"
 # Byte-for-byte check against a fresh download made in one go (32 connections).
 "$BIN/ldm" get "$LARGE" -c 32 -o "$SANDBOX/reference" >/dev/null
-cmp "$HOME/Downloads/104857600.bin" "$SANDBOX/reference/104857600.bin" && echo "content ok after pause/resume"
+cmp "$DL/104857600.bin" "$SANDBOX/reference/104857600.bin"; echo "content ok after pause/resume"
 
 step "native host: ping"
 host '{"type":"ping"}'
@@ -104,6 +106,12 @@ mkdir -p "$XDG_CONFIG_HOME/google-chrome" "$XDG_CONFIG_HOME/BraveSoftware/Brave-
 "$BIN/ldm" install-hosts
 cat "$XDG_CONFIG_HOME/google-chrome/NativeMessagingHosts/io.ldm.native.json"
 cat "$HOME/.mozilla/native-messaging-hosts/io.ldm.native.json"
+
+step "settings: no category subfolders"
+"$BIN/ldm" settings --category-folders false
+"$BIN/ldm" add "$SMALL" --wait >/dev/null
+test "$(stat -c %s "$HOME/Downloads/10485760.bin")" -eq 10485760; echo "saved in the base folder"
+"$BIN/ldm" settings
 
 step "list"
 "$BIN/ldm" list

@@ -5,7 +5,7 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use ldm_ipc::{Connection, DownloadInfo, Request, Response};
+use ldm_ipc::{Connection, DownloadInfo, Request, Response, Settings};
 use tokio::sync::mpsc;
 
 pub enum Event {
@@ -13,6 +13,7 @@ pub enum Event {
     Snapshot(Vec<DownloadInfo>),
     Update(DownloadInfo),
     Removed(u64),
+    Settings(Settings),
     Disconnected(String),
 }
 
@@ -61,6 +62,7 @@ async fn session(tx: &mpsc::UnboundedSender<Event>) -> anyhow::Result<()> {
             Response::Downloads { items } => Event::Snapshot(items),
             Response::Update { item } => Event::Update(item),
             Response::Removed { id } => Event::Removed(id),
+            Response::Settings { settings } => Event::Settings(settings),
             _ => continue,
         };
         if tx.send(event).is_err() {

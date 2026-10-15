@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System packages (GTK 4, Xvfb for the GUI test)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev pkg-config xvfb xdotool imagemagick dbus-x11 adwaita-icon-theme fonts-dejavu-core
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Unit and integration tests
+        run: cargo test --workspace
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+
+      - name: Build binaries and the test server
+        run: cargo build --workspace --examples
+
+      - name: End to end (daemon, CLI, native host, confirmation)
+        run: bash scripts/e2e.sh target/debug
+
+      - name: GUI under Xvfb (confirmation, progress, main window, preferences)
+        run: dbus-run-session -- bash scripts/ci/gui-smoke.sh target/debug target/gui-shots
+
+      - name: Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-screenshots
+          path: target/gui-shots
+          if-no-files-found: ignore

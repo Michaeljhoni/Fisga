@@ -1,6 +1,6 @@
 //! Text shown in the list and in the "Novo download" window (pt-BR).
 
-use ldm_ipc::{DownloadInfo, State};
+use ldm_ipc::{Category, DownloadInfo, State};
 
 /// Binary units with a decimal comma: "1,5 MB".
 pub fn bytes(n: u64) -> String {
@@ -41,6 +41,28 @@ pub fn progress_text(info: &DownloadInfo) -> String {
         Some(total) if total > 0 => format!("{:.1}%", fraction(info) * 100.0).replace('.', ","),
         _ if info.downloaded > 0 => bytes(info.downloaded),
         _ => String::new(),
+    }
+}
+
+/// "120,5 MB de 1,2 GB", or just what was downloaded when the size is unknown.
+pub fn downloaded(info: &DownloadInfo) -> String {
+    match info.total {
+        Some(total) if info.state == State::Completed => bytes(total),
+        Some(total) => format!("{} de {}", bytes(info.downloaded.min(total)), bytes(total)),
+        None => bytes(info.downloaded),
+    }
+}
+
+/// Themed icon for a category (sidebar).
+pub fn category_icon(category: Category) -> &'static str {
+    match category {
+        Category::Video => "video-x-generic-symbolic",
+        Category::Music => "audio-x-generic-symbolic",
+        Category::Image => "image-x-generic-symbolic",
+        Category::Document => "x-office-document-symbolic",
+        Category::Compressed => "package-x-generic-symbolic",
+        Category::Program => "application-x-executable-symbolic",
+        Category::Other => "folder-symbolic",
     }
 }
 
@@ -117,6 +139,7 @@ mod tests {
             created_at: 0,
             dir: None,
             probing: false,
+            category: Category::Other,
         }
     }
 
@@ -163,6 +186,13 @@ mod tests {
         let paused = info(State::Paused, 512, Some(1024), 99.0);
         assert_eq!(speed(&paused), "");
         assert_eq!(status(&paused), "Pausado");
+    }
+
+    #[test]
+    fn downloaded_amounts() {
+        assert_eq!(downloaded(&info(State::Running, 512, Some(2048), 0.0)), "512 B de 2,0 KB");
+        assert_eq!(downloaded(&info(State::Running, 1536, None, 0.0)), "1,5 KB");
+        assert_eq!(downloaded(&info(State::Completed, 0, Some(2048), 0.0)), "2,0 KB");
     }
 
     #[test]

@@ -8,16 +8,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context};
 use ldm_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
-use ldm_ipc::{AddRequest, DownloadInfo, Response, SourceKind, State};
+use ldm_ipc::{AddRequest, Category, DownloadInfo, Response, Settings, SourceKind, State};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::{notify, ytdlp};
-
-/// Downloads running at the same time; the rest wait in the queue.
-const MAX_PARALLEL: usize = 3;
-const DEFAULT_CONNECTIONS: usize = 8;
 
 pub enum JobResult {
     Completed(PathBuf),
@@ -29,8 +25,11 @@ struct Job {
     info: DownloadInfo,
     request: AddRequest,
     cancel: Option<CancellationToken>,
-    /// "Baixar agora": start even when MAX_PARALLEL downloads are running.
+    /// "Baixar agora": start even when `max_parallel` downloads are running.
     forced: bool,
+    /// The folder follows the category (no folder was chosen by the user), so it
+    /// changes while the name of a pending download is still being found out.
+    auto_dir: bool,
 }
 
 struct Inner {
@@ -56,6 +55,30 @@ pub struct Manager {
     client: reqwest::Client,
     store: PathBuf,
     dirty: AtomicBool,
+    /// Never locked while `inner` is held: take a copy first.
+    settings: Mutex<Settings>,
+    settings_path: PathBuf,
+}
+
+/// Where a download of `category` goes when the user did not pick a folder.
+fn auto_dir(settings: &Settings, category: Category) -> PathBuf {
+    let base = settings.download_dir.clone().unwrap_or_else(default_download_dir);
+    match category.folder() {
+        Some(folder) if settings.category_folders => base.join(folder),
+        _ => base,
+    }
+}
+
+fn load_settings(path: &Path) -> Settings {
+    match std::fs::read(path) {
+        Ok(data) => serde_json::from_slice::<Settings>(&data)
+            .map(Settings::sanitized)
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "settings.json inválido; usando o padrão");
+                Settings::default()
+            }),
+        Err(_) => Settings::default(),
+    }
 }
 
 pub fn default_download_dir() -> PathBuf {
@@ -83,7 +106,7 @@ fn display_name(request: &AddRequest) -> String {
 }
 
 impl Manager {
-    pub fn load(store: PathBuf) -> anyhow::Result<Arc<Self>> {
+    pub fn load(store: PathBuf, settings_path: PathBuf) -> anyhow::Result<Arc<Self>> {
         let mut inner = Inner { next_id: 1, jobs: BTreeMap::new() };
         if let Ok(data) = std::fs::read(&store) {
             let stored: Stored = serde_json::from_slice(&data).context("downloads.json inválido")?;
@@ -94,7 +117,10 @@ impl Manager {
                 }
                 info.speed = 0.0;
                 info.probing = false;
-                inner.jobs.insert(info.id, Job { info, request, cancel: None, forced: false });
+                if info.category == Category::Other {
+                    info.category = Category::detect(&info.name, info.kind);
+                }
+                inner.jobs.insert(info.id, Job { info, request, cancel: None, forced: false, auto_dir: false });
             }
         }
         Ok(Arc::new(Self {
@@ -103,7 +129,40 @@ impl Manager {
             client: ldm_core::build_client()?,
             store,
             dirty: AtomicBool::new(false),
+            settings: Mutex::new(load_settings(&settings_path)),
+            settings_path,
         }))
+    }
+
+    pub fn settings(&self) -> Settings {
+        self.settings.lock().unwrap().clone()
+    }
+
+    pub fn set_settings(self: &Arc<Self>, settings: Settings) -> anyhow::Result<()> {
+        let settings = settings.sanitized();
+        if let Some(dir) = &settings.download_dir {
+            if !dir.is_absolute() {
+                bail!("a pasta de downloads precisa ser um caminho absoluto");
+            }
+        }
+        write_json(&self.settings_path, &settings, 0o644)?;
+        *self.settings.lock().unwrap() = settings.clone();
+        tracing::info!(?settings, "configurações alteradas");
+        let _ = self.updates.send(Response::Settings { settings });
+        self.refresh_pending_dirs();
+        self.schedule();
+        Ok(())
+    }
+
+    /// Pending downloads without a chosen folder follow the current settings.
+    fn refresh_pending_dirs(&self) {
+        let settings = self.settings();
+        let mut inner = self.inner.lock().unwrap();
+        for job in inner.jobs.values_mut().filter(|j| j.auto_dir && j.info.state == State::Pending) {
+            job.info.category = Category::detect(&job.info.name, job.info.kind);
+            job.info.dir = Some(auto_dir(&settings, job.info.category));
+            let _ = self.updates.send(Response::Update { item: job.info.clone() });
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Response> {
@@ -123,6 +182,13 @@ impl Manager {
             request.kind = SourceKind::Stream;
         }
         let probe = request.confirm;
+        let name = display_name(&request);
+        let category = Category::detect(request.file_name.as_deref().unwrap_or(&name), request.kind);
+        let auto = request.output_dir.is_none();
+        let dir = request.output_dir.clone().unwrap_or_else(|| auto_dir(&self.settings(), category));
+        if !request.confirm {
+            request.output_dir = Some(dir.clone());
+        }
         let id = {
             let mut inner = self.inner.lock().unwrap();
             let id = inner.next_id;
@@ -136,7 +202,7 @@ impl Manager {
                 id,
                 url: request.url.clone(),
                 kind: request.kind,
-                name: display_name(&request),
+                name,
                 path: None,
                 state,
                 downloaded: 0,
@@ -146,11 +212,12 @@ impl Manager {
                 resumable: false,
                 error: None,
                 created_at: now(),
-                dir: Some(request.output_dir.clone().unwrap_or_else(default_download_dir)),
+                dir: Some(dir),
                 probing: probe,
+                category,
             };
             let _ = self.updates.send(Response::Update { item: info.clone() });
-            inner.jobs.insert(id, Job { info, request, cancel: None, forced: false });
+            inner.jobs.insert(id, Job { info, request, cancel: None, forced: false, auto_dir: auto });
             id
         };
         tracing::info!(id, "download adicionado");
@@ -191,6 +258,7 @@ impl Manager {
                     Err(e) => tracing::info!(id, error = %e, "não foi possível sondar o download pendente"),
                 }
             });
+            self.refresh_pending_dirs();
             return;
         }
         let result = ytdlp::probe(id, &request).await;
@@ -214,6 +282,7 @@ impl Manager {
                 Err(e) => tracing::info!(id, error = %e, "o yt-dlp não conseguiu analisar o endereço"),
             }
         });
+        self.refresh_pending_dirs();
     }
 
     /// Answers a pending download: queue it, or start it right away (`now`).
@@ -224,6 +293,7 @@ impl Manager {
         file_name: Option<String>,
         output_dir: Option<PathBuf>,
     ) -> anyhow::Result<()> {
+        let settings = self.settings();
         {
             let mut inner = self.inner.lock().unwrap();
             let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
@@ -237,10 +307,18 @@ impl Manager {
                 job.info.name = name.clone();
                 job.request.file_name = Some(name);
             }
-            if let Some(dir) = output_dir {
-                job.info.dir = Some(dir.clone());
-                job.request.output_dir = Some(dir);
+            job.info.category = Category::detect(&job.info.name, job.info.kind);
+            match output_dir {
+                Some(dir) => {
+                    job.auto_dir = false;
+                    job.info.dir = Some(dir);
+                }
+                None if job.auto_dir => job.info.dir = Some(auto_dir(&settings, job.info.category)),
+                None => {}
             }
+            // The folder is fixed from now on.
+            job.request.output_dir = job.info.dir.clone();
+            job.auto_dir = false;
             job.info.state = State::Queued;
             job.forced = now;
             let _ = self.updates.send(Response::Update { item: job.info.clone() });
@@ -311,6 +389,7 @@ impl Manager {
     /// Starts queued downloads while there is a free slot ("Baixar agora" ones
     /// start regardless).
     pub fn schedule(self: &Arc<Self>) {
+        let max_parallel = self.settings().max_parallel;
         let mut inner = self.inner.lock().unwrap();
         let running = inner.jobs.values().filter(|j| j.info.state == State::Running).count();
         // Forced first, then by id.
@@ -322,7 +401,7 @@ impl Manager {
             .collect();
         queued.sort();
         let forced = queued.iter().filter(|(not_forced, _)| !not_forced).count();
-        let to_start = forced + MAX_PARALLEL.saturating_sub(running + forced);
+        let to_start = forced + max_parallel.saturating_sub(running + forced);
         for (_, id) in queued.into_iter().take(to_start) {
             let job = inner.jobs.get_mut(&id).expect("id from map");
             let cancel = CancellationToken::new();
@@ -368,15 +447,16 @@ impl Manager {
         cancel: CancellationToken,
     ) -> JobResult {
         let spec = RequestSpec { url: request.url.clone(), headers: request_headers(request) };
+        let settings = self.settings();
         let target = match path {
             Some(path) => Target::File(path),
             None => Target::Dir {
-                dir: request.output_dir.clone().unwrap_or_else(default_download_dir),
+                dir: request.output_dir.clone().unwrap_or_else(|| auto_dir(&settings, Category::Other)),
                 file_name: request.file_name.clone(),
             },
         };
         let opts = DownloadOptions {
-            connections: request.connections.unwrap_or(DEFAULT_CONNECTIONS).clamp(1, 32),
+            connections: request.connections.unwrap_or(settings.connections).clamp(1, 32),
             ..Default::default()
         };
         let (events_tx, mut events) = mpsc::unbounded_channel();
@@ -404,6 +484,11 @@ impl Manager {
             EngineEvent::Started { path, total, resumable } => self.update(id, |info| {
                 if let Some(name) = path.file_name() {
                     info.name = name.to_string_lossy().into_owned();
+                }
+                // The folder is already chosen; the type may only now be known
+                // (a URL without extension, a name from Content-Disposition).
+                if info.category == Category::Other {
+                    info.category = Category::detect(&info.name, info.kind);
                 }
                 info.path = Some(path);
                 info.total = total;
@@ -470,7 +555,7 @@ impl Manager {
             }
         };
         self.dirty.store(false, Ordering::Relaxed);
-        if let Err(e) = write_store(&self.store, &stored) {
+        if let Err(e) = write_json(&self.store, &stored, 0o600) {
             tracing::warn!(error = %e, "não foi possível salvar a lista de downloads");
         }
     }
@@ -502,15 +587,16 @@ impl Manager {
     }
 }
 
-fn write_store(path: &Path, stored: &Stored) -> anyhow::Result<()> {
+/// Atomic write (temporary file + rename).
+fn write_json(path: &Path, value: &impl Serialize, mode: u32) -> anyhow::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension("json.tmp");
-    let mut file = std::fs::OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).open(&tmp)?;
-    file.write_all(&serde_json::to_vec_pretty(stored)?)?;
+    let mut file = std::fs::OpenOptions::new().create(true).write(true).truncate(true).mode(mode).open(&tmp)?;
+    file.write_all(&serde_json::to_vec_pretty(value)?)?;
     std::fs::rename(tmp, path)?;
     Ok(())
 }
@@ -542,7 +628,10 @@ mod tests {
     fn manager() -> Arc<Manager> {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let dir = std::env::temp_dir().join(format!("ldmd-test-{}-{nanos}", std::process::id()));
-        Manager::load(dir.join("downloads.json")).unwrap()
+        let manager = Manager::load(dir.join("downloads.json"), dir.join("settings.json")).unwrap();
+        let settings = Settings { download_dir: Some(dir.join("Downloads")), ..Settings::default() };
+        manager.set_settings(settings).unwrap();
+        manager
     }
 
     fn add(manager: &Arc<Manager>, confirm: bool) -> u64 {
@@ -597,7 +686,7 @@ mod tests {
     #[tokio::test]
     async fn queue_waits_for_a_slot_but_download_now_does_not() {
         let manager = manager();
-        for _ in 0..MAX_PARALLEL {
+        for _ in 0..manager.settings().max_parallel {
             add(&manager, false);
         }
         let queued = add(&manager, true);
@@ -621,7 +710,45 @@ mod tests {
         let manager = manager();
         let id = add(&manager, true);
         manager.save();
-        let reloaded = Manager::load(manager.store.clone()).unwrap();
+        let reloaded = Manager::load(manager.store.clone(), manager.settings_path.clone()).unwrap();
         assert_eq!(reloaded.state(id), Some(State::Pending));
+    }
+
+    #[tokio::test]
+    async fn category_folders() {
+        let manager = manager();
+        let base = manager.settings().download_dir.unwrap();
+        let dir_of = |id| manager.list().into_iter().find(|i| i.id == id).unwrap().dir.unwrap();
+        let iso = add(&manager, true);
+        assert_eq!(manager.list()[0].category, Category::Program);
+        assert_eq!(dir_of(iso), base.join("Programas"));
+
+        // A page video goes to Vídeos; the user-chosen folder wins.
+        let page = manager
+            .add(AddRequest { url: "https://example.com/v".into(), kind: SourceKind::Page, confirm: true, ..Default::default() })
+            .unwrap();
+        assert_eq!(dir_of(page), base.join("Vídeos"));
+        let chosen = manager
+            .add(AddRequest { url: URL.into(), output_dir: Some("/tmp/aqui".into()), ..Default::default() })
+            .unwrap();
+        assert_eq!(dir_of(chosen), Path::new("/tmp/aqui"));
+
+        // Turning the subfolders off moves pending downloads back to the base folder.
+        manager.set_settings(Settings { category_folders: false, ..manager.settings() }).unwrap();
+        assert_eq!(dir_of(iso), base);
+        manager.confirm(iso, false, None, None).unwrap();
+        manager.set_settings(Settings { category_folders: true, ..manager.settings() }).unwrap();
+        assert_eq!(dir_of(iso), base, "confirmed downloads keep their folder");
+    }
+
+    #[tokio::test]
+    async fn settings_are_saved_and_broadcast() {
+        let manager = manager();
+        let mut updates = manager.subscribe();
+        manager.set_settings(Settings { max_parallel: 5, ..manager.settings() }).unwrap();
+        assert!(matches!(updates.try_recv(), Ok(Response::Settings { settings }) if settings.max_parallel == 5));
+        let reloaded = Manager::load(manager.store.clone(), manager.settings_path.clone()).unwrap();
+        assert_eq!(reloaded.settings().max_parallel, 5);
+        assert!(manager.set_settings(Settings { download_dir: Some("relativa".into()), ..Settings::default() }).is_err());
     }
 }

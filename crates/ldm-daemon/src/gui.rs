@@ -135,7 +135,7 @@ mod tests {
     fn manager() -> Arc<Manager> {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         let dir = std::env::temp_dir().join(format!("ldmd-gui-test-{}-{nanos}", std::process::id()));
-        Manager::load(dir.join("downloads.json")).unwrap()
+        Manager::load(dir.join("downloads.json"), dir.join("settings.json")).unwrap()
     }
 
     #[tokio::test]

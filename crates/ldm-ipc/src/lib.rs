@@ -92,6 +92,114 @@ fn yes() -> bool {
     true
 }
 
+/// File type groups, as in IDM: the main window filters by them and, by
+/// default, each one is saved in its own subfolder of the download folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Category {
+    Video,
+    Music,
+    Image,
+    Document,
+    Compressed,
+    Program,
+    #[default]
+    Other,
+}
+
+impl Category {
+    pub const ALL: [Category; 7] = [
+        Category::Video,
+        Category::Music,
+        Category::Image,
+        Category::Document,
+        Category::Compressed,
+        Category::Program,
+        Category::Other,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Category::Video => "Vídeos",
+            Category::Music => "Músicas",
+            Category::Image => "Imagens",
+            Category::Document => "Documentos",
+            Category::Compressed => "Compactados",
+            Category::Program => "Programas",
+            Category::Other => "Outros",
+        }
+    }
+
+    /// Subfolder of the download folder; `Other` stays at its root.
+    pub fn folder(self) -> Option<&'static str> {
+        (self != Category::Other).then(|| self.label())
+    }
+
+    pub fn from_extension(ext: &str) -> Category {
+        match ext.to_ascii_lowercase().as_str() {
+            "mp4" | "m4v" | "mkv" | "webm" | "avi" | "mov" | "wmv" | "flv" | "mpg" | "mpeg" | "3gp" | "ts"
+            | "m2ts" | "mts" | "ogv" | "vob" | "rm" | "rmvb" => Category::Video,
+            "mp3" | "m4a" | "aac" | "flac" | "wav" | "ogg" | "oga" | "opus" | "wma" | "alac" | "aiff" | "aif"
+            | "ape" | "mka" | "mid" | "midi" => Category::Music,
+            "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg" | "tif" | "tiff" | "heic" | "heif" | "avif"
+            | "ico" | "psd" | "raw" | "cr2" | "nef" | "xcf" => Category::Image,
+            "pdf" | "doc" | "docx" | "odt" | "rtf" | "txt" | "md" | "epub" | "mobi" | "azw3" | "djvu" | "xls"
+            | "xlsx" | "ods" | "csv" | "ppt" | "pptx" | "odp" | "tex" => Category::Document,
+            "zip" | "rar" | "7z" | "tar" | "gz" | "tgz" | "bz2" | "tbz" | "tbz2" | "xz" | "txz" | "zst" | "tzst"
+            | "lz" | "lzma" | "lz4" | "cab" | "arj" | "z" => Category::Compressed,
+            "appimage" | "deb" | "rpm" | "flatpak" | "flatpakref" | "snap" | "run" | "bin" | "sh" | "exe"
+            | "msi" | "apk" | "pkg" | "dmg" | "jar" | "iso" | "img" => Category::Program,
+            _ => Category::Other,
+        }
+    }
+
+    /// From the file name; videos from sites (yt-dlp) are videos unless the
+    /// name says otherwise (e.g. an audio-only `.m4a`).
+    pub fn detect(name: &str, kind: SourceKind) -> Category {
+        let lower = name.to_ascii_lowercase();
+        // Compound extensions first: "x.tar.gz" is an archive, not "gz" only.
+        if [".tar.gz", ".tar.xz", ".tar.bz2", ".tar.zst"].iter().any(|ext| lower.ends_with(ext)) {
+            return Category::Compressed;
+        }
+        let category = name.rsplit_once('.').map(|(_, ext)| Category::from_extension(ext)).unwrap_or_default();
+        match (category, kind) {
+            (Category::Other, SourceKind::Page | SourceKind::Stream) => Category::Video,
+            (category, _) => category,
+        }
+    }
+}
+
+/// Daemon settings, kept in `$XDG_CONFIG_HOME/ldm/settings.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Settings {
+    /// Base download folder; `None` = the system's Downloads folder.
+    pub download_dir: Option<PathBuf>,
+    /// Save each category in its own subfolder (Vídeos, Músicas, Programas...).
+    pub category_folders: bool,
+    /// Downloads running at the same time; the rest wait in the queue.
+    pub max_parallel: usize,
+    /// Connections per file for direct downloads.
+    pub connections: usize,
+    /// Open the progress window when a confirmed download starts.
+    pub show_progress: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { download_dir: None, category_folders: true, max_parallel: 3, connections: 8, show_progress: true }
+    }
+}
+
+impl Settings {
+    /// Keeps numbers in a usable range.
+    pub fn sanitized(mut self) -> Self {
+        self.max_parallel = self.max_parallel.clamp(1, 20);
+        self.connections = self.connections.clamp(1, 32);
+        self
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
@@ -129,6 +237,8 @@ pub struct DownloadInfo {
     /// True while the daemon fetches the size and name of a pending download.
     #[serde(default)]
     pub probing: bool,
+    #[serde(default)]
+    pub category: Category,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,6 +274,9 @@ pub enum Request {
         output_dir: Option<PathBuf>,
     },
     Shutdown,
+    GetSettings,
+    /// Replaces the settings; subscribers receive `Response::Settings`.
+    SetSettings { settings: Settings },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +287,7 @@ pub enum Response {
     Downloads { items: Vec<DownloadInfo> },
     Update { item: DownloadInfo },
     Removed { id: u64 },
+    Settings { settings: Settings },
     Ok,
     Error { message: String },
 }
@@ -319,6 +433,32 @@ mod tests {
     }
 
     #[test]
+    fn categories_from_names() {
+        assert_eq!(Category::detect("filme.MKV", SourceKind::Direct), Category::Video);
+        assert_eq!(Category::detect("musica.opus", SourceKind::Direct), Category::Music);
+        assert_eq!(Category::detect("linux.iso", SourceKind::Direct), Category::Program);
+        assert_eq!(Category::detect("app.AppImage", SourceKind::Direct), Category::Program);
+        assert_eq!(Category::detect("src.tar.gz", SourceKind::Direct), Category::Compressed);
+        assert_eq!(Category::detect("foto.jpeg", SourceKind::Direct), Category::Image);
+        assert_eq!(Category::detect("livro.pdf", SourceKind::Direct), Category::Document);
+        assert_eq!(Category::detect("download", SourceKind::Direct), Category::Other);
+        // Site videos: video unless the name says audio.
+        assert_eq!(Category::detect("Meu vídeo", SourceKind::Page), Category::Video);
+        assert_eq!(Category::detect("podcast.m4a", SourceKind::Page), Category::Music);
+        assert_eq!(Category::Other.folder(), None);
+        assert_eq!(Category::Program.folder(), Some("Programas"));
+    }
+
+    #[test]
+    fn settings_defaults_and_partial_json() {
+        let settings: Settings = serde_json::from_str(r#"{"maxParallel": 50}"#).unwrap();
+        assert!(settings.category_folders);
+        assert_eq!(settings.sanitized().max_parallel, 20);
+        let request: Request = serde_json::from_str(r#"{"type":"set_settings","settings":{"connections":4}}"#).unwrap();
+        assert!(matches!(request, Request::SetSettings { settings } if settings.connections == 4));
+    }
+
+    #[test]
     fn pending_state_and_old_download_info() {
         assert_eq!(serde_json::to_string(&State::Pending).unwrap(), r#""pending""#);
         // downloads.json written before `dir`/`probing` existed still loads.
@@ -329,5 +469,6 @@ mod tests {
         .unwrap();
         assert_eq!(info.dir, None);
         assert!(!info.probing);
+        assert_eq!(info.category, Category::Other);
     }
 }

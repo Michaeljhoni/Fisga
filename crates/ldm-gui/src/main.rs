@@ -14,6 +14,8 @@ mod confirm;
 mod format;
 mod ipc;
 mod item;
+mod prefs;
+mod progress;
 mod window;
 
 use gtk::prelude::*;

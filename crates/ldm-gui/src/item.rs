@@ -68,4 +68,9 @@ impl DownloadItem {
     pub fn info(&self) -> DownloadInfo {
         self.imp().info.borrow().clone().expect("set in new()")
     }
+
+    /// Reads the info without cloning it (filters run on every change).
+    pub fn with_info<R>(&self, f: impl FnOnce(&DownloadInfo) -> R) -> R {
+        f(self.imp().info.borrow().as_ref().expect("set in new()"))
+    }
 }

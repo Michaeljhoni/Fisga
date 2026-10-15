@@ -53,15 +53,34 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
 
 ## Interface gráfica (`ldm-gui`)
 
-- **Janela principal** (`ldm-gui`, ou "LDM" no menu de aplicativos): lista com nome, tamanho,
-  progresso, velocidade, tempo restante e estado, atualizada em tempo real. Botões para adicionar
-  URL (Ctrl+N; sugere o link da área de transferência), retomar, pausar, remover (Delete; pergunta se
-  apaga também o arquivo), abrir o arquivo e abrir a pasta. Clique duplo abre um arquivo concluído
-  ou a confirmação de um download pendente.
+- **Janela principal** (`ldm-gui`, ou "LDM" no menu de aplicativos): à esquerda, como no IDM,
+  *Todos os downloads*, *Em andamento*, *Concluídos* e as **categorias** (Vídeos, Músicas, Imagens,
+  Documentos, Compactados, Programas, Outros), cada uma com a contagem. À direita, a lista com nome,
+  tamanho, progresso, velocidade, tempo restante e estado, atualizada em tempo real. Botões para
+  adicionar URL (Ctrl+N; sugere o link da área de transferência), retomar, pausar, remover (Delete;
+  pergunta se apaga também o arquivo), abrir o arquivo e abrir a pasta. No menu (☰): *Remover
+  concluídos da lista*, *Preferências* (Ctrl+,) e *Sobre*. Clique duplo: confirma um download
+  pendente, abre um concluído ou mostra o progresso dos demais.
 - **Novo download**: aparece para cada download vindo do navegador, com endereço, nome (editável),
   pasta (botão "Alterar…") e tamanho. **Baixar agora** começa na hora, mesmo com a fila cheia;
-  **Adicionar à fila** espera uma vaga (3 simultâneos); **Cancelar**, Esc ou fechar a janela descarta.
-  Enter = Baixar agora.
+  **Adicionar à fila** espera uma vaga; **Cancelar**, Esc ou fechar a janela descarta. Enter = Baixar
+  agora. Se o endereço for uma lista de vídeos (página inicial do YouTube, busca, canal, playlist), a
+  janela avisa e só deixa cancelar.
+- **Progresso** (a janela de status do IDM): abre depois de "Baixar agora", com barra, quanto já
+  baixou, velocidade, tempo restante, se dá para retomar, a pasta e **Pausar/Retomar**. Ao terminar
+  vira **Download concluído**, com **Abrir** e **Abrir pasta**. Pode ser desligada nas Preferências.
+- **Preferências**: pasta de downloads, subpastas por tipo de arquivo, downloads ao mesmo tempo,
+  conexões por arquivo e a janela de progresso. Ficam no daemon, em `~/.config/ldm/settings.json`.
+
+### Categorias e pastas
+
+Cada download recebe uma categoria pela extensão do arquivo (vídeos de sites via yt-dlp são
+*Vídeos*, a não ser que o arquivo seja só áudio). Como no IDM, por padrão cada categoria vai para
+uma subpasta da pasta de downloads: `~/Downloads/Vídeos`, `Músicas`, `Imagens`, `Documentos`,
+`Compactados` (zip, rar, 7z, tar.*) e `Programas` (AppImage, deb, rpm, flatpak, iso, exe...);
+o que não se encaixa fica em `~/Downloads`. A pasta escolhida na janela "Novo download" ou com
+`-o` no terminal sempre vale. Para tudo na mesma pasta: desligue "Separar por tipo de arquivo" nas
+Preferências, ou `ldm settings --category-folders false`.
 
 A GUI é só um cliente do `ldmd`: fechar a janela não interrompe os downloads.
 
@@ -72,9 +91,11 @@ A GUI é só um cliente do `ldmd`: fechar a janela não interrompe os downloads.
    download começa direto, como antes). Mensagens sem o campo também pedem confirmação.
 2. O host inicia o `ldmd` se preciso e envia `Request::Add` com `confirm: true`; responde à extensão
    `{"type":"added","id":…,"pending":true}`, e o botão mostra "Confirme no LDM".
-3. O `ldmd` cria o download no estado **pendente** (`State::Pending`, "aguardando" no `ldm list`) e,
-   para links diretos, sonda o servidor para descobrir tamanho e nome. A mudança vai para todos os
-   assinantes (`Request::Subscribe`).
+3. O `ldmd` cria o download no estado **pendente** (`State::Pending`, "aguardando" no `ldm list`) e
+   descobre tamanho e nome: links diretos com uma requisição `Range`, vídeos de sites com
+   `yt-dlp -J`. Se o yt-dlp disser que o endereço é uma lista (feed, busca, canal, playlist), o
+   download fica marcado com erro e não pode ser confirmado. A mudança vai para todos os assinantes
+   (`Request::Subscribe`).
 4. Se há uma GUI conectada (assinante com `confirmer: true`), ela abre a janela **Novo download**.
    Senão, o `ldmd` executa `ldm-gui --pending`, que mostra só essa janela e fecha depois da resposta.
 5. A janela responde com `Request::Confirm { id, now, file_name, output_dir }` (Baixar agora /
@@ -97,6 +118,8 @@ ldm list
 ldm pause 3 && ldm resume 3
 ldm rm 3 --delete-file
 ldm watch                                        # mudanças em tempo real
+ldm settings                                     # configurações (pasta, subpastas, fila, conexões)
+ldm settings --category-folders false --max-parallel 5
 ```
 
 ## Desenvolvimento
@@ -117,21 +140,33 @@ Rust em Debian trixie + `libgtk-4-dev`).
 O botão flutuante é desenhado dentro da página pelo navegador, então funciona igual em qualquer
 compositor (niri, Hyprland, Sway, GNOME, KDE) e no X11.
 
-A GUI usa GTK4 com `app-id` fixo `io.ldm.Ldm`, e a janela de confirmação tem sempre o título exato
-`Novo download`. Num compositor *tiling*, ela abriria como uma coluna inteira; para abrir flutuante e
-centralizada, como no IDM, adicione ao `~/.config/niri/config.kdl`:
+A GUI usa GTK4 com `app-id` fixo `io.ldm.Ldm`. A janela principal se chama sempre `LDM`; as outras
+(*Novo download*, a de progresso, *Download concluído*, *Preferências*) são diálogos. Num compositor
+*tiling* eles abririam como colunas inteiras; para abrirem flutuantes, como no IDM, adicione ao
+`~/.config/niri/config.kdl`:
 
 ```kdl
 window-rule {
-    match app-id=r#"^io\.ldm\.Ldm$"# title="^Novo download$"
+    match app-id=r#"^io\.ldm\.Ldm$"#
+    exclude title="^LDM$"
     open-floating true
     open-focused true
 }
 ```
 
-(Quando a janela principal está aberta, a confirmação já nasce como diálogo dela, e o niri a deixa
-flutuante sozinho.) Equivalentes: Sway, `for_window [app_id="io.ldm.Ldm" title="^Novo download$"]
-floating enable`; Hyprland, `windowrulev2 = float, class:^(io\.ldm\.Ldm)$, title:^(Novo download)$`.
+(Quando a janela principal está aberta, os diálogos já nascem ligados a ela e o niri os deixa
+flutuantes sozinho; a regra vale para quando só o diálogo aparece, ao clicar no navegador.)
+Equivalentes: Sway, `for_window [app_id="io.ldm.Ldm" title="^(?!LDM$)"] floating enable`;
+Hyprland, `windowrulev2 = float, class:^(io\.ldm\.Ldm)$, title:negative:^LDM$`.
+
+### Problemas
+
+- **Parar tudo:** `ldm stop` pausa todos os downloads e encerra o daemon (`ldm list` / `ldm pause N`
+  para um só).
+- **Logs:** `~/.local/state/ldm/ldmd.log` (daemon) e `~/.local/state/ldm/ldm-gui.log` (interface,
+  quando aberta pelo menu ou pelo daemon).
+- **"LDM" no menu não abre nada:** rode `ldm-gui` num terminal para ver o erro; reinstale com
+  `scripts/install-dev.sh`, que grava o atalho com o caminho completo do executável.
 
 ## Estado
 
@@ -139,7 +174,8 @@ floating enable`; Hyprland, `windowrulev2 = float, class:^(io\.ldm\.Ldm)$, title
 - [x] Daemon, CLI, host nativo
 - [x] Extensão: botão sobre vídeo/áudio, menu de mídias detectadas, captura de downloads, menu de contexto
 - [x] Interface gráfica (GTK4): janela "Novo download" ao clicar no botão, lista com ações
-- [ ] Categorias, configurações na GUI, ícone na bandeja
-- [ ] Limite de velocidade, agendador, categorias por tipo de arquivo
+- [x] Janela de progresso e de download concluído, categorias por tipo de arquivo (barra lateral e
+      subpastas), Preferências
+- [ ] Ícone na bandeja, limite de velocidade, agendador
 - [ ] HLS/DASH nativo (hoje via yt-dlp), FTP
 - [ ] Pacotes (AUR, Flatpak, .deb/.rpm)

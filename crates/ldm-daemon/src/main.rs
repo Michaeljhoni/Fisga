@@ -53,7 +53,8 @@ async fn main() -> anyhow::Result<()> {
     let listener = UnixListener::bind(&socket).with_context(|| format!("bind {}", socket.display()))?;
 
     let store = dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("ldm").join("downloads.json");
-    let manager = Manager::load(store)?;
+    let settings = dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("ldm").join("settings.json");
+    let manager = Manager::load(store, settings)?;
     let gui = Gui::from_env();
     let shutdown = CancellationToken::new();
     tracing::info!(socket = %socket.display(), "ldmd {} pronto", ldm_ipc::VERSION);
@@ -125,6 +126,8 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: UnixStream, 
                 Ok(()) => Response::Removed { id },
                 Err(e) => Response::Error { message: e.to_string() },
             },
+            Request::GetSettings => Response::Settings { settings: manager.settings() },
+            Request::SetSettings { settings } => result(manager.set_settings(settings)),
             Request::Shutdown => {
                 shutdown.cancel();
                 Response::Ok
@@ -134,6 +137,9 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: UnixStream, 
                 // Subscribe before taking the snapshot so no update is lost.
                 let mut updates = manager.subscribe();
                 if write(&mut writer, &Response::Downloads { items: manager.list() }).await.is_err() {
+                    return;
+                }
+                if write(&mut writer, &Response::Settings { settings: manager.settings() }).await.is_err() {
                     return;
                 }
                 loop {

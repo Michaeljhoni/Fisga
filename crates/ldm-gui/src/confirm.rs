@@ -30,11 +30,14 @@ pub struct ConfirmDialog {
     answers: Vec<gtk::Button>,
     /// Name last suggested by the daemon; the entry follows it until the user edits it.
     suggested_name: RefCell<String>,
-    original_dir: Option<PathBuf>,
+    /// Folder shown; follows the daemon (category subfolder) until the user picks one.
     dir: RefCell<Option<PathBuf>>,
+    user_dir: Cell<bool>,
     /// Answered (or closed by the daemon): closing the window must not cancel.
     decided: Cell<bool>,
     on_closed: RefCell<Option<Box<dyn Fn()>>>,
+    /// Called after "Baixar agora" or "Adicionar à fila" succeeded.
+    on_answered: RefCell<Option<Box<dyn Fn()>>>,
 }
 
 fn caption(text: &str) -> gtk::Label {
@@ -139,10 +142,11 @@ impl ConfirmDialog {
             buttons: vec![cancel.clone(), queue.clone(), now.clone(), change_dir.clone()],
             answers: vec![queue.clone(), now.clone()],
             suggested_name: RefCell::new(info.name.clone()),
-            original_dir: info.dir.clone(),
             dir: RefCell::new(info.dir.clone()),
+            user_dir: Cell::new(false),
             decided: Cell::new(false),
             on_closed: RefCell::default(),
+            on_answered: RefCell::default(),
         });
         dialog.show_dir();
         dialog.update(info);
@@ -200,6 +204,10 @@ impl ConfirmDialog {
         self.on_closed.replace(Some(Box::new(callback)));
     }
 
+    pub fn connect_answered(&self, callback: impl Fn() + 'static) {
+        self.on_answered.replace(Some(Box::new(callback)));
+    }
+
     pub fn present(&self) {
         self.window.present();
     }
@@ -212,6 +220,10 @@ impl ConfirmDialog {
         }
         self.suggested_name.replace(info.name.clone());
         self.size.set_label(&size_text(info));
+        if !self.user_dir.get() && *self.dir.borrow() != info.dir {
+            self.dir.replace(info.dir.clone());
+            self.show_dir();
+        }
         // The daemon refuses to confirm a download with an error (e.g. a page
         // that lists many videos); only "Cancelar" is left.
         let blocked = info.error.as_deref();
@@ -245,6 +257,7 @@ impl ConfirmDialog {
         if let Ok(folder) = dialog.build().select_folder_future(Some(&self.window)).await {
             if let Some(path) = folder.path() {
                 self.dir.replace(Some(path));
+                self.user_dir.set(true);
                 self.show_dir();
             }
         }
@@ -259,8 +272,7 @@ impl ConfirmDialog {
 
     fn answer(self: &Rc<Self>, now: bool) {
         let file_name = format::edited_name(&self.suggested_name.borrow(), &self.name.text());
-        let dir = self.dir.borrow().clone();
-        let output_dir = if dir != self.original_dir { dir } else { None };
+        let output_dir = if self.user_dir.get() { self.dir.borrow().clone() } else { None };
         let request = Request::Confirm { id: self.id, now, file_name, output_dir };
         self.set_busy(true);
         self.error.set_visible(false);
@@ -269,6 +281,9 @@ impl ConfirmDialog {
             match ipc::call(request).await {
                 Ok(_) => {
                     this.decided.set(true);
+                    if let Some(callback) = this.on_answered.take() {
+                        callback();
+                    }
                     this.window.close();
                 }
                 Err(e) => {

@@ -26,6 +26,8 @@ pub struct ConfirmDialog {
     dir_label: gtk::Label,
     error: gtk::Label,
     buttons: Vec<gtk::Button>,
+    /// "Adicionar à fila" and "Baixar agora": disabled while the daemon reports an error.
+    answers: Vec<gtk::Button>,
     /// Name last suggested by the daemon; the entry follows it until the user edits it.
     suggested_name: RefCell<String>,
     original_dir: Option<PathBuf>,
@@ -44,9 +46,11 @@ fn caption(text: &str) -> gtk::Label {
 fn size_text(info: &DownloadInfo) -> String {
     let size = format::size(info);
     match info.kind {
+        _ if info.probing => "verificando…".into(),
         SourceKind::Page | SourceKind::Stream if info.total.is_none() => {
             "definido ao baixar (vídeo de site, via yt-dlp)".into()
         }
+        SourceKind::Page | SourceKind::Stream => format!("≈ {size}"),
         _ if info.total.is_some() && !info.resumable => format!("{size} (o servidor não permite pausar e retomar)"),
         _ => size,
     }
@@ -133,6 +137,7 @@ impl ConfirmDialog {
             dir_label,
             error,
             buttons: vec![cancel.clone(), queue.clone(), now.clone(), change_dir.clone()],
+            answers: vec![queue.clone(), now.clone()],
             suggested_name: RefCell::new(info.name.clone()),
             original_dir: info.dir.clone(),
             dir: RefCell::new(info.dir.clone()),
@@ -207,6 +212,14 @@ impl ConfirmDialog {
         }
         self.suggested_name.replace(info.name.clone());
         self.size.set_label(&size_text(info));
+        // The daemon refuses to confirm a download with an error (e.g. a page
+        // that lists many videos); only "Cancelar" is left.
+        let blocked = info.error.as_deref();
+        self.error.set_label(blocked.unwrap_or_default());
+        self.error.set_visible(blocked.is_some());
+        for button in &self.answers {
+            button.set_sensitive(blocked.is_none());
+        }
     }
 
     /// The download stopped being pending elsewhere, or was removed.

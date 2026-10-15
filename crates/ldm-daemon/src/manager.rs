@@ -122,7 +122,7 @@ impl Manager {
         if request.kind == SourceKind::Direct && looks_like_manifest(&request.url) {
             request.kind = SourceKind::Stream;
         }
-        let probe = request.confirm && request.kind == SourceKind::Direct;
+        let probe = request.confirm;
         let id = {
             let mut inner = self.inner.lock().unwrap();
             let id = inner.next_id;
@@ -166,25 +166,52 @@ impl Manager {
         self.inner.lock().unwrap().jobs.get(&id).map(|j| j.info.state)
     }
 
-    /// Fills in the size and server-side file name of a pending download, so the
-    /// "Novo download" window can show them.
+    /// Fills in the size and file name of a pending download, so the "Novo
+    /// download" window can show them. Pages that hold many videos (feeds,
+    /// channels, searches, playlists) are flagged with an error, which blocks
+    /// confirming them.
     async fn probe_pending(self: Arc<Self>, id: u64) {
         let Some(request) = self.inner.lock().unwrap().jobs.get(&id).map(|j| j.request.clone()) else {
             return;
         };
-        let spec = RequestSpec { url: request.url.clone(), headers: request_headers(&request) };
-        let result = ldm_core::probe(&self.client, &spec).await;
+        let keep_name = request.file_name.is_some();
+        if request.kind == SourceKind::Direct {
+            let spec = RequestSpec { url: request.url.clone(), headers: request_headers(&request) };
+            let result = ldm_core::probe(&self.client, &spec).await;
+            self.update(id, |info| {
+                info.probing = false;
+                match result {
+                    Ok(probe) => {
+                        info.total = probe.total;
+                        info.resumable = probe.ranges;
+                        if !keep_name && info.state == State::Pending {
+                            info.name = probe.file_name;
+                        }
+                    }
+                    Err(e) => tracing::info!(id, error = %e, "não foi possível sondar o download pendente"),
+                }
+            });
+            return;
+        }
+        let result = ytdlp::probe(id, &request).await;
         self.update(id, |info| {
             info.probing = false;
             match result {
-                Ok(probe) => {
-                    info.total = probe.total;
-                    info.resumable = probe.ranges;
-                    if request.file_name.is_none() && info.state == State::Pending {
-                        info.name = probe.file_name;
+                Ok(ytdlp::PageProbe::Video { name, size }) => {
+                    info.total = size;
+                    info.resumable = true;
+                    if let Some(name) = name.filter(|_| !keep_name && info.state == State::Pending) {
+                        info.name = name;
                     }
                 }
-                Err(e) => tracing::info!(id, error = %e, "não foi possível sondar o download pendente"),
+                Ok(ytdlp::PageProbe::List { title }) => {
+                    let what = title.map(|t| format!(" (\u{201c}{t}\u{201d})")).unwrap_or_default();
+                    info.error = Some(format!(
+                        "Este endereço é uma lista de vídeos{what}, não um vídeo: baixá-lo traria todos eles. \
+                         Abra o vídeo desejado e clique em Baixar de novo."
+                    ));
+                }
+                Err(e) => tracing::info!(id, error = %e, "o yt-dlp não conseguiu analisar o endereço"),
             }
         });
     }
@@ -202,6 +229,9 @@ impl Manager {
             let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
             if job.info.state != State::Pending {
                 bail!("o download #{id} não está aguardando confirmação");
+            }
+            if let Some(error) = &job.info.error {
+                bail!("{error}");
             }
             if let Some(name) = file_name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
                 job.info.name = name.clone();
@@ -530,6 +560,15 @@ mod tests {
         assert!(item.probing, "direct downloads are probed for size");
         assert!(item.dir.is_some());
         manager.schedule();
+        assert_eq!(manager.state(id), Some(State::Pending));
+    }
+
+    #[tokio::test]
+    async fn pending_download_flagged_by_the_probe_cannot_be_confirmed() {
+        let manager = manager();
+        let id = add(&manager, true);
+        manager.update(id, |info| info.error = Some("lista".into()));
+        assert!(manager.confirm(id, true, None, None).is_err());
         assert_eq!(manager.state(id), Some(State::Pending));
     }
 

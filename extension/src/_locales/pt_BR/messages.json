@@ -7,6 +7,7 @@
   "sending": { "message": "Enviando…" },
   "sent": { "message": "Enviado" },
   "sentConfirm": { "message": "Confirme no LDM" },
+  "notAVideo": { "message": "Esta página é uma lista de vídeos. Abra o vídeo (ou passe o mouse sobre a prévia dele) e tente de novo." },
   "failed": { "message": "Erro" },
   "autoDetect": { "message": "Detectar automaticamente (melhor qualidade)" },
   "noCandidates": { "message": "Nenhuma mídia detectada ainda. Dê play no vídeo por alguns segundos e tente de novo." },

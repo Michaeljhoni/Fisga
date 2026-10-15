@@ -34,7 +34,7 @@ pub fn from_content_disposition(value: &str) -> Option<String> {
 
 /// Last non-empty path segment of the URL, percent-decoded.
 pub fn from_url(url: &Url) -> Option<String> {
-    let segment = url.path_segments()?.filter(|s| !s.is_empty()).last()?;
+    let segment = url.path_segments()?.filter(|s| !s.is_empty()).next_back()?;
     let decoded = percent_decode_str(segment).decode_utf8_lossy().into_owned();
     (!decoded.is_empty()).then_some(decoded)
 }

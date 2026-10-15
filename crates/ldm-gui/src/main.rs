@@ -21,7 +21,31 @@ use gtk::{gio, glib};
 
 pub const APP_ID: &str = "io.ldm.Ldm";
 
+/// Started from an app launcher or by `ldmd`, stderr goes nowhere: keep GTK
+/// warnings and our errors in `~/.local/state/ldm/ldm-gui.log` instead.
+fn redirect_stderr_to_log() {
+    use std::io::IsTerminal;
+    use std::os::fd::AsRawFd;
+    if std::io::stderr().is_terminal() {
+        return;
+    }
+    let dir = std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".local/state")))
+        .map(|state| state.join("ldm"));
+    let Some(dir) = dir else { return };
+    let file = std::fs::create_dir_all(&dir)
+        .and_then(|_| std::fs::OpenOptions::new().create(true).append(true).open(dir.join("ldm-gui.log")));
+    if let Ok(file) = file {
+        // SAFETY: dup2 on valid descriptors; the file stays open for the process lifetime.
+        unsafe { libc::dup2(file.as_raw_fd(), 2) };
+        std::mem::forget(file);
+        eprintln!("--- ldm-gui {} iniciado: {:?}", env!("CARGO_PKG_VERSION"), std::env::args().collect::<Vec<_>>());
+    }
+}
+
 fn main() -> glib::ExitCode {
+    redirect_stderr_to_log();
     let application = gtk::Application::builder()
         .application_id(APP_ID)
         .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)

@@ -13,4 +13,5 @@ path = "src/main.rs"
 anyhow.workspace = true
 gtk = { package = "gtk4", version = "0.10", features = ["v4_10"] }
 ldm-ipc.workspace = true
+libc.workspace = true
 tokio.workspace = true

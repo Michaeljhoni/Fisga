@@ -349,11 +349,58 @@
     setTimeout(() => (ui.toast.hidden = true), 6000);
   }
 
+  // Links that point at a single video. Feed previews (YouTube home, search,
+  // channel pages) play inside or next to a card that links to the video;
+  // without it the button would send the feed itself.
+  const VIDEO_LINK =
+    'a[href*="/watch?v="], a[href*="/shorts/"], a[href*="/live/"], a[href*="youtu.be/"], ' +
+    'a[href*="vimeo.com/"], a[href*="/video/"], a[href*="/videos/"], a[href*="/reel/"], a[href*="/clip/"]';
+  const MAX_LINK_DEPTH = 14;
+
+  function parentOf(node) {
+    return node.parentElement ?? (node.getRootNode?.() instanceof ShadowRoot ? node.getRootNode().host : null);
+  }
+
+  /** The video page a media element belongs to, when it plays inside a feed. */
+  function videoLink(el) {
+    let node = el;
+    for (let depth = 0; node && depth < MAX_LINK_DEPTH; depth++, node = parentOf(node)) {
+      if (node === document.body || node === document.documentElement) break;
+      const link = node.matches?.(VIDEO_LINK) ? node : node.querySelector?.(VIDEO_LINK);
+      if (link?.href && link.href !== location.href) return { url: link.href, title: linkTitle(link) };
+    }
+    return null;
+  }
+
+  /** Title of the video a link points to: any link to the same video that carries one. */
+  function linkTitle(link) {
+    let key = link.pathname;
+    try {
+      key = new URL(link.href).searchParams.get("v") || link.pathname;
+    } catch {}
+    const clean = (s) => s?.replace(/\s+/g, " ").trim() || "";
+    const links = [...document.querySelectorAll("a[href]")].filter((a) => a.href.includes(key));
+    // The title link usually carries a title attribute; the thumbnail link only
+    // has overlays such as the duration ("21:25") or "Tocando agora".
+    for (const a of links) {
+      const title = clean(a.getAttribute("title"));
+      if (title.length > 3) return title;
+    }
+    for (const a of links) {
+      const title = clean(a.textContent);
+      if (title.length > 3 && !/\d+:\d{2}/.test(title)) return title;
+    }
+    return "";
+  }
+
   function mediaInfo(el) {
+    const link = videoLink(el);
     return {
       src: el.currentSrc || el.src || "",
       mediaType: el instanceof HTMLVideoElement ? "video" : "audio",
       pageUrl: location.href,
+      linkUrl: link?.url ?? null,
+      linkTitle: link?.title || null,
       title: document.title,
       duration: Number.isFinite(el.duration) ? el.duration : null,
     };

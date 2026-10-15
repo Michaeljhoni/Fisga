@@ -8,7 +8,10 @@ cd "$(dirname "$0")/.."
 PREFIX="${PREFIX:-$HOME/.local}"
 cargo build --release --workspace
 install -Dm755 target/release/ldm target/release/ldmd target/release/ldm-native-host target/release/ldm-gui -t "$PREFIX/bin"
-install -Dm644 crates/ldm-gui/data/io.ldm.Ldm.desktop -t "$PREFIX/share/applications"
+# Absolute Exec path: app launchers (niri, noctalia, fuzzel...) often run without ~/.local/bin in PATH.
+mkdir -p "$PREFIX/share/applications"
+sed "s|^Exec=ldm-gui|Exec=$PREFIX/bin/ldm-gui|" crates/ldm-gui/data/io.ldm.Ldm.desktop > "$PREFIX/share/applications/io.ldm.Ldm.desktop"
+command -v update-desktop-database >/dev/null && update-desktop-database "$PREFIX/share/applications" || true
 "$PREFIX/bin/ldm" install-hosts
 bash extension/build.sh
 

@@ -13,6 +13,7 @@ const MAX_MESSAGE: usize = 8 * 1024 * 1024;
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
+#[allow(clippy::large_enum_variant)] // one short-lived value per message
 enum Incoming {
     Ping,
     Download(AddRequest),

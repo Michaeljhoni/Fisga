@@ -51,6 +51,22 @@ function isExtractorPage(url) {
   const u = parseUrl(url);
   return Boolean(u && /^https?:$/.test(u.protocol) && hostMatches(u.hostname, PAGE_EXTRACTOR_HOSTS));
 }
+
+// YouTube pages that are lists (home, search, channels, feeds) rather than one
+// video: sending them to yt-dlp would download every video in the list.
+const YOUTUBE_HOSTS = ["youtube.com", "youtube-nocookie.com", "youtu.be"];
+function isYoutubeVideo(u) {
+  if (u.hostname === "youtu.be" || u.hostname.endsWith(".youtu.be")) return u.pathname.length > 1;
+  if (u.pathname === "/watch") return u.searchParams.has("v");
+  return /^\/(shorts|live|embed|v)\/[\w-]{6,}/.test(u.pathname);
+}
+/** False for pages known to list many videos, where the button must not send the page itself. */
+function isSingleVideoPage(url) {
+  const u = parseUrl(url);
+  if (!u) return false;
+  if (hostMatches(u.hostname, YOUTUBE_HOSTS)) return isYoutubeVideo(u);
+  return true;
+}
 function message(key, fallback) {
   try {
     return api.i18n.getMessage(key) || fallback;
@@ -191,11 +207,12 @@ function describe(candidate) {
   };
 }
 
-async function candidatesFor(tabId, frameUrl, tabUrl) {
+async function candidatesFor(tabId, frameUrl, tabUrl, linkUrl) {
   await restore();
   const items = [];
-  const pageUrl = isExtractorPage(frameUrl) ? frameUrl : tabUrl;
-  if (pageUrl && /^https?:/.test(pageUrl)) {
+  let pageUrl = isExtractorPage(frameUrl) ? frameUrl : tabUrl;
+  if (linkUrl && isExtractorPage(linkUrl) && !isSingleVideoPage(pageUrl)) pageUrl = linkUrl;
+  if (pageUrl && /^https?:/.test(pageUrl) && isSingleVideoPage(pageUrl)) {
     items.push({
       url: pageUrl,
       kind: "page",
@@ -215,7 +232,16 @@ async function candidatesFor(tabId, frameUrl, tabUrl) {
 async function resolveTarget(msg, sender) {
   const tabId = sender.tab?.id;
   const frameUrl = sender.url || msg.pageUrl;
-  if (isExtractorPage(frameUrl)) return { url: frameUrl, kind: "page" };
+  // A preview playing in a feed: download the video it links to.
+  if (msg.linkUrl && isExtractorPage(msg.linkUrl) && !isSingleVideoPage(frameUrl)) {
+    return { url: msg.linkUrl, kind: "page", title: msg.linkTitle };
+  }
+  if (isExtractorPage(frameUrl)) {
+    if (!isSingleVideoPage(frameUrl)) {
+      throw new Error(message("notAVideo", "Esta página é uma lista de vídeos. Abra o vídeo (ou passe o mouse sobre a prévia dele) e tente de novo."));
+    }
+    return { url: frameUrl, kind: "page" };
+  }
   if (/^https?:/i.test(msg.src)) {
     return { url: msg.src, kind: MANIFEST_EXT.test(parseUrl(msg.src)?.pathname ?? "") ? "stream" : "direct" };
   }
@@ -289,7 +315,7 @@ async function downloadMedia(msg, sender) {
   const { id, pending } = await sendMedia(target, {
     referrer: sender.url || msg.pageUrl,
     pageUrl: sender.tab?.url || msg.pageUrl,
-    title: msg.title,
+    title: target.title || (target.url === msg.linkUrl && msg.linkTitle) || msg.title,
   });
   return { ok: true, id, pending };
 }
@@ -306,7 +332,7 @@ async function ping() {
 async function handle(msg, sender) {
   switch (msg?.type) {
     case "media-candidates":
-      return { ok: true, items: await candidatesFor(sender.tab?.id, sender.url || msg.pageUrl, sender.tab?.url) };
+      return { ok: true, items: await candidatesFor(sender.tab?.id, sender.url || msg.pageUrl, sender.tab?.url, msg.linkUrl) };
     case "download-media":
       return downloadMedia(msg, sender);
     case "popup-candidates": {

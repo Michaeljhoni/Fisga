@@ -3,3 +3,5 @@
 .omc/
 *.ldm-part
 *.ldm-part.json
+/extension/test/out/
+/extension/test/profile-*/

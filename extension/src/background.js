@@ -228,10 +228,20 @@ async function candidatesFor(tabId, frameUrl, tabUrl, linkUrl) {
   return items;
 }
 
+/**
+ * Current URL of the frame that sent `msg`. The content script reports
+ * `location.href`; `sender.url` is where the frame was loaded and goes stale on
+ * single-page sites (YouTube navigates from the home page to a video with
+ * history.pushState), which made a watch page look like the feed.
+ */
+function frameUrlOf(msg, sender) {
+  return msg.pageUrl || sender.url;
+}
+
 /** Picks what the overlay button should download when the user did not choose. */
 async function resolveTarget(msg, sender) {
   const tabId = sender.tab?.id;
-  const frameUrl = sender.url || msg.pageUrl;
+  const frameUrl = frameUrlOf(msg, sender);
   // A preview playing in a feed: download the video it links to.
   if (msg.linkUrl && isExtractorPage(msg.linkUrl) && !isSingleVideoPage(frameUrl)) {
     return { url: msg.linkUrl, kind: "page", title: msg.linkTitle };
@@ -306,14 +316,14 @@ async function downloadMedia(msg, sender) {
     await restore();
     target =
       (mediaByTab.get(tabId) ?? []).find((c) => c.url === msg.choice) ??
-      (isExtractorPage(msg.choice) || msg.choice === (sender.url || msg.pageUrl) || msg.choice === sender.tab?.url
+      (isExtractorPage(msg.choice) || msg.choice === frameUrlOf(msg, sender) || msg.choice === sender.tab?.url
         ? { url: msg.choice, kind: "page" }
         : { url: msg.choice, kind: MANIFEST_EXT.test(parseUrl(msg.choice)?.pathname ?? "") ? "stream" : "direct" });
   } else {
     target = await resolveTarget(msg, sender);
   }
   const { id, pending } = await sendMedia(target, {
-    referrer: sender.url || msg.pageUrl,
+    referrer: frameUrlOf(msg, sender),
     pageUrl: sender.tab?.url || msg.pageUrl,
     title: target.title || (target.url === msg.linkUrl && msg.linkTitle) || msg.title,
   });
@@ -332,7 +342,7 @@ async function ping() {
 async function handle(msg, sender) {
   switch (msg?.type) {
     case "media-candidates":
-      return { ok: true, items: await candidatesFor(sender.tab?.id, sender.url || msg.pageUrl, sender.tab?.url, msg.linkUrl) };
+      return { ok: true, items: await candidatesFor(sender.tab?.id, frameUrlOf(msg, sender), sender.tab?.url, msg.linkUrl) };
     case "download-media":
       return downloadMedia(msg, sender);
     case "popup-candidates": {

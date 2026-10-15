@@ -126,7 +126,7 @@ ldm settings --category-folders false --max-parallel 5
 
 ```bash
 cargo test --workspace          # testes (incluem um servidor HTTP local com Range)
-cargo build --workspace --examples && scripts/e2e.sh   # ponta a ponta: daemon, CLI, host nativo e confirmação (servidor local)
+cargo build --workspace --bins --examples && scripts/e2e.sh   # ponta a ponta: daemon, CLI, host nativo e confirmação (servidor local)
 node extension/tools/make-icons.mjs
 node scripts/dev-server.mjs     # abra http://localhost:8787/extension/test/overlay.html
 ```

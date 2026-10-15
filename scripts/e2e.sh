@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end smoke test of ldmd + ldm + ldm-native-host in an isolated HOME,
 # against a local test server (no internet needed).
-# Usage: scripts/e2e.sh [bin-dir]   (default: target/debug; the dir must also
-# contain examples/range_server, built by `cargo build --workspace --examples`)
+# Usage: scripts/e2e.sh [bin-dir]   (default: target/debug; build with `cargo build --workspace --bins --examples`, so the dir also
+# contains examples/range_server)
 set -euo pipefail
 
 BIN="$(cd "${1:-target/debug}" && pwd)"

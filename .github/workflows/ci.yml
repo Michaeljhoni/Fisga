@@ -31,7 +31,7 @@ jobs:
         run: cargo clippy --workspace --all-targets
 
       - name: Build binaries and the test server
-        run: cargo build --workspace --examples
+        run: cargo build --workspace --bins --examples
 
       - name: End to end (daemon, CLI, native host, confirmation)
         run: bash scripts/e2e.sh target/debug

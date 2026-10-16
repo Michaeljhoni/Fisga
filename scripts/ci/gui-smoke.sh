@@ -79,9 +79,11 @@ for _ in $(seq 1 25); do xdotool search --name "^Download concluído$" >/dev/nul
 if xdotool search --name "^Download concluído$" >/dev/null 2>&1; then echo "window still open"; exit 1; fi
 echo "window closed after opening"
 
-echo "== Escape cancels"
-host "{\"type\":\"download\",\"url\":\"$BASE/files/1048576.bin\",\"kind\":\"direct\"}"
+echo "== same file again: the window asks what to do with the existing one; Escape cancels"
+host "{\"type\":\"download\",\"url\":\"$URL\",\"kind\":\"direct\"}"
 win="$(find_window "^Novo download$")"
+sleep 1.5
+shot 1b-arquivo-ja-existe
 xdotool windowfocus --sync "$win" key Escape
 for _ in $(seq 1 30); do [ -z "$(state_of 2)" ] && break; sleep 0.2; done
 test -z "$(state_of 2)"; echo "download 2 removed"
@@ -102,6 +104,12 @@ sleep 1
 xdotool windowfocus --sync "$main"
 sleep 1
 shot 4-janela-principal
+# Right click on the first row: its menu (Abrir, Abrir pasta, Retomar, Pausar...).
+xdotool mousemove --window "$main" 520 96 click 3
+sleep 1
+shot 4b-menu-do-download
+xdotool key Escape
+sleep 0.5
 xdotool windowfocus --sync "$main" key ctrl+comma
 prefs="$(find_window "^Preferências$")"
 sleep 1

@@ -1,13 +1,13 @@
 //! Main window: categories on the left (like IDM), the download list on the
-//! right with pause, resume, remove, open file and open folder, updated live
-//! from the daemon.
+//! right with pause, resume, remove, open file and open folder (also in the
+//! right-click menu of each row), updated live from the daemon.
 
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
 use gtk::prelude::*;
-use gtk::{gio, glib, pango};
+use gtk::{gdk, gio, glib, pango};
 use ldm_ipc::{AddRequest, Category, DownloadInfo, Request, State};
 
 use crate::app::App;
@@ -80,8 +80,42 @@ struct Actions {
     open_folder: gio::SimpleAction,
 }
 
-fn text_column(title: &str, property: &'static str, expand: bool, xalign: f32) -> gtk::ColumnViewColumn {
+/// Opens the row menu for a list item, at a point of one of its cells.
+type RowMenu = Rc<dyn Fn(&gtk::ListItem, &gtk::Widget, f64, f64)>;
+
+/// Right click on a cell: the row menu (IDM's context menu).
+fn add_row_menu(list_item: &gtk::ListItem, cell: &impl IsA<gtk::Widget>, menu: &RowMenu) {
+    let gesture = gtk::GestureClick::builder().button(gdk::BUTTON_SECONDARY).build();
+    let (item, cell_ref, menu) = (list_item.downgrade(), cell.upcast_ref::<gtk::Widget>().downgrade(), menu.clone());
+    gesture.connect_pressed(move |gesture, _, x, y| {
+        if let (Some(item), Some(cell)) = (item.upgrade(), cell_ref.upgrade()) {
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            menu(&item, &cell, x, y);
+        }
+    });
+    cell.add_controller(gesture);
+}
+
+fn row_menu_model() -> gio::Menu {
+    let menu = gio::Menu::new();
+    let section = gio::Menu::new();
+    section.append(Some("Abrir"), Some("win.open-file"));
+    section.append(Some("Abrir pasta"), Some("win.open-folder"));
+    menu.append_section(None, &section);
+    let section = gio::Menu::new();
+    section.append(Some("Retomar"), Some("win.resume"));
+    section.append(Some("Pausar"), Some("win.pause"));
+    menu.append_section(None, &section);
+    let section = gio::Menu::new();
+    section.append(Some("Copiar endereço"), Some("win.copy-url"));
+    section.append(Some("Remover…"), Some("win.remove"));
+    menu.append_section(None, &section);
+    menu
+}
+
+fn text_column(title: &str, property: &'static str, expand: bool, xalign: f32, menu: &RowMenu) -> gtk::ColumnViewColumn {
     let factory = gtk::SignalListItemFactory::new();
+    let menu = menu.clone();
     factory.connect_setup(move |_, object| {
         let list_item = object.downcast_ref::<gtk::ListItem>().expect("a ListItem");
         let label = gtk::Label::builder().xalign(xalign).ellipsize(pango::EllipsizeMode::End).build();
@@ -90,6 +124,7 @@ fn text_column(title: &str, property: &'static str, expand: bool, xalign: f32) -
         if expand {
             expression.bind(&label, "tooltip-text", gtk::Widget::NONE);
         }
+        add_row_menu(list_item, &label, &menu);
         list_item.set_child(Some(&label));
     });
     let column = gtk::ColumnViewColumn::new(Some(title), Some(factory));
@@ -98,14 +133,16 @@ fn text_column(title: &str, property: &'static str, expand: bool, xalign: f32) -
     column
 }
 
-fn progress_column() -> gtk::ColumnViewColumn {
+fn progress_column(menu: &RowMenu) -> gtk::ColumnViewColumn {
     let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup(|_, object| {
+    let menu = menu.clone();
+    factory.connect_setup(move |_, object| {
         let list_item = object.downcast_ref::<gtk::ListItem>().expect("a ListItem");
         let bar = gtk::ProgressBar::builder().show_text(true).valign(gtk::Align::Center).build();
         let item = list_item.property_expression("item");
         item.chain_property::<DownloadItem>("progress").bind(&bar, "fraction", gtk::Widget::NONE);
         item.chain_property::<DownloadItem>("progress-text").bind(&bar, "text", gtk::Widget::NONE);
+        add_row_menu(list_item, &bar, &menu);
         list_item.set_child(Some(&bar));
     });
     let column = gtk::ColumnViewColumn::new(Some("Progresso"), Some(factory));
@@ -235,12 +272,26 @@ impl MainWindow {
         let view = gtk::ColumnView::new(Some(selection.clone()));
         view.set_show_column_separators(true);
         view.set_reorderable(false);
-        view.append_column(&text_column("Nome", "name", true, 0.0));
-        view.append_column(&text_column("Tamanho", "size", false, 1.0));
-        view.append_column(&progress_column());
-        view.append_column(&text_column("Velocidade", "speed", false, 1.0));
-        view.append_column(&text_column("Restante", "remaining", false, 1.0));
-        view.append_column(&text_column("Estado", "status", false, 0.0));
+        // Right click selects the row and opens its menu; the actions follow the selection.
+        let popover = gtk::PopoverMenu::builder().menu_model(&row_menu_model()).has_arrow(false).build();
+        popover.set_halign(gtk::Align::Start);
+        popover.set_parent(&view);
+        let p = popover.clone();
+        view.connect_destroy(move |_| p.unparent());
+        let (s, v) = (selection.clone(), view.downgrade());
+        let menu: RowMenu = Rc::new(move |item, cell, x, y| {
+            let Some(view) = v.upgrade() else { return };
+            s.set_selected(item.position());
+            let (x, y) = cell.translate_coordinates(&view, x, y).unwrap_or((x, y));
+            popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            popover.popup();
+        });
+        view.append_column(&text_column("Nome", "name", true, 0.0, &menu));
+        view.append_column(&text_column("Tamanho", "size", false, 1.0, &menu));
+        view.append_column(&progress_column(&menu));
+        view.append_column(&text_column("Velocidade", "speed", false, 1.0, &menu));
+        view.append_column(&text_column("Restante", "remaining", false, 1.0, &menu));
+        view.append_column(&text_column("Estado", "status", false, 0.0, &menu));
         let list_scroll = gtk::ScrolledWindow::builder().child(&view).vexpand(true).hexpand(true).build();
 
         let paned = gtk::Paned::builder()
@@ -669,6 +720,7 @@ mod tests {
             dir: None,
             probing: false,
             category,
+            formats: Vec::new(),
         }
     }
 }

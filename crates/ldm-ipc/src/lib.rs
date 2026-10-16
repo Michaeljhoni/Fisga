@@ -1,7 +1,7 @@
 //! Protocol between `ldmd` (daemon) and its clients: one JSON object per line over
 //! the Unix socket `$XDG_RUNTIME_DIR/ldm/ldmd.sock`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context};
@@ -86,10 +86,88 @@ pub struct AddRequest {
     /// GUI shows the "Novo download" window. `start` is ignored.
     #[serde(default)]
     pub confirm: bool,
+    /// Quality of a site video: a `MediaFormat::key` ("1080", "audio"...);
+    /// `None` = the best one.
+    #[serde(default)]
+    pub format: Option<String>,
 }
 
 fn yes() -> bool {
     true
+}
+
+/// A quality the user can pick for a site video, found by the daemon's probe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaFormat {
+    /// Sent back in `Request::Confirm::format`: a video height ("1080") or "audio".
+    pub key: String,
+    /// "1080p", "Somente áudio"...
+    pub label: String,
+    /// Extension of the file it produces, when known.
+    #[serde(default)]
+    pub ext: Option<String>,
+    /// Estimated size in bytes.
+    #[serde(default)]
+    pub size: Option<u64>,
+}
+
+/// What to do when the destination file already exists (IDM's "arquivo já existe").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Conflict {
+    /// Save as "name (1).ext".
+    Rename,
+    /// Delete the existing file (and any partial download) first.
+    Overwrite,
+    /// Continue the partial download that is there.
+    Resume,
+}
+
+/// What is already at a download's destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Existing {
+    Nothing,
+    File,
+    /// An unfinished download: `name.ldm-part` (LDM's engine) or `name.part` (yt-dlp).
+    Partial,
+}
+
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut os = path.as_os_str().to_owned();
+    os.push(suffix);
+    PathBuf::from(os)
+}
+
+/// Partial files that may sit next to `path` (see `ldm_core::control::part_path`).
+pub fn partial_paths(path: &Path) -> [PathBuf; 3] {
+    [with_suffix(path, ".ldm-part"), with_suffix(path, ".ldm-part.json"), with_suffix(path, ".part")]
+}
+
+pub fn existing(path: &Path) -> Existing {
+    let [part, _, ytdlp_part] = partial_paths(path);
+    if part.exists() || ytdlp_part.exists() {
+        Existing::Partial
+    } else if path.exists() {
+        Existing::File
+    } else {
+        Existing::Nothing
+    }
+}
+
+/// `name`, or `name (1).ext`, `name (2).ext`... whichever is free in `dir`.
+pub fn unique_name(dir: &Path, name: &str) -> String {
+    if existing(&dir.join(name)) == Existing::Nothing {
+        return name.to_string();
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && ext.len() <= 10 => (stem, format!(".{ext}")),
+        _ => (name, String::new()),
+    };
+    (1..)
+        .map(|n| format!("{stem} ({n}){ext}"))
+        .find(|candidate| existing(&dir.join(candidate)) == Existing::Nothing)
+        .expect("infinite iterator")
 }
 
 /// File type groups, as in IDM: the main window filters by them and, by
@@ -185,6 +263,9 @@ pub struct Settings {
     pub show_progress: bool,
     /// Speed limit for all downloads together, in bytes per second; 0 = none.
     pub speed_limit: u64,
+    /// A copied link to a file (video, music, program, archive...) opens the
+    /// "Novo download" window, like IDM's clipboard monitor.
+    pub watch_clipboard: bool,
 }
 
 impl Default for Settings {
@@ -196,6 +277,7 @@ impl Default for Settings {
             connections: 8,
             show_progress: true,
             speed_limit: 0,
+            watch_clipboard: true,
         }
     }
 }
@@ -248,6 +330,9 @@ pub struct DownloadInfo {
     pub probing: bool,
     #[serde(default)]
     pub category: Category,
+    /// Qualities of a site video, best first; empty for other downloads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub formats: Vec<MediaFormat>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,6 +366,12 @@ pub enum Request {
         file_name: Option<String>,
         #[serde(default)]
         output_dir: Option<PathBuf>,
+        /// A `MediaFormat::key` of the download.
+        #[serde(default)]
+        format: Option<String>,
+        /// The file already exists at the destination: what to do with it.
+        #[serde(default)]
+        conflict: Option<Conflict>,
     },
     Shutdown,
     GetSettings,
@@ -432,13 +523,42 @@ mod tests {
             now: true,
             file_name: Some("a.iso".into()),
             output_dir: Some("/tmp".into()),
+            format: None,
+            conflict: None,
         };
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains(r#""type":"confirm""#), "{json}");
         let back: Request = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, Request::Confirm { id: 7, now: true, .. }));
         let minimal: Request = serde_json::from_str(r#"{"type":"confirm","id":3}"#).unwrap();
-        assert!(matches!(minimal, Request::Confirm { id: 3, now: false, file_name: None, output_dir: None }));
+        assert!(matches!(
+            minimal,
+            Request::Confirm { id: 3, now: false, file_name: None, output_dir: None, format: None, conflict: None }
+        ));
+        let full: Request =
+            serde_json::from_str(r#"{"type":"confirm","id":3,"format":"720","conflict":"overwrite"}"#).unwrap();
+        assert!(matches!(
+            full,
+            Request::Confirm { format: Some(ref f), conflict: Some(Conflict::Overwrite), .. } if f == "720"
+        ));
+    }
+
+    #[test]
+    fn existing_files_and_unique_names() {
+        let dir = std::env::temp_dir().join(format!("ldm-ipc-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(existing(&dir.join("a.iso")), Existing::Nothing);
+        assert_eq!(unique_name(&dir, "a.iso"), "a.iso");
+        std::fs::write(dir.join("a.iso"), b"x").unwrap();
+        assert_eq!(existing(&dir.join("a.iso")), Existing::File);
+        assert_eq!(unique_name(&dir, "a.iso"), "a (1).iso");
+        std::fs::write(dir.join("a (1).iso.ldm-part"), b"x").unwrap();
+        assert_eq!(existing(&dir.join("a (1).iso")), Existing::Partial);
+        assert_eq!(unique_name(&dir, "a.iso"), "a (2).iso");
+        std::fs::write(dir.join("v.mp4.part"), b"x").unwrap();
+        assert_eq!(existing(&dir.join("v.mp4")), Existing::Partial, "yt-dlp partial");
+        assert_eq!(unique_name(&dir, "sem-extensao"), "sem-extensao");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -462,6 +582,7 @@ mod tests {
     fn settings_defaults_and_partial_json() {
         let settings: Settings = serde_json::from_str(r#"{"maxParallel": 50}"#).unwrap();
         assert!(settings.category_folders);
+        assert!(settings.watch_clipboard);
         assert_eq!(settings.sanitized().max_parallel, 20);
         let request: Request = serde_json::from_str(r#"{"type":"set_settings","settings":{"connections":4}}"#).unwrap();
         assert!(matches!(request, Request::SetSettings { settings } if settings.connections == 4));
@@ -479,5 +600,7 @@ mod tests {
         assert_eq!(info.dir, None);
         assert!(!info.probing);
         assert_eq!(info.category, Category::Other);
+        assert!(info.formats.is_empty());
+        assert!(!serde_json::to_string(&info).unwrap().contains("formats"), "empty list not written");
     }
 }

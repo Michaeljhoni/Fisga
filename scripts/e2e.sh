@@ -10,6 +10,9 @@ SANDBOX="$(mktemp -d)"
 export HOME="$SANDBOX/home" XDG_RUNTIME_DIR="$SANDBOX/run" XDG_DATA_HOME="$SANDBOX/data" XDG_CONFIG_HOME="$SANDBOX/home/.config"
 # Stand-in for ldm-gui: starts fine but never connects, like a GUI without a display.
 export LDM_GUI=true
+# Stand-in for `wl-paste --watch`: each line appended to this file is a copied text.
+export LDM_CLIPBOARD_CMD="tail -n 0 -F '$SANDBOX/clipboard'"
+touch "$SANDBOX/clipboard"
 mkdir -p "$HOME/Downloads" "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME"
 # .bin files belong to the "Programas" category, saved in its own subfolder.
 DL="$HOME/Downloads/Programas"
@@ -34,6 +37,7 @@ frame() {
 }
 host() { frame "$1" | "$BIN/ldm-native-host" | tail -c +5; echo; }
 state_of() { "$BIN/ldm" list | awk -v id="$1" '$1 == id { print $2 }'; }
+last_id() { "$BIN/ldm" list | awk '$1 ~ /^[0-9]+$/ && $1 > max { max = $1 } END { print max + 0 }'; }
 wait_state() {
   for _ in $(seq 1 "${3:-120}"); do
     local state
@@ -97,6 +101,43 @@ host "{\"type\":\"download\",\"url\":\"$SMALL\",\"kind\":\"direct\"}" | grep -q 
 wait_state 6 aguardando 5
 wait_state 6 concluído 60
 ls -la "$HOME/Downloads"
+
+step "file already exists: another name, or replace it"
+OWN="$BASE/files/3145728.bin"
+"$BIN/ldm" add "$OWN" --wait >/dev/null
+host "{\"type\":\"download\",\"url\":\"$OWN\",\"kind\":\"direct\"}" | grep -q '"pending":true'
+id="$(last_id)"; wait_state "$id" aguardando 5
+# A direct link has no quality to choose.
+if "$BIN/ldm" confirm "$id" --quality 720 2>"$SANDBOX/err"; then echo "quality accepted"; exit 1; fi
+grep "opções de qualidade" "$SANDBOX/err"
+"$BIN/ldm" confirm "$id" --if-exists rename
+wait_state "$id" concluído 60
+test "$(stat -c %s "$DL/3145728 (1).bin")" -eq 3145728; echo "saved as '3145728 (1).bin'"
+inode="$(stat -c %i "$DL/3145728.bin")"
+host "{\"type\":\"download\",\"url\":\"$OWN\",\"kind\":\"direct\"}" | grep -q '"pending":true'
+id="$(last_id)"; wait_state "$id" aguardando 5
+"$BIN/ldm" confirm "$id" --if-exists overwrite
+wait_state "$id" concluído 60
+test "$(stat -c %i "$DL/3145728.bin")" != "$inode"; test ! -e "$DL/3145728 (2).bin"
+test "$(stat -c %s "$DL/3145728.bin")" -eq 3145728; echo "existing file replaced"
+
+step "clipboard: a copied link to a file asks to download it"
+before="$(last_id)"
+echo "https://example.com/pagina.html" >> "$SANDBOX/clipboard"
+echo "texto qualquer" >> "$SANDBOX/clipboard"
+echo "$BASE/files/1048576.bin" >> "$SANDBOX/clipboard"
+for _ in $(seq 1 30); do [ "$(last_id)" != "$before" ] && break; sleep 0.2; done
+id="$(last_id)"
+test "$id" -eq $((before + 1)); echo "only the file link was caught (#$id)"
+wait_state "$id" aguardando 5
+"$BIN/ldm" confirm "$id"
+wait_state "$id" concluído 60
+test "$(stat -c %s "$DL/1048576.bin")" -eq 1048576; echo "copied link downloaded"
+"$BIN/ldm" settings --watch-clipboard false | grep "capturar links copiados: não"
+echo "$BASE/files/2097152.bin" >> "$SANDBOX/clipboard"
+sleep 1
+test "$(last_id)" -eq "$id"; echo "turned off: ignored"
+"$BIN/ldm" settings --watch-clipboard true >/dev/null
 
 step "native host: invalid message"
 host '{"type":"nope"}'

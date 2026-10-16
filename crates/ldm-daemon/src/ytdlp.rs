@@ -6,7 +6,8 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ldm_ipc::{AddRequest, Cookie};
+use ldm_ipc::{AddRequest, Cookie, MediaFormat};
+use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -67,6 +68,9 @@ pub async fn run(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel: 
     if limit > 0 {
         command.args(["--limit-rate", &limit.to_string()]);
     }
+    if let Some(selector) = request.format.as_deref().and_then(format_selector) {
+        command.args(["--format", &selector]);
+    }
     command
         .arg("--paths")
         .arg(&dir)
@@ -110,13 +114,84 @@ fn add_request_options(command: &mut Command, name: &str, request: &AddRequest) 
 /// What a page URL holds, according to `yt-dlp -J`.
 #[derive(Debug, PartialEq)]
 pub enum PageProbe {
-    Video { name: Option<String>, size: Option<u64> },
+    Video { name: Option<String>, size: Option<u64>, formats: Vec<MediaFormat> },
     /// A feed, channel, search or playlist: many videos.
     List { title: Option<String> },
 }
 
-fn as_size(value: &serde_json::Value) -> Option<u64> {
+const AUDIO: &str = "audio";
+
+/// yt-dlp `--format` for a `MediaFormat::key`: the best video up to that
+/// height plus the best audio, or the audio alone (M4A preferred, it plays
+/// everywhere).
+pub fn format_selector(key: &str) -> Option<String> {
+    if key == AUDIO {
+        return Some("ba[ext=m4a]/ba/b".into());
+    }
+    let height: u32 = key.parse().ok()?;
+    Some(format!("bv*[height<={height}]+ba/b[height<={height}]/bv*+ba/b"))
+}
+
+fn as_size(value: &Value) -> Option<u64> {
     value.as_f64().filter(|v| v.is_finite() && *v > 0.0).map(|v| v as u64)
+}
+
+fn format_size(format: &Value) -> Option<u64> {
+    as_size(&format["filesize"]).or_else(|| as_size(&format["filesize_approx"]))
+}
+
+fn codec(format: &Value, key: &str) -> String {
+    format.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+}
+
+fn has_video(format: &Value) -> bool {
+    codec(format, "vcodec") != "none"
+}
+
+fn is_audio_only(format: &Value) -> bool {
+    !has_video(format) && !matches!(codec(format, "acodec").as_str(), "" | "none")
+}
+
+fn height(format: &Value) -> Option<u64> {
+    format.get("height").and_then(|h| h.as_u64()).filter(|h| *h > 0)
+}
+
+fn largest<'a>(formats: impl Iterator<Item = &'a Value>) -> Option<&'a Value> {
+    formats.max_by_key(|f| format_size(f).unwrap_or(0))
+}
+
+/// Qualities for the "Novo download" window: one per video height, best
+/// first, then audio only. Sizes add the audio track that yt-dlp merges in.
+fn media_formats(json: &Value) -> Vec<MediaFormat> {
+    let Some(formats) = json.get("formats").and_then(|f| f.as_array()) else { return Vec::new() };
+    let best_audio = largest(formats.iter().filter(|f| is_audio_only(f)));
+    let m4a_audio = largest(formats.iter().filter(|f| is_audio_only(f) && f["ext"] == "m4a")).or(best_audio);
+
+    let mut heights: Vec<u64> = formats.iter().filter(|f| has_video(f)).filter_map(height).collect();
+    heights.sort_unstable_by(|a, b| b.cmp(a));
+    heights.dedup();
+    let video_ext = json.get("ext").and_then(|e| e.as_str()).map(str::to_string);
+    let mut result: Vec<MediaFormat> = heights
+        .into_iter()
+        .map(|h| {
+            let at_height = || formats.iter().filter(move |f| has_video(f) && height(f) == Some(h));
+            // Video-only streams get the best audio merged in; muxed ones already have it.
+            let size = match largest(at_height().filter(|f| codec(f, "acodec") == "none")) {
+                Some(video) => format_size(video).map(|v| v + best_audio.and_then(format_size).unwrap_or(0)),
+                None => largest(at_height()).and_then(format_size),
+            };
+            MediaFormat { key: h.to_string(), label: format!("{h}p"), ext: video_ext.clone(), size }
+        })
+        .collect();
+    if let Some(audio) = m4a_audio {
+        result.push(MediaFormat {
+            key: AUDIO.into(),
+            label: "Somente áudio".into(),
+            ext: audio.get("ext").and_then(|e| e.as_str()).map(str::to_string),
+            size: format_size(audio),
+        });
+    }
+    result
 }
 
 pub fn parse_probe(json: &serde_json::Value) -> PageProbe {
@@ -137,7 +212,7 @@ pub fn parse_probe(json: &serde_json::Value) -> PageProbe {
         Some(ext) => ldm_core::filename::sanitize(&format!("{title}.{ext}")),
         None => ldm_core::filename::sanitize(&title),
     });
-    PageProbe::Video { name, size }
+    PageProbe::Video { name, size, formats: media_formats(json) }
 }
 
 /// Asks yt-dlp what the URL is before the user confirms it.
@@ -273,15 +348,49 @@ mod tests {
             "requested_formats": [{"filesize": 1000}, {"filesize_approx": 500}]});
         assert_eq!(
             parse_probe(&video),
-            PageProbe::Video { name: Some("Meu vídeo: parte 1_2.webm".into()), size: Some(1500) }
+            PageProbe::Video { name: Some("Meu vídeo: parte 1_2.webm".into()), size: Some(1500), formats: vec![] }
         );
     }
 
     #[test]
     fn single_video_size_fields() {
         let video = json!({"_type": "video", "title": "x", "ext": "mp4", "filesize_approx": 2048.0});
-        assert_eq!(parse_probe(&video), PageProbe::Video { name: Some("x.mp4".into()), size: Some(2048) });
+        assert_eq!(parse_probe(&video), PageProbe::Video { name: Some("x.mp4".into()), size: Some(2048), formats: vec![] });
         let unknown = json!({"title": "x"});
-        assert_eq!(parse_probe(&unknown), PageProbe::Video { name: Some("x".into()), size: None });
+        assert_eq!(parse_probe(&unknown), PageProbe::Video { name: Some("x".into()), size: None, formats: vec![] });
+    }
+
+    #[test]
+    fn qualities_of_a_youtube_video() {
+        // Trimmed `formats` of a YouTube video: storyboard, audio, video-only and one muxed format.
+        let video = json!({"title": "v", "ext": "webm", "formats": [
+            {"format_id": "sb0", "ext": "mhtml", "vcodec": "none", "acodec": "none", "height": 90},
+            {"format_id": "139", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.5", "filesize": 300},
+            {"format_id": "140", "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2", "filesize": 800},
+            {"format_id": "251", "ext": "webm", "vcodec": "none", "acodec": "opus", "filesize": 1000},
+            {"format_id": "18", "ext": "mp4", "vcodec": "avc1", "acodec": "mp4a.40.2", "height": 360, "filesize_approx": 5000},
+            {"format_id": "136", "ext": "mp4", "vcodec": "avc1", "acodec": "none", "height": 720, "filesize": 20000},
+            {"format_id": "247", "ext": "webm", "vcodec": "vp9", "acodec": "none", "height": 720, "filesize": 15000},
+            {"format_id": "137", "ext": "mp4", "vcodec": "avc1", "acodec": "none", "height": 1080, "filesize": 40000}
+        ]});
+        let PageProbe::Video { formats, .. } = parse_probe(&video) else { panic!("a video") };
+        let summary: Vec<(&str, &str, Option<&str>, Option<u64>)> =
+            formats.iter().map(|f| (f.key.as_str(), f.label.as_str(), f.ext.as_deref(), f.size)).collect();
+        assert_eq!(
+            summary,
+            [
+                ("1080", "1080p", Some("webm"), Some(41000)),
+                ("720", "720p", Some("webm"), Some(21000)),
+                ("360", "360p", Some("webm"), Some(5000)),
+                ("audio", "Somente áudio", Some("m4a"), Some(800)),
+            ]
+        );
+    }
+
+    #[test]
+    fn format_selectors() {
+        assert_eq!(format_selector("720").as_deref(), Some("bv*[height<=720]+ba/b[height<=720]/bv*+ba/b"));
+        assert_eq!(format_selector("audio").as_deref(), Some("ba[ext=m4a]/ba/b"));
+        assert_eq!(format_selector("; rm -rf"), None);
     }
 }

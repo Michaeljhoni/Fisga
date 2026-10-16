@@ -1,6 +1,7 @@
 //! `ldmd`: owns the download list and runs the downloads. Clients (CLI, GUI,
 //! browser host) talk to it over a Unix socket; see `ldm-ipc`.
 
+mod clipboard;
 mod gui;
 mod manager;
 mod notify;
@@ -17,8 +18,8 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
 
-use crate::gui::Gui;
-use crate::manager::Manager;
+use crate::gui::{Gui, Unanswered};
+use crate::manager::{Answer, Manager};
 
 fn init_logging() {
     let filter = tracing_subscriber::EnvFilter::try_from_env("LDM_LOG")
@@ -60,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(socket = %socket.display(), "ldmd {} pronto", ldm_ipc::VERSION);
 
     tokio::spawn(manager.clone().autosave(shutdown.clone()));
+    clipboard::spawn(manager.clone(), gui.clone());
     manager.schedule();
 
     let mut sigterm = signal(SignalKind::terminate())?;
@@ -109,15 +111,15 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: UnixStream, 
                 match manager.add(add) {
                     Ok(id) => {
                         if confirm {
-                            gui.request_confirmation(&manager, id);
+                            gui.request_confirmation(&manager, id, Unanswered::Queue);
                         }
                         Response::Added { id }
                     }
                     Err(e) => Response::Error { message: e.to_string() },
                 }
             }
-            Request::Confirm { id, now, file_name, output_dir } => {
-                result(manager.confirm(id, now, file_name, output_dir))
+            Request::Confirm { id, now, file_name, output_dir, format, conflict } => {
+                result(manager.confirm(id, Answer { now, file_name, output_dir, format, conflict }))
             }
             Request::List => Response::Downloads { items: manager.list() },
             Request::Pause { id } => result(manager.pause(id)),

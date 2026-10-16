@@ -8,12 +8,24 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context};
 use ldm_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
-use ldm_ipc::{AddRequest, Category, DownloadInfo, Response, Settings, SourceKind, State};
+use ldm_ipc::{AddRequest, Category, Conflict, DownloadInfo, Response, Settings, SourceKind, State};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::{notify, ytdlp};
+
+/// The user's answer in the "Novo download" window.
+#[derive(Debug, Default)]
+pub struct Answer {
+    /// "Baixar agora": start even when the queue is full.
+    pub now: bool,
+    pub file_name: Option<String>,
+    pub output_dir: Option<PathBuf>,
+    /// A `MediaFormat::key` (quality of a site video).
+    pub format: Option<String>,
+    pub conflict: Option<Conflict>,
+}
 
 pub enum JobResult {
     Completed(PathBuf),
@@ -125,20 +137,17 @@ impl Manager {
                 inner.jobs.insert(info.id, Job { info, request, cancel: None, forced: false, auto_dir: false });
             }
         }
+        let settings = load_settings(&settings_path);
         Ok(Arc::new(Self {
             inner: Mutex::new(inner),
             updates: broadcast::channel(256).0,
             client: ldm_core::build_client()?,
             store,
             dirty: AtomicBool::new(false),
-            limiter: Arc::new(ldm_core::RateLimiter::new(0)),
-            settings: Mutex::new(load_settings(&settings_path)),
+            limiter: Arc::new(ldm_core::RateLimiter::new(settings.speed_limit)),
+            settings: Mutex::new(settings),
             settings_path,
         }))
-        .map(|manager: Arc<Self>| {
-            manager.limiter.set_rate(manager.settings().speed_limit);
-            manager
-        })
     }
 
     pub fn settings(&self) -> Settings {
@@ -223,6 +232,7 @@ impl Manager {
                 dir: Some(dir),
                 probing: probe,
                 category,
+                formats: Vec::new(),
             };
             let _ = self.updates.send(Response::Update { item: info.clone() });
             inner.jobs.insert(id, Job { info, request, cancel: None, forced: false, auto_dir: auto });
@@ -273,8 +283,9 @@ impl Manager {
         self.update(id, |info| {
             info.probing = false;
             match result {
-                Ok(ytdlp::PageProbe::Video { name, size }) => {
+                Ok(ytdlp::PageProbe::Video { name, size, formats }) => {
                     info.total = size;
+                    info.formats = formats;
                     info.resumable = true;
                     if let Some(name) = name.filter(|_| !keep_name && info.state == State::Pending) {
                         info.name = name;
@@ -294,14 +305,10 @@ impl Manager {
     }
 
     /// Answers a pending download: queue it, or start it right away (`now`).
-    pub fn confirm(
-        self: &Arc<Self>,
-        id: u64,
-        now: bool,
-        file_name: Option<String>,
-        output_dir: Option<PathBuf>,
-    ) -> anyhow::Result<()> {
+    pub fn confirm(self: &Arc<Self>, id: u64, answer: Answer) -> anyhow::Result<()> {
+        let Answer { now, file_name, output_dir, format, conflict } = answer;
         let settings = self.settings();
+        let mut to_delete = Vec::new();
         {
             let mut inner = self.inner.lock().unwrap();
             let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
@@ -315,6 +322,16 @@ impl Manager {
                 job.info.name = name.clone();
                 job.request.file_name = Some(name);
             }
+            if let Some(format) = format {
+                if !job.info.formats.iter().any(|f| f.key == format) {
+                    let known: Vec<&str> = job.info.formats.iter().map(|f| f.key.as_str()).collect();
+                    match known.is_empty() {
+                        true => bail!("este download não tem opções de qualidade"),
+                        false => bail!("qualidade desconhecida: {format} (opções: {})", known.join(", ")),
+                    }
+                }
+                job.request.format = Some(format);
+            }
             job.info.category = Category::detect(&job.info.name, job.info.kind);
             match output_dir {
                 Some(dir) => {
@@ -326,10 +343,33 @@ impl Manager {
             }
             // The folder is fixed from now on.
             job.request.output_dir = job.info.dir.clone();
+            if let (Some(conflict), Some(dir)) = (conflict, job.info.dir.clone()) {
+                let name = ldm_core::filename::sanitize(&job.info.name);
+                let name = match conflict {
+                    Conflict::Rename => ldm_ipc::unique_name(&dir, &name),
+                    Conflict::Overwrite => {
+                        let path = dir.join(&name);
+                        to_delete.extend(ldm_ipc::partial_paths(&path));
+                        to_delete.push(path);
+                        name
+                    }
+                    // The engine (and yt-dlp) continue a partial file with the same name.
+                    Conflict::Resume => name,
+                };
+                job.info.name = name.clone();
+                job.request.file_name = Some(name);
+            }
             job.auto_dir = false;
             job.info.state = State::Queued;
             job.forced = now;
             let _ = self.updates.send(Response::Update { item: job.info.clone() });
+        }
+        for path in to_delete {
+            match std::fs::remove_file(&path) {
+                Ok(()) => tracing::info!(id, path = %path.display(), "arquivo existente substituído"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(id, path = %path.display(), error = %e, "não foi possível apagar"),
+            }
         }
         tracing::info!(id, now, "download confirmado");
         self.save();
@@ -666,7 +706,7 @@ mod tests {
         let manager = manager();
         let id = add(&manager, true);
         manager.update(id, |info| info.error = Some("lista".into()));
-        assert!(manager.confirm(id, true, None, None).is_err());
+        assert!(manager.confirm(id, Answer { now: true, ..Default::default() }).is_err());
         assert_eq!(manager.state(id), Some(State::Pending));
     }
 
@@ -681,15 +721,15 @@ mod tests {
     async fn confirm_applies_name_and_folder() {
         let manager = manager();
         let id = add(&manager, true);
-        manager.confirm(id, false, Some("outro.iso".into()), Some("/tmp/x".into())).unwrap();
+        manager.confirm(id, Answer { file_name: Some("outro.iso".into()), output_dir: Some("/tmp/x".into()), ..Default::default() }).unwrap();
         let info = manager.list().into_iter().find(|i| i.id == id).unwrap();
         assert_eq!(info.name, "outro.iso");
         assert_eq!(info.dir.as_deref(), Some(Path::new("/tmp/x")));
         // A free slot: queued downloads start immediately.
         assert_eq!(info.state, State::Running);
         // Only pending downloads can be confirmed.
-        assert!(manager.confirm(id, true, None, None).is_err());
-        assert!(manager.confirm(999, true, None, None).is_err());
+        assert!(manager.confirm(id, Answer { now: true, ..Default::default() }).is_err());
+        assert!(manager.confirm(999, Answer { now: true, ..Default::default() }).is_err());
     }
 
     #[tokio::test]
@@ -700,10 +740,43 @@ mod tests {
         }
         let queued = add(&manager, true);
         let now = add(&manager, true);
-        manager.confirm(queued, false, None, None).unwrap();
-        manager.confirm(now, true, None, None).unwrap();
+        manager.confirm(queued, Answer::default()).unwrap();
+        manager.confirm(now, Answer { now: true, ..Default::default() }).unwrap();
         assert_eq!(manager.state(queued), Some(State::Queued));
         assert_eq!(manager.state(now), Some(State::Running));
+    }
+
+    #[tokio::test]
+    async fn existing_file_renamed_or_overwritten() {
+        let manager = manager();
+        let dir = manager.settings().download_dir.unwrap().join("Programas");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("file.iso"), b"old").unwrap();
+        let info = |id| manager.list().into_iter().find(|i| i.id == id).unwrap();
+
+        let renamed = add(&manager, true);
+        manager.confirm(renamed, Answer { conflict: Some(Conflict::Rename), ..Default::default() }).unwrap();
+        assert_eq!(info(renamed).name, "file (1).iso");
+        assert_eq!(std::fs::read(dir.join("file.iso")).unwrap(), b"old");
+
+        std::fs::write(dir.join("file.iso.ldm-part"), b"partial").unwrap();
+        let overwritten = add(&manager, true);
+        manager.confirm(overwritten, Answer { conflict: Some(Conflict::Overwrite), ..Default::default() }).unwrap();
+        assert_eq!(info(overwritten).name, "file.iso");
+        assert!(!dir.join("file.iso").exists() && !dir.join("file.iso.ldm-part").exists());
+    }
+
+    #[tokio::test]
+    async fn quality_must_be_one_of_the_probed_formats() {
+        let manager = manager();
+        let id = add(&manager, true);
+        assert!(manager.confirm(id, Answer { format: Some("720".into()), ..Default::default() }).is_err());
+        manager.update(id, |info| {
+            info.formats = vec![ldm_ipc::MediaFormat { key: "720".into(), label: "720p".into(), ext: None, size: None }]
+        });
+        manager.confirm(id, Answer { format: Some("720".into()), ..Default::default() }).unwrap();
+        let request = manager.inner.lock().unwrap().jobs[&id].request.clone();
+        assert_eq!(request.format.as_deref(), Some("720"));
     }
 
     #[tokio::test]
@@ -745,7 +818,7 @@ mod tests {
         // Turning the subfolders off moves pending downloads back to the base folder.
         manager.set_settings(Settings { category_folders: false, ..manager.settings() }).unwrap();
         assert_eq!(dir_of(iso), base);
-        manager.confirm(iso, false, None, None).unwrap();
+        manager.confirm(iso, Answer::default()).unwrap();
         manager.set_settings(Settings { category_folders: true, ..manager.settings() }).unwrap();
         assert_eq!(dir_of(iso), base, "confirmed downloads keep their folder");
     }

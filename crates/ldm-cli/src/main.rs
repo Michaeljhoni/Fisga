@@ -7,7 +7,7 @@ use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use ldm_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
-use ldm_ipc::{AddRequest, Connection, DownloadInfo, Request, Response, State};
+use ldm_ipc::{AddRequest, Conflict, Connection, DownloadInfo, Request, Response, State};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -51,6 +51,31 @@ impl Source {
     }
 }
 
+#[derive(clap::Args)]
+struct SettingsArgs {
+    /// Pasta de downloads ("padrao" volta para a pasta de Downloads do sistema)
+    #[arg(long)]
+    dir: Option<PathBuf>,
+    /// Separar por tipo de arquivo em subpastas (Vídeos, Músicas, Programas...)
+    #[arg(long)]
+    category_folders: Option<bool>,
+    /// Downloads ao mesmo tempo
+    #[arg(long)]
+    max_parallel: Option<usize>,
+    /// Conexões por arquivo
+    #[arg(long)]
+    connections: Option<usize>,
+    /// Abrir a janela de progresso ao confirmar um download
+    #[arg(long)]
+    show_progress: Option<bool>,
+    /// Limite de velocidade de todos os downloads juntos, em KB/s (0 = sem limite)
+    #[arg(long)]
+    speed_limit: Option<u64>,
+    /// Abrir a janela "Novo download" ao copiar o link de um arquivo
+    #[arg(long)]
+    watch_clipboard: Option<bool>,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Envia um download para o daemon (ldmd)
@@ -83,6 +108,12 @@ enum Command {
         /// Nome do arquivo
         #[arg(short, long)]
         name: Option<String>,
+        /// Qualidade de um vídeo de site: altura (1080, 720...) ou "audio"
+        #[arg(short, long)]
+        quality: Option<String>,
+        /// Se o arquivo já existir: rename (novo nome), overwrite (substituir) ou resume (continuar)
+        #[arg(long, value_parser = parse_conflict)]
+        if_exists: Option<Conflict>,
     },
     /// Pausa um download
     Pause { id: u64 },
@@ -107,26 +138,7 @@ enum Command {
         uninstall: bool,
     },
     /// Mostra ou altera as configurações do daemon
-    Settings {
-        /// Pasta de downloads ("padrao" volta para a pasta de Downloads do sistema)
-        #[arg(long)]
-        dir: Option<PathBuf>,
-        /// Separar por tipo de arquivo em subpastas (Vídeos, Músicas, Programas...)
-        #[arg(long)]
-        category_folders: Option<bool>,
-        /// Downloads ao mesmo tempo
-        #[arg(long)]
-        max_parallel: Option<usize>,
-        /// Conexões por arquivo
-        #[arg(long)]
-        connections: Option<usize>,
-        /// Abrir a janela de progresso ao confirmar um download
-        #[arg(long)]
-        show_progress: Option<bool>,
-        /// Limite de velocidade de todos os downloads juntos, em KB/s (0 = sem limite)
-        #[arg(long)]
-        speed_limit: Option<u64>,
-    },
+    Settings(SettingsArgs),
     /// Encerra o daemon (pausa os downloads em andamento)
     Stop,
 }
@@ -135,9 +147,17 @@ enum Command {
 async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::Add { source, wait, confirm } => add(source, wait, confirm).await,
-        Command::Confirm { id, queue, dir, name } => {
+        Command::Confirm { id, queue, dir, name, quality, if_exists } => {
             let output_dir = dir.map(|d| std::path::absolute(&d).unwrap_or(d));
-            simple(Request::Confirm { id, now: !queue, file_name: name, output_dir }).await
+            let request = Request::Confirm {
+                id,
+                now: !queue,
+                file_name: name,
+                output_dir,
+                format: quality,
+                conflict: if_exists,
+            };
+            simple(request).await
         }
         Command::Get { source } => get(source).await,
         Command::List => list().await,
@@ -146,9 +166,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Rm { id, delete_file } => simple(Request::Remove { id, delete_file }).await,
         Command::Watch => watch().await,
         Command::InstallHosts { chrome_ids, uninstall } => hosts::install(&chrome_ids, uninstall),
-        Command::Settings { dir, category_folders, max_parallel, connections, show_progress, speed_limit } => {
-            settings(dir, category_folders, max_parallel, connections, show_progress, speed_limit).await
-        }
+        Command::Settings(args) => settings(args).await,
         Command::Stop => match ldm_ipc::call(&Request::Shutdown).await {
             Ok(_) => Ok(()),
             Err(_) => {
@@ -297,14 +315,25 @@ async fn add(source: Source, wait: bool, confirm: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn settings(
-    dir: Option<PathBuf>,
-    category_folders: Option<bool>,
-    max_parallel: Option<usize>,
-    connections: Option<usize>,
-    show_progress: Option<bool>,
-    speed_limit: Option<u64>,
-) -> anyhow::Result<()> {
+fn parse_conflict(value: &str) -> Result<Conflict, String> {
+    match value {
+        "rename" => Ok(Conflict::Rename),
+        "overwrite" => Ok(Conflict::Overwrite),
+        "resume" => Ok(Conflict::Resume),
+        _ => Err("use rename, overwrite ou resume".into()),
+    }
+}
+
+async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
+    let SettingsArgs {
+        dir,
+        category_folders,
+        max_parallel,
+        connections,
+        show_progress,
+        speed_limit,
+        watch_clipboard,
+    } = args;
     ldm_ipc::ensure_daemon().await?;
     let Response::Settings { settings: mut current } = ldm_ipc::call(&Request::GetSettings).await? else {
         bail!("resposta inesperada do daemon");
@@ -314,7 +343,8 @@ async fn settings(
         || max_parallel.is_some()
         || connections.is_some()
         || show_progress.is_some()
-        || speed_limit.is_some();
+        || speed_limit.is_some()
+        || watch_clipboard.is_some();
     if let Some(dir) = dir {
         current.download_dir = if dir.as_os_str() == "padrao" { None } else { Some(std::path::absolute(&dir)?) };
     }
@@ -323,6 +353,7 @@ async fn settings(
     current.connections = connections.unwrap_or(current.connections);
     current.show_progress = show_progress.unwrap_or(current.show_progress);
     current.speed_limit = speed_limit.map(|kb| kb * 1024).unwrap_or(current.speed_limit);
+    current.watch_clipboard = watch_clipboard.unwrap_or(current.watch_clipboard);
     if changed {
         ldm_ipc::call(&Request::SetSettings { settings: current.clone() }).await?;
     }
@@ -336,6 +367,7 @@ async fn settings(
         0 => println!("limite de velocidade:    sem limite"),
         limit => println!("limite de velocidade:    {}/s", bytes(limit)),
     }
+    println!("capturar links copiados: {}", if current.watch_clipboard { "sim" } else { "não" });
     Ok(())
 }
 

@@ -31,7 +31,8 @@ navegador ──Native Messaging──▶ ldm-native-host ──Unix socket─�
 
 Requisitos: Rust e GTK4 ≥ 4.10 com os cabeçalhos (Arch: `sudo pacman -S rust gtk4`; Debian 13/Ubuntu
 24.04: `libgtk-4-dev` + [rustup](https://rustup.rs); Fedora: `gtk4-devel`).
-Opcionais: `yt-dlp` e `ffmpeg` (vídeos de sites), `libnotify` (notificações).
+Opcionais: `yt-dlp` e `ffmpeg` (vídeos de sites), `libnotify` (notificações), `wl-clipboard`
+(capturar links copiados no Wayland).
 
 ```bash
 scripts/install-dev.sh
@@ -61,17 +62,30 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
   pergunta se apaga também o arquivo), abrir o arquivo e abrir a pasta. No menu (☰): *Retomar
   todos*, *Pausar todos*, *Copiar endereço* (Ctrl+C), *Remover concluídos da lista*,
   *Preferências* (Ctrl+,) e *Sobre*. Clique duplo: confirma um download
-  pendente, abre um concluído ou mostra o progresso dos demais.
+  pendente, abre um concluído ou mostra o progresso dos demais. **Clique direito** num download:
+  menu com *Abrir*, *Abrir pasta*, *Retomar*, *Pausar*, *Copiar endereço* e *Remover…*.
 - **Novo download**: aparece para cada download vindo do navegador, com endereço, nome (editável),
   pasta (botão "Alterar…") e tamanho. **Baixar agora** começa na hora, mesmo com a fila cheia;
   **Adicionar à fila** espera uma vaga; **Cancelar**, Esc ou fechar a janela descarta. Enter = Baixar
   agora. Se o endereço for uma lista de vídeos (página inicial do YouTube, busca, canal, playlist), a
   janela avisa e só deixa cancelar.
+  - **Qualidade** (vídeos de sites): lista as resoluções que o vídeo tem (1080p, 720p, 480p...) e
+    *Somente áudio*, cada uma com o tamanho estimado. A primeira é a melhor; *Somente áudio* baixa
+    um `.m4a` e vai para a pasta Músicas.
+  - **Já existe**: se a pasta já tem um arquivo com esse nome, a janela pergunta o que fazer:
+    salvar com outro nome (`arquivo (1).iso`, o padrão) ou substituir o existente. Se lá estiver um
+    download incompleto, a opção padrão é **continuar de onde parou**; dá também para recomeçar do zero.
+- **Links copiados** (como o monitor da área de transferência do IDM): ao copiar o endereço de um
+  vídeo, música, programa, arquivo compactado ou PDF em qualquer aplicativo, a janela *Novo
+  download* abre. Páginas, imagens e textos são ignorados. No Wayland usa o `wl-paste --watch`
+  (pacote `wl-clipboard`; funciona no niri, Sway, Hyprland e KDE). Desligue em Preferências →
+  "Capturar links copiados" ou com `ldm settings --watch-clipboard false`. Se a janela não puder
+  abrir, o link copiado é descartado (não vira download sozinho).
 - **Progresso** (a janela de status do IDM): abre depois de "Baixar agora", com barra, quanto já
   baixou, velocidade, tempo restante, se dá para retomar, a pasta e **Pausar/Retomar**. Ao terminar
   vira **Download concluído**, com **Abrir** e **Abrir pasta**. Pode ser desligada nas Preferências.
 - **Preferências**: pasta de downloads, subpastas por tipo de arquivo, downloads ao mesmo tempo,
-  conexões por arquivo, a janela de progresso e o **limite de velocidade** (KB/s para todos os
+  conexões por arquivo, a janela de progresso, capturar links copiados e o **limite de velocidade** (KB/s para todos os
   downloads juntos; muda na hora, até nos que estão baixando, e aparece na barra de status). Ficam
   no daemon, em `~/.config/ldm/settings.json`. Vídeos de sites (yt-dlp) recebem o limite por
   processo (`--limit-rate`).
@@ -102,8 +116,9 @@ A GUI é só um cliente do `ldmd`: fechar a janela não interrompe os downloads.
    (`Request::Subscribe`).
 4. Se há uma GUI conectada (assinante com `confirmer: true`), ela abre a janela **Novo download**.
    Senão, o `ldmd` executa `ldm-gui --pending`, que mostra só essa janela e fecha depois da resposta.
-5. A janela responde com `Request::Confirm { id, now, file_name, output_dir }` (Baixar agora /
-   Adicionar à fila) ou `Request::Remove` (Cancelar).
+5. A janela responde com `Request::Confirm { id, now, file_name, output_dir, format, conflict }`
+   (Baixar agora / Adicionar à fila; `format` é a qualidade escolhida, `conflict` o que fazer com um
+   arquivo que já existe: `rename`, `overwrite` ou `resume`) ou `Request::Remove` (Cancelar).
 6. Se o `ldm-gui` não existir, ou não se conectar em 15 s (sem display, por exemplo), o download vai
    para a fila sozinho, com uma notificação: um clique no navegador nunca se perde.
 
@@ -118,6 +133,8 @@ ldm add https://exemplo.com/arquivo.iso --wait   # envia ao daemon e acompanha
 ldm get https://exemplo.com/arquivo.iso -c 16    # baixa direto, sem daemon (Ctrl+C pausa)
 ldm add https://exemplo.com/arquivo.iso --confirm # abre a janela "Novo download"
 ldm confirm 4 --queue -o ~/ISOs                   # responde a um download pendente pelo terminal
+ldm confirm 5 --quality 720                      # vídeo de site em 720p (ou --quality audio)
+ldm confirm 6 --if-exists overwrite              # arquivo já existe: rename, overwrite ou resume
 ldm list
 ldm pause 3 && ldm resume 3
 ldm rm 3 --delete-file
@@ -125,6 +142,7 @@ ldm watch                                        # mudanças em tempo real
 ldm settings                                     # configurações (pasta, subpastas, fila, conexões)
 ldm settings --category-folders false --max-parallel 5
 ldm settings --speed-limit 2048                  # 2 MB/s para tudo (0 = sem limite)
+ldm settings --watch-clipboard false             # não abrir a janela para links copiados
 ```
 
 ## Desenvolvimento

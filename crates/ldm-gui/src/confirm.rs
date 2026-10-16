@@ -1,5 +1,6 @@
 //! "Novo download" window, shown for every pending download (IDM's "Download
-//! File Info"): name, size and destination folder, with "Baixar agora",
+//! File Info"): name, size and destination folder, the quality of a site
+//! video, what to do when the file already exists, with "Baixar agora",
 //! "Adicionar à fila" and "Cancelar". Closing the window cancels.
 //!
 //! The title is always exactly `Novo download`, so compositors can match it
@@ -11,7 +12,7 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib, pango};
-use ldm_ipc::{DownloadInfo, Request, SourceKind};
+use ldm_ipc::{Category, Conflict, DownloadInfo, Existing, MediaFormat, Request, SourceKind};
 
 use crate::format;
 use crate::ipc;
@@ -20,11 +21,24 @@ pub const TITLE: &str = "Novo download";
 
 pub struct ConfirmDialog {
     id: u64,
+    kind: SourceKind,
     window: gtk::Window,
     name: gtk::Entry,
     size: gtk::Label,
     dir_label: gtk::Label,
     error: gtk::Label,
+    /// Qualities of a site video; the row shows when there is a choice.
+    formats: RefCell<Vec<MediaFormat>>,
+    quality: gtk::DropDown,
+    quality_caption: gtk::Label,
+    /// "Já existe": shown when the destination file is already there.
+    exists_caption: gtk::Label,
+    exists_box: gtk::Box,
+    exists_label: gtk::Label,
+    exists_choice: gtk::DropDown,
+    /// What each entry of `exists_choice` means.
+    choices: RefCell<Vec<Conflict>>,
+    existing: Cell<Existing>,
     buttons: Vec<gtk::Button>,
     /// "Adicionar à fila" and "Baixar agora": disabled while the daemon reports an error.
     answers: Vec<gtk::Button>,
@@ -33,6 +47,11 @@ pub struct ConfirmDialog {
     /// Folder shown; follows the daemon (category subfolder) until the user picks one.
     dir: RefCell<Option<PathBuf>>,
     user_dir: Cell<bool>,
+    /// The daemon's folder and the category it is for: a name (or quality)
+    /// of another type moves the shown folder, as the daemon will on confirming.
+    daemon_dir: RefCell<Option<PathBuf>>,
+    daemon_category: Cell<Category>,
+    category_folders: bool,
     /// Answered (or closed by the daemon): closing the window must not cancel.
     decided: Cell<bool>,
     on_closed: RefCell<Option<Box<dyn Fn()>>>,
@@ -60,7 +79,12 @@ fn size_text(info: &DownloadInfo) -> String {
 }
 
 impl ConfirmDialog {
-    pub fn new(app: &gtk::Application, parent: Option<&gtk::ApplicationWindow>, info: &DownloadInfo) -> Rc<Self> {
+    pub fn new(
+        app: &gtk::Application,
+        parent: Option<&gtk::ApplicationWindow>,
+        info: &DownloadInfo,
+        category_folders: bool,
+    ) -> Rc<Self> {
         let window = gtk::Window::builder()
             .application(app)
             .title(TITLE)
@@ -91,18 +115,32 @@ impl ConfirmDialog {
         dir_row.append(&dir_label);
         dir_row.append(&change_dir);
         let size = gtk::Label::builder().xalign(0.0).wrap(true).build();
+        let quality = gtk::DropDown::builder().halign(gtk::Align::Start).visible(false).build();
+        let quality_caption = caption("Qualidade");
+        quality_caption.set_visible(false);
+        let exists_label = gtk::Label::builder().xalign(0.0).wrap(true).build();
+        exists_label.add_css_class("warning");
+        let exists_choice = gtk::DropDown::builder().halign(gtk::Align::Start).build();
+        let exists_box = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).visible(false).build();
+        exists_box.append(&exists_label);
+        exists_box.append(&exists_choice);
+        let exists_caption = caption("Já existe");
+        exists_caption.set_visible(false);
+        exists_caption.set_valign(gtk::Align::Start);
 
         let grid = gtk::Grid::builder().column_spacing(12).row_spacing(10).build();
-        for (row, (text, widget)) in [
-            ("Endereço", url.upcast_ref::<gtk::Widget>()),
-            ("Salvar como", name.upcast_ref()),
-            ("Pasta", dir_row.upcast_ref()),
-            ("Tamanho", size.upcast_ref()),
+        for (row, (label, widget)) in [
+            (caption("Endereço"), url.upcast_ref::<gtk::Widget>()),
+            (caption("Salvar como"), name.upcast_ref()),
+            (caption("Pasta"), dir_row.upcast_ref()),
+            (quality_caption.clone(), quality.upcast_ref()),
+            (caption("Tamanho"), size.upcast_ref()),
+            (exists_caption.clone(), exists_box.upcast_ref()),
         ]
         .into_iter()
         .enumerate()
         {
-            grid.attach(&caption(text), 0, row as i32, 1, 1);
+            grid.attach(&label, 0, row as i32, 1, 1);
             grid.attach(widget, 1, row as i32, 1, 1);
         }
 
@@ -134,16 +172,29 @@ impl ConfirmDialog {
 
         let dialog = Rc::new(Self {
             id: info.id,
+            kind: info.kind,
             window,
             name,
             size,
             dir_label,
             error,
+            formats: RefCell::default(),
+            quality,
+            quality_caption,
+            exists_caption,
+            exists_box,
+            exists_label,
+            exists_choice,
+            choices: RefCell::default(),
+            existing: Cell::new(Existing::Nothing),
             buttons: vec![cancel.clone(), queue.clone(), now.clone(), change_dir.clone()],
             answers: vec![queue.clone(), now.clone()],
             suggested_name: RefCell::new(info.name.clone()),
             dir: RefCell::new(info.dir.clone()),
             user_dir: Cell::new(false),
+            daemon_dir: RefCell::new(info.dir.clone()),
+            daemon_category: Cell::new(info.category),
+            category_folders,
             decided: Cell::new(false),
             on_closed: RefCell::default(),
             on_answered: RefCell::default(),
@@ -152,6 +203,19 @@ impl ConfirmDialog {
         dialog.update(info);
         // Start in the name field (the selectable URL label would grab focus and look selected).
         GtkWindowExt::set_focus(&dialog.window, Some(&dialog.name));
+
+        let d = Rc::downgrade(&dialog);
+        dialog.quality.connect_selected_notify(move |_| {
+            if let Some(d) = d.upgrade() {
+                d.quality_changed();
+            }
+        });
+        let d = Rc::downgrade(&dialog);
+        dialog.name.connect_changed(move |_| {
+            if let Some(d) = d.upgrade() {
+                d.refresh_dir();
+            }
+        });
 
         let d = Rc::downgrade(&dialog);
         now.connect_clicked(move |_| {
@@ -222,10 +286,11 @@ impl ConfirmDialog {
         }
         self.suggested_name.replace(info.name.clone());
         self.size.set_label(&size_text(info));
-        if !self.user_dir.get() && *self.dir.borrow() != info.dir {
-            self.dir.replace(info.dir.clone());
-            self.show_dir();
-        }
+        self.set_formats(&info.formats);
+        self.show_format_size();
+        self.daemon_dir.replace(info.dir.clone());
+        self.daemon_category.set(info.category);
+        self.refresh_dir();
         // The daemon refuses to confirm a download with an error (e.g. a page
         // that lists many videos); only "Cancelar" is left.
         let blocked = info.error.as_deref();
@@ -249,6 +314,116 @@ impl ConfirmDialog {
         };
         self.dir_label.set_tooltip_text(Some(&text));
         self.dir_label.set_label(&text);
+        self.check_existing();
+    }
+
+    /// The folder follows the daemon and the type of the name, until the user picks one.
+    fn refresh_dir(&self) {
+        if !self.user_dir.get() {
+            let category = Category::detect(self.name.text().trim(), self.kind);
+            let dir = self.daemon_dir.borrow().as_deref().map(|dir| {
+                format::category_dir(dir, self.daemon_category.get(), category, self.category_folders)
+            });
+            if *self.dir.borrow() != dir {
+                self.dir.replace(dir);
+                self.show_dir();
+                return;
+            }
+        }
+        self.check_existing();
+    }
+
+    fn set_formats(&self, formats: &[MediaFormat]) {
+        if *self.formats.borrow() == formats {
+            return;
+        }
+        self.formats.replace(formats.to_vec());
+        let labels: Vec<String> = formats
+            .iter()
+            .map(|f| match f.size {
+                Some(size) => format!("{} \u{2014} \u{2248} {}", f.label, format::bytes(size)),
+                None => f.label.clone(),
+            })
+            .collect();
+        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+        self.quality.set_model(Some(&gtk::StringList::new(&labels)));
+        self.quality.set_selected(0);
+        // One quality is no choice.
+        let choice = formats.len() > 1;
+        self.quality.set_visible(choice);
+        self.quality_caption.set_visible(choice);
+        self.show_format_size();
+    }
+
+    fn selected_format(&self) -> Option<MediaFormat> {
+        let formats = self.formats.borrow();
+        (formats.len() > 1).then(|| formats.get(self.quality.selected() as usize).cloned()).flatten()
+    }
+
+    fn show_format_size(&self) {
+        if let Some(format) = self.selected_format() {
+            self.size.set_label(&match format.size {
+                Some(size) => format!("\u{2248} {}", format::bytes(size)),
+                None => "definido ao baixar".into(),
+            });
+        }
+    }
+
+    /// Another quality: its size, and its extension in the name (audio is .m4a).
+    fn quality_changed(&self) {
+        let Some(format) = self.selected_format() else { return };
+        self.show_format_size();
+        if let Some(ext) = &format.ext {
+            let name = format::with_extension(self.name.text().trim(), ext);
+            if name != self.name.text() {
+                self.name.set_text(&name);
+            }
+        }
+    }
+
+    /// Asks what to do when the file is already in the folder, as IDM does.
+    fn check_existing(&self) {
+        let name = self.name.text().trim().replace('/', "_");
+        let existing = match self.dir.borrow().as_ref() {
+            Some(dir) if !name.is_empty() => ldm_ipc::existing(&dir.join(&name)),
+            _ => Existing::Nothing,
+        };
+        let visible = existing != Existing::Nothing;
+        self.exists_box.set_visible(visible);
+        self.exists_caption.set_visible(visible);
+        if !visible {
+            self.existing.set(existing);
+            return;
+        }
+        let dir = self.dir.borrow().clone().unwrap_or_default();
+        let other_name = format!("Salvar como \u{201c}{}\u{201d}", ldm_ipc::unique_name(&dir, &name));
+        let (message, entries): (&str, Vec<(Conflict, &str)>) = match existing {
+            Existing::File => (
+                "Já existe um arquivo com este nome nesta pasta.",
+                vec![(Conflict::Rename, other_name.as_str()), (Conflict::Overwrite, "Substituir o arquivo existente")],
+            ),
+            _ => (
+                "Há um download incompleto deste arquivo nesta pasta.",
+                vec![
+                    (Conflict::Resume, "Continuar de onde parou"),
+                    (Conflict::Rename, other_name.as_str()),
+                    (Conflict::Overwrite, "Recomeçar do zero"),
+                ],
+            ),
+        };
+        let keep = if self.existing.replace(existing) == existing { self.exists_choice.selected() } else { 0 };
+        self.exists_label.set_label(message);
+        let labels: Vec<&str> = entries.iter().map(|(_, label)| *label).collect();
+        self.choices.replace(entries.iter().map(|(choice, _)| *choice).collect());
+        self.exists_choice.set_model(Some(&gtk::StringList::new(&labels)));
+        self.exists_choice.set_selected(keep.min(labels.len() as u32 - 1));
+    }
+
+    fn conflict(&self) -> Option<Conflict> {
+        if !self.exists_box.is_visible() {
+            return None;
+        }
+        self.choices.borrow().get(self.exists_choice.selected() as usize).copied()
     }
 
     async fn choose_dir(self: Rc<Self>) {
@@ -270,12 +445,17 @@ impl ConfirmDialog {
             button.set_sensitive(!busy);
         }
         self.name.set_sensitive(!busy);
+        self.quality.set_sensitive(!busy);
+        self.exists_choice.set_sensitive(!busy);
     }
 
     fn answer(self: &Rc<Self>, now: bool) {
         let file_name = format::edited_name(&self.suggested_name.borrow(), &self.name.text());
         let output_dir = if self.user_dir.get() { self.dir.borrow().clone() } else { None };
-        let request = Request::Confirm { id: self.id, now, file_name, output_dir };
+        // The first quality is the best one, which yt-dlp picks by itself.
+        let format = self.selected_format().filter(|_| self.quality.selected() > 0).map(|f| f.key);
+        let conflict = self.conflict();
+        let request = Request::Confirm { id: self.id, now, file_name, output_dir, format, conflict };
         self.set_busy(true);
         self.error.set_visible(false);
         let this = self.clone();

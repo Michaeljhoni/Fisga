@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use ldm_ipc::State;
 
-use crate::manager::Manager;
+use crate::manager::{Answer, Manager};
 use crate::notify;
 
 /// How long a freshly launched GUI has to connect before the download is
@@ -21,6 +21,15 @@ use crate::notify;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// A GUI launched this recently is assumed to be starting up: do not launch another.
 const RELAUNCH_AFTER: Duration = Duration::from_secs(10);
+
+/// What happens to a pending download when no window can ask the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unanswered {
+    /// Queue it: the user clicked "download" in the browser.
+    Queue,
+    /// Forget it: it only came from a copied link.
+    Drop,
+}
 
 pub struct Gui {
     confirmers: AtomicUsize,
@@ -65,19 +74,19 @@ impl Gui {
     }
 
     /// Makes sure someone will show the confirmation window for `id`.
-    pub fn request_confirmation(self: &Arc<Self>, manager: &Arc<Manager>, id: u64) {
+    pub fn request_confirmation(self: &Arc<Self>, manager: &Arc<Manager>, id: u64, unanswered: Unanswered) {
         if self.has_confirmer() {
             return;
         }
         let recently = self.last_launch.lock().unwrap().is_some_and(|t| t.elapsed() < RELAUNCH_AFTER);
         if !recently {
             if let Err(e) = self.launch() {
-                tracing::warn!(error = %e, "não foi possível abrir o ldm-gui; o download começa sem confirmação");
-                start_unconfirmed(manager, id);
+                tracing::warn!(error = %e, "não foi possível abrir o ldm-gui");
+                give_up(manager, id, unanswered);
                 return;
             }
         }
-        tokio::spawn(self.clone().fallback(manager.clone(), id));
+        tokio::spawn(self.clone().fallback(manager.clone(), id, unanswered));
     }
 
     fn launch(&self) -> anyhow::Result<()> {
@@ -99,8 +108,8 @@ impl Gui {
         Ok(())
     }
 
-    /// Queues the download if no GUI connected in time.
-    async fn fallback(self: Arc<Self>, manager: Arc<Manager>, id: u64) {
+    /// Gives up on asking if no GUI connected in time.
+    async fn fallback(self: Arc<Self>, manager: Arc<Manager>, id: u64, unanswered: Unanswered) {
         let deadline = Instant::now() + self.connect_timeout;
         while Instant::now() < deadline {
             if self.has_confirmer() {
@@ -109,15 +118,28 @@ impl Gui {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         if !self.has_confirmer() && manager.state(id) == Some(State::Pending) {
-            tracing::warn!(id, "o ldm-gui não se conectou; o download começa sem confirmação");
-            start_unconfirmed(&manager, id);
+            tracing::warn!(id, "o ldm-gui não se conectou a tempo");
+            give_up(&manager, id, unanswered);
         }
     }
 }
 
-fn start_unconfirmed(manager: &Arc<Manager>, id: u64) {
-    if manager.confirm(id, false, None, None).is_ok() {
-        notify::send("Download adicionado", "A janela de confirmação não pôde ser aberta; o download foi para a fila.");
+fn give_up(manager: &Arc<Manager>, id: u64, unanswered: Unanswered) {
+    match unanswered {
+        Unanswered::Queue => {
+            tracing::info!(id, "o download começa sem confirmação");
+            if manager.confirm(id, Answer::default()).is_ok() {
+                notify::send(
+                    "Download adicionado",
+                    "A janela de confirmação não pôde ser aberta; o download foi para a fila.",
+                );
+            }
+        }
+        Unanswered::Drop => {
+            tracing::info!(id, "link copiado descartado");
+            let manager = manager.clone();
+            tokio::spawn(async move { manager.remove(id, false).await });
+        }
     }
 }
 
@@ -143,8 +165,18 @@ mod tests {
         let manager = manager();
         let gui = Gui::new(Some("/nonexistent/ldm-gui".into()), Duration::from_secs(60));
         let id = pending(&manager);
-        gui.request_confirmation(&manager, id);
+        gui.request_confirmation(&manager, id, Unanswered::Queue);
         assert_ne!(manager.state(id), Some(State::Pending));
+    }
+
+    #[tokio::test]
+    async fn copied_link_is_dropped_when_nobody_can_ask() {
+        let manager = manager();
+        let gui = Gui::new(Some("true".into()), Duration::from_millis(200));
+        let id = pending(&manager);
+        gui.request_confirmation(&manager, id, Unanswered::Drop);
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert_eq!(manager.state(id), None);
     }
 
     #[tokio::test]
@@ -152,7 +184,7 @@ mod tests {
         let manager = manager();
         let gui = Gui::new(Some("true".into()), Duration::from_millis(200));
         let id = pending(&manager);
-        gui.request_confirmation(&manager, id);
+        gui.request_confirmation(&manager, id, Unanswered::Queue);
         assert_eq!(manager.state(id), Some(State::Pending));
         tokio::time::sleep(Duration::from_millis(600)).await;
         assert_ne!(manager.state(id), Some(State::Pending));
@@ -164,7 +196,7 @@ mod tests {
         let gui = Gui::new(Some("/nonexistent/ldm-gui".into()), Duration::from_millis(200));
         let guard = gui.attach();
         let id = pending(&manager);
-        gui.request_confirmation(&manager, id);
+        gui.request_confirmation(&manager, id, Unanswered::Queue);
         tokio::time::sleep(Duration::from_millis(400)).await;
         assert_eq!(manager.state(id), Some(State::Pending));
         drop(guard);
@@ -176,7 +208,7 @@ mod tests {
         let manager = manager();
         let gui = Gui::new(Some("true".into()), Duration::from_millis(500));
         let id = pending(&manager);
-        gui.request_confirmation(&manager, id);
+        gui.request_confirmation(&manager, id, Unanswered::Queue);
         tokio::time::sleep(Duration::from_millis(100)).await;
         let _guard = gui.attach();
         tokio::time::sleep(Duration::from_millis(700)).await;

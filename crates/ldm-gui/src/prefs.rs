@@ -1,6 +1,7 @@
 //! "Preferências": download folder, one subfolder per category, downloads at
-//! the same time, connections per file and the progress window. The settings
-//! live in the daemon (`~/.config/ldm/settings.json`).
+//! the same time, connections per file, the progress window, the speed limit
+//! and the clipboard monitor. The settings live in the daemon
+//! (`~/.config/ldm/settings.json`).
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -67,6 +68,7 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
     let progress = gtk::Switch::builder().active(settings.show_progress).build();
     let limit = gtk::SpinButton::with_range(0.0, 1_000_000.0, 64.0);
     limit.set_value((settings.speed_limit / 1024) as f64);
+    let clipboard = gtk::Switch::builder().active(settings.watch_clipboard).build();
 
     let subfolders: Vec<&str> = Category::ALL.iter().filter_map(|c| c.folder()).collect();
     let subfolders_hint = format!("Subpastas: {}. Os demais ficam na pasta de downloads.", subfolders.join(", "));
@@ -82,6 +84,16 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
         "Limite de velocidade (KB/s)",
         &limit,
         Some("Todos os downloads juntos; 0 = sem limite. Vale na hora, até para os que estão baixando."),
+    );
+    row(
+        &grid,
+        6,
+        "Capturar links copiados",
+        &clipboard,
+        Some(
+            "Ao copiar o endereço de um vídeo, música, programa, arquivo compactado ou PDF, abre a janela \u{201c}Novo \
+             download\u{201d}. No Wayland, precisa do wl-clipboard.",
+        ),
     );
 
     let cancel = gtk::Button::with_label("Cancelar");
@@ -137,6 +149,7 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
             connections: connections.value() as usize,
             show_progress: progress.is_active(),
             speed_limit: limit.value() as u64 * 1024,
+            watch_clipboard: clipboard.is_active(),
         };
         button.set_sensitive(false);
         let (w, button) = (w.clone(), button.clone());

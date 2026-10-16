@@ -1,5 +1,8 @@
 //! Text shown in the list and in the "Novo download" window (pt-BR).
 
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+
 use ldm_ipc::{Category, DownloadInfo, State};
 
 /// Binary units with a decimal comma: "1,5 MB".
@@ -117,6 +120,34 @@ pub fn edited_name(suggested: &str, typed: &str) -> Option<String> {
     (!typed.is_empty() && typed != suggested).then(|| typed.to_string())
 }
 
+/// `name` with its extension replaced by `ext` (or added, when it has none).
+pub fn with_extension(name: &str, ext: &str) -> String {
+    let stem = match name.rsplit_once('.') {
+        Some((stem, current)) if !stem.is_empty() && (1..=5).contains(&current.len()) && !current.contains(' ') => stem,
+        _ => name,
+    };
+    format!("{stem}.{ext}")
+}
+
+/// The daemon keeps a pending download in its category's subfolder
+/// (`Downloads/Vídeos`); when the name changes type, the folder follows, as
+/// the daemon will do when the download is confirmed.
+pub fn category_dir(dir: &Path, from: Category, to: Category, category_folders: bool) -> PathBuf {
+    if from == to || !category_folders {
+        return dir.to_path_buf();
+    }
+    let base = match from.folder() {
+        Some(folder) if dir.file_name() == Some(OsStr::new(folder)) => dir.parent().unwrap_or(dir),
+        // A folder the daemon did not pick by category.
+        Some(_) => return dir.to_path_buf(),
+        None => dir,
+    };
+    match to.folder() {
+        Some(folder) => base.join(folder),
+        None => base.to_path_buf(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +171,7 @@ mod tests {
             dir: None,
             probing: false,
             category: Category::Other,
+            formats: Vec::new(),
         }
     }
 
@@ -207,6 +239,30 @@ mod tests {
         let mut failed = info(State::Failed, 0, None, 0.0);
         failed.error = Some("HTTP 404".into());
         assert_eq!(status(&failed), "Erro: HTTP 404");
+    }
+
+    #[test]
+    fn extension_follows_the_quality() {
+        assert_eq!(with_extension("Meu vídeo.webm", "m4a"), "Meu vídeo.m4a");
+        assert_eq!(with_extension("Meu vídeo", "mp4"), "Meu vídeo.mp4");
+        assert_eq!(with_extension("Ep. 1 do podcast", "m4a"), "Ep. 1 do podcast.m4a");
+        assert_eq!(with_extension(".webm", "m4a"), ".webm.m4a");
+    }
+
+    #[test]
+    fn folder_follows_the_category() {
+        let videos = Path::new("/home/u/Downloads/Vídeos");
+        assert_eq!(
+            category_dir(videos, Category::Video, Category::Music, true),
+            Path::new("/home/u/Downloads/Músicas")
+        );
+        assert_eq!(category_dir(videos, Category::Video, Category::Video, true), videos);
+        assert_eq!(category_dir(videos, Category::Video, Category::Music, false), videos);
+        assert_eq!(category_dir(videos, Category::Video, Category::Other, true), Path::new("/home/u/Downloads"));
+        let base = Path::new("/home/u/Downloads");
+        assert_eq!(category_dir(base, Category::Other, Category::Program, true), Path::new("/home/u/Downloads/Programas"));
+        let chosen = Path::new("/mnt/filmes");
+        assert_eq!(category_dir(chosen, Category::Video, Category::Music, true), chosen);
     }
 
     #[test]

@@ -199,7 +199,7 @@ impl App {
             dialog.present();
             return;
         }
-        let dialog = ConfirmDialog::new(&self.app, self.main_window().as_ref(), info);
+        let dialog = ConfirmDialog::new(&self.app, self.main_window().as_ref(), info, self.settings().category_folders);
         let this = Rc::downgrade(self);
         let id = info.id;
         dialog.connect_closed(move || {

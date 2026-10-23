@@ -13,6 +13,7 @@
 
 mod app;
 mod autostart;
+mod batch;
 mod confirm;
 mod format;
 mod ipc;

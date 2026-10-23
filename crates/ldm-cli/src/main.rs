@@ -166,6 +166,36 @@ enum Command {
     },
     /// Limite de velocidade de um download, em KB/s (0 = só o limite geral)
     Limit { id: u64, kb_per_second: u64 },
+    /// Vários downloads de uma vez (o "download em lote" do IDM), direto na fila
+    Batch {
+        /// Endereço com um * no lugar do número ou da letra, ex.: https://site/aula_*.mp4
+        #[arg(required_unless_present = "file", requires_all = ["from", "to"])]
+        template: Option<String>,
+        /// Primeiro número ou letra (01 deixa os números com 2 dígitos)
+        #[arg(long)]
+        from: Option<String>,
+        /// Último número ou letra
+        #[arg(long)]
+        to: Option<String>,
+        /// Dígitos dos números, ex.: 3 dá 001, 002... (padrão: os do início)
+        #[arg(long, default_value_t = 0)]
+        width: usize,
+        /// Arquivo com os endereços, um por linha ("-" = entrada padrão)
+        #[arg(long, conflicts_with = "template")]
+        file: Option<PathBuf>,
+        /// Pasta de destino (padrão: a de cada tipo de arquivo)
+        #[arg(short = 'o', long)]
+        dir: Option<PathBuf>,
+        /// Fila (número em "ldm queue")
+        #[arg(short = 'Q', long)]
+        queue_id: Option<u64>,
+        /// Adiciona pausados, sem entrar na fila
+        #[arg(long)]
+        paused: bool,
+        /// Só mostra os endereços, sem adicionar
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Atualiza o endereço de um download cujo link expirou (continua de onde parou)
     Refresh {
         id: u64,
@@ -281,6 +311,42 @@ async fn main() -> anyhow::Result<()> {
                 queue: queue_id,
             };
             simple(request).await
+        }
+        Command::Batch { template, from, to, width, file, dir, queue_id, paused, dry_run } => {
+            let urls = match (template, file) {
+                (Some(template), _) => {
+                    let (from, to) = (from.unwrap_or_default(), to.unwrap_or_default());
+                    ldm_ipc::expand_batch(&template, &from, &to, width).map_err(anyhow::Error::msg)?
+                }
+                (None, Some(file)) => {
+                    let text = match file.as_os_str() == "-" {
+                        true => std::io::read_to_string(std::io::stdin())?,
+                        false => std::fs::read_to_string(&file).with_context(|| format!("não li {}", file.display()))?,
+                    };
+                    ldm_ipc::parse_url_list(&text)
+                }
+                (None, None) => bail!("diga o endereço com * (e --from/--to) ou --file"),
+            };
+            if urls.is_empty() {
+                bail!("nenhum endereço encontrado");
+            }
+            if dry_run {
+                urls.iter().for_each(|url| println!("{url}"));
+                return Ok(());
+            }
+            ldm_ipc::ensure_daemon().await?;
+            let output_dir = dir.map(|d| std::path::absolute(&d).unwrap_or(d));
+            let request = Request::AddBatch { urls, output_dir, queue: queue_id, start: !paused };
+            let Response::AddedBatch { ids } = ldm_ipc::call(&request).await? else {
+                bail!("resposta inesperada do daemon");
+            };
+            match (ids.first(), ids.last()) {
+                (Some(first), Some(last)) if ids.len() > 1 => {
+                    println!("{} downloads adicionados (#{first} a #{last})", ids.len())
+                }
+                _ => println!("1 download adicionado"),
+            }
+            Ok(())
         }
         Command::Limit { id, kb_per_second } => {
             simple(Request::SetSpeedLimit { id, limit: kb_per_second * 1024 }).await?;

@@ -783,6 +783,66 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
+/// The most addresses a batch may have.
+pub const MAX_BATCH: usize = 5000;
+
+/// IDM's batch download: `https://site/aula_*.mp4` from `1` to `20` (or `a`
+/// to `z`). A start with leading zeros (`01`) pads every number to its width,
+/// unless `width` says otherwise (0 = no padding beyond that).
+pub fn expand_batch(template: &str, from: &str, to: &str, width: usize) -> Result<Vec<String>, String> {
+    let template = template.trim();
+    if template.matches('*').count() != 1 {
+        return Err("o endereço precisa de exatamente um * no lugar do número ou da letra".into());
+    }
+    let (from, to) = (from.trim(), to.trim());
+    let letters = |text: &str| {
+        let mut chars = text.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) if c.is_ascii_alphabetic() => Some(c),
+            _ => None,
+        }
+    };
+    let items: Vec<String> = match (from.parse::<u64>(), to.parse::<u64>(), letters(from), letters(to)) {
+        (Ok(first), Ok(last), _, _) => {
+            if first > last {
+                return Err(format!("o início ({first}) passa do fim ({last})"));
+            }
+            if last - first >= MAX_BATCH as u64 {
+                return Err(format!("são {} endereços; o máximo é {MAX_BATCH}", last - first + 1));
+            }
+            let width = match width {
+                0 if from.len() > 1 && from.starts_with('0') => from.len(),
+                width => width,
+            };
+            (first..=last).map(|n| format!("{n:0width$}")).collect()
+        }
+        (_, _, Some(first), Some(last)) if first.is_ascii_lowercase() == last.is_ascii_lowercase() => {
+            if first > last {
+                return Err(format!("o início ({first}) passa do fim ({last})"));
+            }
+            (first..=last).map(String::from).collect()
+        }
+        _ => return Err("use números (1 a 20, 01 a 20) ou letras (a a z) no início e no fim".into()),
+    };
+    Ok(items.into_iter().map(|item| template.replacen('*', &item, 1)).collect())
+}
+
+/// Every link in a text (one per line, or among other words), in order and
+/// without repeats: the "lista de endereços" of a batch.
+pub fn parse_url_list(text: &str) -> Vec<String> {
+    let mut urls: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        let word = word.trim_matches(|c: char| matches!(c, '<' | '>' | '"' | '\'' | '(' | ')' | ',' | ';'));
+        let link = ["http://", "https://", "ftp://"].iter().any(|scheme| {
+            word.get(..scheme.len()).is_some_and(|start| start.eq_ignore_ascii_case(scheme))
+        });
+        if link && url::Url::parse(word).is_ok() && !urls.iter().any(|u| u == word) {
+            urls.push(word.to_string());
+        }
+    }
+    urls
+}
+
 /// The limit a download gets from the global one and its own (0 = none):
 /// the tighter one.
 pub fn combined_limit(global: u64, own: u64) -> u64 {
@@ -846,6 +906,18 @@ pub enum Request {
     /// A download's own speed limit in bytes per second (0 = none), on top of
     /// the global one. Applies at once to direct downloads.
     SetSpeedLimit { id: u64, limit: u64 },
+    /// IDM's batch download: many addresses at once, straight to a queue
+    /// (no "Novo download" window for each). Answered with `Response::AddedBatch`.
+    AddBatch {
+        urls: Vec<String>,
+        #[serde(default)]
+        output_dir: Option<PathBuf>,
+        #[serde(default)]
+        queue: Option<u64>,
+        /// Into the queue (true) or paused (false).
+        #[serde(default = "yes")]
+        start: bool,
+    },
     Shutdown,
     GetSettings,
     /// Replaces the settings; subscribers receive `Response::Settings`.
@@ -863,6 +935,7 @@ pub enum Request {
 pub enum Response {
     Pong { version: String },
     Added { id: u64 },
+    AddedBatch { ids: Vec<u64> },
     Downloads { items: Vec<DownloadInfo> },
     Update { item: DownloadInfo },
     Removed { id: u64 },
@@ -1197,6 +1270,36 @@ mod tests {
         let exact = [login("arquivos.exemplo.com")];
         assert!(SiteLogin::find(&exact, "https://sub.arquivos.exemplo.com/a").is_none(), "subdomains need *.");
         assert!(!format!("{:?}", logins[0]).contains("segredo"));
+    }
+
+    #[test]
+    fn batch_patterns() {
+        let urls = expand_batch("https://e.com/aula_*.mp4", "1", "3", 0).unwrap();
+        assert_eq!(urls, ["https://e.com/aula_1.mp4", "https://e.com/aula_2.mp4", "https://e.com/aula_3.mp4"]);
+        let padded = expand_batch("https://e.com/*.jpg", "08", "10", 0).unwrap();
+        assert_eq!(padded, ["https://e.com/08.jpg", "https://e.com/09.jpg", "https://e.com/10.jpg"]);
+        assert_eq!(expand_batch("https://e.com/*.jpg", "9", "10", 3).unwrap()[0], "https://e.com/009.jpg");
+        assert_eq!(expand_batch("https://e.com/parte-*.rar", "a", "c", 0).unwrap().len(), 3);
+        assert_eq!(expand_batch("https://e.com/*.rar", "X", "Z", 0).unwrap()[2], "https://e.com/Z.rar");
+        for (template, from, to) in [
+            ("https://e.com/a.iso", "1", "2"),
+            ("https://e.com/*/*.iso", "1", "2"),
+            ("https://e.com/*.iso", "5", "2"),
+            ("https://e.com/*.iso", "a", "Z"),
+            ("https://e.com/*.iso", "1", "z"),
+            ("https://e.com/*.iso", "1", "999999"),
+        ] {
+            assert!(expand_batch(template, from, to, 0).is_err(), "{template} {from}..{to}");
+        }
+    }
+
+    #[test]
+    fn url_lists() {
+        let text = "Baixe <https://e.com/a.iso>, depois\nhttps://e.com/b.zip\n\nhttps://e.com/a.iso (de novo)\nFTP://e.com/c.tar ou e.com/d.iso";
+        assert_eq!(parse_url_list(text), ["https://e.com/a.iso", "https://e.com/b.zip", "FTP://e.com/c.tar"]);
+        assert!(parse_url_list("nada aqui").is_empty());
+        let request: Request = serde_json::from_str(r#"{"type":"add_batch","urls":["https://e.com/a"]}"#).unwrap();
+        assert!(matches!(request, Request::AddBatch { start: true, queue: None, .. }));
     }
 
     #[test]

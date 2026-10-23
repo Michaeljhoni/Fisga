@@ -226,6 +226,9 @@ fn sidebar_row(view: View, queues: &[Queue]) -> (gtk::ListBoxRow, gtk::Label) {
 fn main_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     let section = gio::Menu::new();
+    section.append(Some("Adicionar em lote…"), Some("win.batch"));
+    menu.append_section(None, &section);
+    let section = gio::Menu::new();
     section.append(Some("Retomar todos"), Some("win.resume-all"));
     section.append(Some("Pausar todos"), Some("win.pause-all"));
     menu.append_section(None, &section);
@@ -478,6 +481,15 @@ impl MainWindow {
         };
         let parent = window.clone();
         simple("add", Box::new(move || add_url_dialog(&parent)));
+        let (parent, a) = (window.clone(), app.clone());
+        simple(
+            "batch",
+            Box::new(move || {
+                if let Some(app) = a.upgrade() {
+                    crate::batch::show(&parent, app.settings().all_queues());
+                }
+            }),
+        );
         for (name, page) in [("preferences", crate::prefs::Page::General), ("queues", crate::prefs::Page::Queues)] {
             let (parent, a) = (window.clone(), app.clone());
             simple(

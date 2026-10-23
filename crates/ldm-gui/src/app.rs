@@ -92,6 +92,7 @@ impl App {
     pub fn start(self: &Rc<Self>) {
         gtk::Window::set_default_icon_name("folder-download");
         self.app.set_accels_for_action("win.add", &["<Control>n"]);
+        self.app.set_accels_for_action("win.batch", &["<Control><Shift>n"]);
         self.app.set_accels_for_action("win.remove", &["Delete"]);
         self.app.set_accels_for_action("win.preferences", &["<Control>comma"]);
         self.app.set_accels_for_action("win.copy-url", &["<Control>c"]);

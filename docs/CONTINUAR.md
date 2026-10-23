@@ -254,7 +254,10 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   limitadores (`DownloadOptions::limiters`: o global e o do download) e respeita todos; o
   yt-dlp recebe o menor (`combined_limit`) e só no próximo início. Na GUI, fica na janela de
   progresso ("No máximo ... KB/s"); "Limitar velocidade…" no clique direito abre essa janela.
-- **Download em lote**: uma lista de URLs, ou um padrão `arquivo_*.zip` com intervalo.
+- ~~Download em lote~~ (feito): `ldm_ipc::expand_batch` (um `*`, números com zeros à
+  esquerda ou letras, no máximo `MAX_BATCH`) e `parse_url_list`; `Request::AddBatch` confere
+  todos os endereços antes e cria tudo com um salvamento só (`Manager::insert` sem salvar,
+  usado por `add` e `add_batch`); sem a janela Novo download. GUI em `batch.rs`.
 - HLS/DASH sem yt-dlp, e FTP.
 
 ### Pacote 4: acabamento

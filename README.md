@@ -107,6 +107,11 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
   tempo e seu agendador. Elas aparecem na barra lateral. A janela *Novo download* tem o campo
   *Fila* (quando há mais de uma). No clique direito de um download: *Mover para cima*, *Mover para
   baixo* e *Mover para a fila ▸*. Excluir uma fila manda os downloads dela para a principal.
+- **Adicionar em lote** (o *Batch download* do IDM; ☰ → *Adicionar em lote…* ou Ctrl+Shift+N):
+  um endereço com `*` e um intervalo (`aula_*.mp4` de `01` a `20`, ou `parte-*.rar` de `a` a
+  `f`), ou uma lista de links colada (se a área de transferência tiver vários links, a lista já
+  vem preenchida). Mostra quantos endereços e o primeiro e o último antes de adicionar. Vão
+  direto para a fila escolhida (ou pausados), sem a janela *Novo download* para cada um.
 - **Atualizar endereço** (o *Refresh download address* do IDM): no clique direito de um download
   cujo link expirou (comum em sites de arquivos e links assinados), *Atualizar endereço…*. Cole um
   novo link do mesmo arquivo, ou clique em *Capturar do navegador*: a página abre, você clica no
@@ -187,6 +192,9 @@ ldm settings                                     # configurações (pasta, subpa
 ldm settings --category-folders false --max-parallel 5
 ldm settings --speed-limit 2048                  # 2 MB/s para tudo (0 = sem limite)
 ldm limit 7 512                                  # só o download 7: no máximo 512 KB/s (0 = tira)
+ldm batch 'https://site/aula_*.mp4' --from 01 --to 20   # em lote: aula_01.mp4 ... aula_20.mp4
+ldm batch --file links.txt -Q 1 --paused         # uma lista de links ("-" = entrada padrão)
+ldm batch 'https://site/parte-*.rar' --from a --to f --dry-run   # só mostra os endereços
 ldm settings --watch-clipboard false             # não abrir a janela para links copiados
 ldm settings --tray false                        # sem ícone na bandeja
 ldm schedule --on --start 02:00 --stop 08:00     # a fila só roda de madrugada

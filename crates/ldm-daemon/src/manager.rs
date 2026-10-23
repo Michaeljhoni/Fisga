@@ -150,6 +150,14 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+fn check_url(url: &str) -> anyhow::Result<()> {
+    let parsed = url::Url::parse(url).context("URL inválida")?;
+    if !matches!(parsed.scheme(), "http" | "https" | "ftp") {
+        bail!("esquema não suportado: {}", parsed.scheme());
+    }
+    Ok(())
+}
+
 fn looks_like_manifest(url: &str) -> bool {
     let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
     path.ends_with(".m3u8") || path.ends_with(".mpd")
@@ -361,11 +369,51 @@ impl Manager {
         self.inner.lock().unwrap().jobs.values().map(|j| j.info.clone()).collect()
     }
 
-    pub fn add(self: &Arc<Self>, mut request: AddRequest) -> anyhow::Result<u64> {
-        let parsed = url::Url::parse(&request.url).context("URL inválida")?;
-        if !matches!(parsed.scheme(), "http" | "https" | "ftp") {
-            bail!("esquema não suportado: {}", parsed.scheme());
+    pub fn add(self: &Arc<Self>, request: AddRequest) -> anyhow::Result<u64> {
+        let probe = request.confirm;
+        let id = self.insert(request)?;
+        self.save();
+        self.schedule();
+        if probe {
+            tokio::spawn(self.clone().probe_pending(id));
         }
+        Ok(id)
+    }
+
+    /// IDM's batch download: every address checked first, then all added to
+    /// the queue (or paused) in one go, with one save.
+    pub fn add_batch(
+        self: &Arc<Self>,
+        urls: Vec<String>,
+        output_dir: Option<PathBuf>,
+        queue: Option<u64>,
+        start: bool,
+    ) -> anyhow::Result<Vec<u64>> {
+        if urls.is_empty() {
+            bail!("nenhum endereço no lote");
+        }
+        if urls.len() > ldm_ipc::MAX_BATCH {
+            bail!("são {} endereços; o máximo é {}", urls.len(), ldm_ipc::MAX_BATCH);
+        }
+        for url in &urls {
+            check_url(url).with_context(|| format!("no lote: {url}"))?;
+        }
+        if let Some(queue) = queue {
+            self.check_queue(queue)?;
+        }
+        let ids = urls
+            .into_iter()
+            .map(|url| self.insert(AddRequest { url, output_dir: output_dir.clone(), queue, start, ..Default::default() }))
+            .collect::<anyhow::Result<Vec<u64>>>()?;
+        tracing::info!(count = ids.len(), "lote adicionado");
+        self.save();
+        self.schedule();
+        Ok(ids)
+    }
+
+    /// Creates the download (and tells the subscribers); saving and starting are the caller's.
+    fn insert(self: &Arc<Self>, mut request: AddRequest) -> anyhow::Result<u64> {
+        check_url(&request.url)?;
         if request.kind == SourceKind::Direct && looks_like_manifest(&request.url) {
             request.kind = SourceKind::Stream;
         }
@@ -418,11 +466,6 @@ impl Manager {
             id
         };
         tracing::info!(id, "download adicionado");
-        self.save();
-        self.schedule();
-        if probe {
-            tokio::spawn(self.clone().probe_pending(id));
-        }
         Ok(id)
     }
 
@@ -1139,6 +1182,25 @@ mod tests {
         assert_eq!(manager.limiter.rate(), 512 * 1024);
         let reloaded = Manager::load(manager.store.clone(), manager.settings_path.clone()).unwrap();
         assert_eq!(reloaded.limiter.rate(), 512 * 1024);
+    }
+
+    #[tokio::test]
+    async fn a_batch_goes_in_whole_or_not_at_all() {
+        let manager = manager();
+        let urls = ldm_ipc::expand_batch("http://127.0.0.1:9/aula_*.mp4", "01", "04", 0).unwrap();
+        let mut bad = urls.clone();
+        bad.push("mailto:ana@exemplo.com".into());
+        assert!(manager.add_batch(bad, None, None, false).is_err());
+        assert!(manager.list().is_empty(), "nothing added when one address is wrong");
+        assert!(manager.add_batch(urls.clone(), None, Some(9), false).is_err(), "unknown queue");
+        assert!(manager.add_batch(Vec::new(), None, None, false).is_err());
+
+        let ids = manager.add_batch(urls, Some("/tmp/aulas".into()), None, false).unwrap();
+        assert_eq!(ids.len(), 4);
+        let list = manager.list();
+        assert!(list.iter().all(|i| i.state == State::Paused && i.dir.as_deref() == Some(Path::new("/tmp/aulas"))));
+        assert_eq!(list[0].name, "aula_01.mp4");
+        assert_eq!(order_of(&manager, MAIN_QUEUE), ids, "in the batch's order");
     }
 
     #[tokio::test]

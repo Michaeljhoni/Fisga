@@ -269,6 +269,21 @@ awk -v t="$elapsed" 'BEGIN { exit !(t >= 3.0) }'; echo "own limit respected"
 test "$(stat -c %s "$HOME/Downloads/16252928.bin")" -eq 16252928
 "$BIN/ldm" limit "$id" 0 | grep "sem limite"
 
+step "batch download: a pattern and a list"
+test "$("$BIN/ldm" batch "$BASE/files/13107*.bin" --from 20 --to 22 --dry-run | wc -l)" -eq 3
+if "$BIN/ldm" batch "$BASE/files/x.bin" --from 1 --to 2 2>"$SANDBOX/err"; then echo "accepted a pattern without *"; exit 1; fi
+grep "exatamente um" "$SANDBOX/err"
+"$BIN/ldm" batch "$BASE/files/13107*.bin" --from 20 --to 22 -o "$SANDBOX/lote" | grep "3 downloads adicionados"
+last="$(last_id)"
+for id in $((last - 2)) $((last - 1)) "$last"; do wait_state "$id" concluído 60; done
+for size in 1310720 1310721 1310722; do test "$(stat -c %s "$SANDBOX/lote/$size.bin")" -eq "$size"; done
+echo "the pattern's 3 files are there"
+printf '%s\n' "veja: $BASE/files/1638401.bin" "texto solto" "<$BASE/files/1638402.bin>" "$BASE/files/1638401.bin" \
+  | "$BIN/ldm" batch --file - --paused -o "$SANDBOX/lote" | grep "2 downloads adicionados"
+last="$(last_id)"
+test "$(state_of "$last")" = pausado; test "$(state_of $((last - 1)))" = pausado; echo "the list's 2 links, paused"
+"$BIN/ldm" rm "$last"; "$BIN/ldm" rm $((last - 1))
+
 step "list"
 "$BIN/ldm" list
 echo; echo "E2E OK"

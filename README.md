@@ -118,8 +118,11 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
     downloads, inclusive os vídeos de sites (o yt-dlp recebe o proxy pelo ambiente, para a senha
     não aparecer na lista de processos).
   - **Logins por site** (os *Site logins* do IDM): usuário e senha enviados aos links diretos de
-    um site e dos subdomínios dele (autenticação HTTP). Ficam em `~/.config/ldm/logins.json`,
-    legível só pelo seu usuário, nunca no `settings.json` nem no log.
+    um site (autenticação HTTP), só por https. `*.exemplo.com` vale também para os subdomínios.
+    Se o site redireciona para outro endereço (um CDN), a senha e os cookies não vão junto. Ficam
+    em `~/.config/ldm/logins.json`, legível só pelo seu usuário, nunca no log.
+  - Trocar o proxy vale para os downloads que começarem depois; os que estão baixando continuam
+    pelo caminho antigo até serem pausados e retomados.
 - **Agendador** (por fila, como o *Scheduler* do IDM): a fila só roda das HH:MM às HH:MM nos
   dias escolhidos. Fora desse horário os downloads ficam *na fila*; *Baixar agora* e retomar um
   download à mão começam na hora mesmo assim. No horário de parada, os downloads da fila voltam
@@ -197,6 +200,7 @@ ldm queue rm 1                                   # exclui (os downloads vão par
 ldm refresh 7 https://exemplo.com/novo-link      # link expirado: novo endereço do mesmo arquivo
 ldm refresh 7 --capture                          # usa o próximo link do mesmo arquivo vindo do navegador
 ldm settings --proxy socks5://127.0.0.1:1080     # ou http://host:3128, "nenhum", "sistema"
+ldm settings --proxy -                           # lê o endereço (com senha) da entrada padrão
 ldm login add arquivos.exemplo.com ana           # pede a senha (lida da entrada padrão)
 ldm login                                        # lista os sites com login (sem as senhas)
 ldm login rm arquivos.exemplo.com

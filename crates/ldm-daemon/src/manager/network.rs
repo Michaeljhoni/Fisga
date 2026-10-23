@@ -12,6 +12,10 @@ use ldm_ipc::{AddRequest, ProxyMode, ProxySettings, SiteLogin};
 
 use super::{request_headers, write_json, Manager};
 
+/// Stands in for a saved proxy that cannot be used: nothing listens on the
+/// discard port, so downloads fail instead of going around the proxy.
+pub const UNREACHABLE_PROXY: &str = "http://127.0.0.1:9";
+
 pub fn build_client(proxy: &ProxySettings) -> anyhow::Result<reqwest::Client> {
     proxy.check().map_err(anyhow::Error::msg)?;
     let choice = match proxy.mode {

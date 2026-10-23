@@ -125,9 +125,14 @@ Dados no Linux:
     não aparecer no `/proc/<pid>/cmdline`); "sem proxy" é `--proxy ""`.
   - `SiteLogin { host, user, password }` em `~/.config/ldm/logins.json` (0600), pedidos
     `GetLogins`/`SetLogins`, nunca no `Settings` (que é logado e transmitido). `Manager::headers`
-    acrescenta `Authorization: Basic` aos links diretos do host e dos subdomínios (o mais
-    específico vence), a não ser que o navegador já tenha mandado um `Authorization`. O
-    `Debug` de `ProxySettings` e de `SiteLogin` esconde as senhas.
+    acrescenta `Authorization: Basic` aos links diretos do host exato (`*.host` cobre os
+    subdomínios; o exato vence), só por https ou para o próprio computador, a não ser que o
+    navegador já tenha mandado um `Authorization`. O `Debug` de `ProxySettings` e de
+    `SiteLogin` esconde as senhas; o `settings.json` passou a ser 0600 (o proxy pode ter senha).
+  - `RequestSpec::for_final_url`: o motor baixa da URL final do redirecionamento, e
+    `Authorization`/`Cookie` só seguem se for o mesmo host (e nunca de https para http).
+  - Um proxy salvo inválido não cai no "do sistema": o cliente usa `UNREACHABLE_PROXY` e os
+    downloads falham até corrigir.
   - Não vale para o yt-dlp (o login de sites de vídeo é outro assunto: cookies do navegador).
   - O `range_server` também é um proxy HTTP e tem `/private/files/...` com senha `teste:senha`.
 

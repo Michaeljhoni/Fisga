@@ -33,6 +33,30 @@ impl RequestSpec {
         Self { url: url.into(), headers: Vec::new() }
     }
 
+    /// The spec for `final_url`, where the first request was redirected: the
+    /// credentials (`Authorization`, `Cookie`) go only to the host they were
+    /// meant for, and never from https down to http, as reqwest does for the
+    /// redirect itself. The engine downloads from `final_url` directly.
+    pub fn for_final_url(&self, final_url: &url::Url) -> RequestSpec {
+        let keep = url::Url::parse(&self.url).is_ok_and(|from| {
+            let upgrade = from.scheme() == "http" && final_url.scheme() == "https";
+            let downgrade = from.scheme() == "https" && final_url.scheme() == "http";
+            from.host_str() == final_url.host_str()
+                && !downgrade
+                && (upgrade || from.port_or_known_default() == final_url.port_or_known_default())
+        });
+        if keep {
+            return self.clone();
+        }
+        let headers = self
+            .headers
+            .iter()
+            .filter(|(name, _)| !name.eq_ignore_ascii_case("authorization") && !name.eq_ignore_ascii_case("cookie"))
+            .cloned()
+            .collect();
+        RequestSpec { url: self.url.clone(), headers }
+    }
+
     pub(crate) fn apply(&self, mut rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         for (name, value) in &self.headers {
             rb = rb.header(name.as_str(), value.as_str());
@@ -106,4 +130,30 @@ pub fn build_client_with(proxy: Proxy) -> Result<reqwest::Client> {
         Proxy::Url(url) => builder.proxy(reqwest::Proxy::all(url)?),
     };
     Ok(builder.build()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credentials_stay_with_their_host() {
+        let spec = RequestSpec {
+            url: "http://arquivos.exemplo.com/a.iso".into(),
+            headers: vec![
+                ("Authorization".into(), "Basic x".into()),
+                ("cookie".into(), "s=1".into()),
+                ("Referer".into(), "https://exemplo.com/".into()),
+            ],
+        };
+        let names = |spec: RequestSpec| spec.headers.into_iter().map(|(n, _)| n).collect::<Vec<_>>();
+        let at = |url: &str| spec.for_final_url(&url::Url::parse(url).unwrap());
+        assert_eq!(names(at("http://arquivos.exemplo.com/b.iso")).len(), 3, "same host");
+        assert_eq!(names(at("https://arquivos.exemplo.com/a.iso")).len(), 3, "upgraded to https");
+        assert_eq!(names(at("https://cdn.outro.net/a.iso")), ["Referer"], "another host");
+        assert_eq!(names(at("http://arquivos.exemplo.com:8080/a.iso")), ["Referer"], "another port");
+        let secure = RequestSpec { url: "https://arquivos.exemplo.com/a.iso".into(), ..spec.clone() };
+        let down = secure.for_final_url(&url::Url::parse("http://arquivos.exemplo.com/a.iso").unwrap());
+        assert_eq!(names(down), ["Referer"], "never down to http");
+    }
 }

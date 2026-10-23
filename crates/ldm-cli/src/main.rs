@@ -80,8 +80,9 @@ struct SettingsArgs {
     /// Ícone na bandeja (o ldm-gui continua rodando ao fechar a janela)
     #[arg(long)]
     tray: Option<bool>,
-    /// Proxy: "sistema" (variáveis http_proxy...), "nenhum", ou um endereço como
-    /// http://host:3128 ou socks5://usuário:senha@host:1080
+    /// Proxy: "sistema" (variáveis http_proxy...), "nenhum", um endereço como
+    /// http://host:3128, ou "-" para ler o endereço da entrada padrão (com senha,
+    /// socks5://usuário:senha@host:1080, sem deixá-la no histórico do shell)
     #[arg(long)]
     proxy: Option<String>,
 }
@@ -486,6 +487,10 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
     } = args;
     let mut current = get_settings().await?;
     if let Some(proxy) = &proxy {
+        let proxy = match proxy.trim() {
+            "-" => read_secret("Endereço do proxy (com usuário:senha@, se precisar)")?,
+            other => other.to_string(),
+        };
         current.proxy = match proxy.trim() {
             "sistema" | "system" => ProxySettings { mode: ProxyMode::System, url: current.proxy.url.clone() },
             "nenhum" | "none" | "" => ProxySettings { mode: ProxyMode::None, url: current.proxy.url.clone() },
@@ -531,6 +536,27 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// One line from the standard input; at a terminal, asked without echoing it.
+fn read_secret(prompt: &str) -> anyhow::Result<String> {
+    use std::io::{BufRead, IsTerminal};
+    let terminal = std::io::stdin().is_terminal();
+    let stty = |arg: &str| {
+        let _ = std::process::Command::new("stty").arg(arg).stdin(std::process::Stdio::inherit()).status();
+    };
+    if terminal {
+        eprint!("{prompt}: ");
+        stty("-echo");
+    }
+    let mut line = String::new();
+    let read = std::io::stdin().lock().read_line(&mut line);
+    if terminal {
+        stty("echo");
+        eprintln!();
+    }
+    read?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+}
+
 async fn logins(command: LoginCommand) -> anyhow::Result<()> {
     ldm_ipc::ensure_daemon().await?;
     let Response::Logins { mut logins } = ldm_ipc::call(&Request::GetLogins).await? else {
@@ -539,13 +565,7 @@ async fn logins(command: LoginCommand) -> anyhow::Result<()> {
     match command {
         LoginCommand::List => {}
         LoginCommand::Add { host, user } => {
-            use std::io::{BufRead, IsTerminal};
-            if std::io::stdin().is_terminal() {
-                eprint!("Senha de {user} em {host} (aparece ao digitar): ");
-            }
-            let mut password = String::new();
-            std::io::stdin().lock().read_line(&mut password)?;
-            let password = password.trim_end_matches(['\r', '\n']).to_string();
+            let password = read_secret(&format!("Senha de {user} em {host}"))?;
             logins.push(SiteLogin { host, user, password });
         }
         LoginCommand::Rm { host } => {

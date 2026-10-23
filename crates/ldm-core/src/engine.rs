@@ -112,6 +112,9 @@ pub async fn download(
         _ = cancel.cancelled() => return Err(Error::Cancelled),
         p = probe(client, spec) => p?,
     };
+    // The data comes from the redirect's target: credentials only if it is the same host.
+    let followed = spec.for_final_url(&probe.final_url);
+    let spec = &followed;
 
     let final_path = match target {
         Target::File(path) => path,

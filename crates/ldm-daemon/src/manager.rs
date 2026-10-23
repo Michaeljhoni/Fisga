@@ -196,8 +196,9 @@ impl Manager {
         let scheduler_path = scheduler::saved_path(&store);
         let saved = scheduler::load_saved(&scheduler_path);
         let client = network::build_client(&settings.proxy).or_else(|e| {
-            tracing::warn!(error = %e, "proxy das configurações inválido; usando o do sistema");
-            ldm_core::build_client()
+            // Never around the proxy the user chose: downloads fail until it is fixed.
+            tracing::error!(error = %e, "proxy das configurações inválido; os downloads vão falhar até ele ser corrigido");
+            ldm_core::build_client_with(ldm_core::Proxy::Url(network::UNREACHABLE_PROXY))
         })?;
         let logins_path = network::logins_path(&settings_path);
         Ok(Arc::new(Self {
@@ -236,7 +237,8 @@ impl Manager {
             true => Some(network::build_client(&settings.proxy)?),
             false => None,
         };
-        write_json(&self.settings_path, &settings, 0o644)?;
+        // 0600: the proxy address may hold a password.
+        write_json(&self.settings_path, &settings, 0o600)?;
         if let Some(client) = client {
             self.set_client(client);
         }

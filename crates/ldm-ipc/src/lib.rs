@@ -357,9 +357,10 @@ impl ProxySettings {
     }
 }
 
-/// IDM's "site logins": downloads from `host` (and its subdomains) send this
-/// user and password (HTTP Basic). Kept apart from the settings, in a file
-/// only the user can read.
+/// IDM's "site logins": direct downloads from `host` send this user and
+/// password (HTTP Basic); `*.host` also covers its subdomains. Only over
+/// https (or to this computer): plain http would show the password to the
+/// network. Kept apart from the settings, in a file only the user can read.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SiteLogin {
@@ -375,25 +376,50 @@ impl std::fmt::Debug for SiteLogin {
 }
 
 impl SiteLogin {
-    /// `https://Arquivos.Exemplo.com/pasta` → `arquivos.exemplo.com`; `*.exemplo.com` → `exemplo.com`.
+    /// `https://Arquivos.Exemplo.com/pasta` → `arquivos.exemplo.com`; `*.Exemplo.com` stays a wildcard.
     pub fn normalize_host(text: &str) -> String {
         let text = text.trim();
+        let (wildcard, text) = match text.strip_prefix("*.") {
+            Some(rest) => (true, rest),
+            None => (false, text),
+        };
         let host = match text.contains("://") {
             true => url::Url::parse(text).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default(),
             false => text.split(['/', ':']).next().unwrap_or_default().to_string(),
         };
-        host.trim_start_matches("*.").trim_start_matches('.').to_ascii_lowercase()
+        let host = host.trim_start_matches('.').to_ascii_lowercase();
+        match wildcard && !host.is_empty() {
+            true => format!("*.{host}"),
+            false => host,
+        }
     }
 
+    /// The host itself; with `*.`, its subdomains too.
     pub fn matches(&self, host: &str) -> bool {
         let host = host.to_ascii_lowercase();
-        !self.host.is_empty() && (host == self.host || host.ends_with(&format!(".{}", self.host)))
+        match self.host.strip_prefix("*.") {
+            Some(base) => !base.is_empty() && (host == base || host.ends_with(&format!(".{base}"))),
+            None => !self.host.is_empty() && host == self.host,
+        }
     }
 
-    /// The login for `url`: the most specific host wins.
+    /// The login for `url`, if the password can go there: an exact host wins
+    /// over a wildcard, a longer wildcard over a shorter one.
     pub fn find<'a>(logins: &'a [SiteLogin], url: &str) -> Option<&'a SiteLogin> {
-        let host = url::Url::parse(url).ok()?.host_str()?.to_string();
-        logins.iter().filter(|login| login.matches(&host)).max_by_key(|login| login.host.len())
+        let url = url::Url::parse(url).ok()?;
+        let local = match url.host()? {
+            url::Host::Domain(name) => name.eq_ignore_ascii_case("localhost"),
+            url::Host::Ipv4(ip) => ip.is_loopback(),
+            url::Host::Ipv6(ip) => ip.is_loopback(),
+        };
+        if url.scheme() != "https" && !local {
+            return None;
+        }
+        let host = url.host_str()?.to_string();
+        logins
+            .iter()
+            .filter(|login| login.matches(&host))
+            .max_by_key(|login| (!login.host.starts_with("*."), login.host.len()))
     }
 }
 
@@ -1138,13 +1164,19 @@ mod tests {
     #[test]
     fn site_logins() {
         assert_eq!(SiteLogin::normalize_host("https://Arquivos.Exemplo.com:8443/pasta"), "arquivos.exemplo.com");
-        assert_eq!(SiteLogin::normalize_host(" *.exemplo.com "), "exemplo.com");
+        assert_eq!(SiteLogin::normalize_host(" *.Exemplo.com "), "*.exemplo.com");
         assert_eq!(SiteLogin::normalize_host("exemplo.com/x"), "exemplo.com");
         let login = |host: &str| SiteLogin { host: host.into(), user: "ana".into(), password: "segredo".into() };
-        let logins = [login("exemplo.com"), login("cdn.exemplo.com")];
-        assert_eq!(SiteLogin::find(&logins, "https://cdn.exemplo.com/a.iso").unwrap().host, "cdn.exemplo.com");
-        assert_eq!(SiteLogin::find(&logins, "https://www.EXEMPLO.com/a.iso").unwrap().host, "exemplo.com");
-        assert!(SiteLogin::find(&logins, "https://outroexemplo.com/a.iso").is_none());
+        let logins = [login("*.exemplo.com"), login("cdn.exemplo.com"), login("127.0.0.1")];
+        let found = |url: &str| SiteLogin::find(&logins, url).map(|login| login.host.as_str());
+        assert_eq!(found("https://cdn.exemplo.com/a.iso"), Some("cdn.exemplo.com"), "the exact host wins");
+        assert_eq!(found("https://www.EXEMPLO.com/a.iso"), Some("*.exemplo.com"));
+        assert_eq!(found("https://exemplo.com/a.iso"), Some("*.exemplo.com"));
+        assert_eq!(found("https://outroexemplo.com/a.iso"), None);
+        assert_eq!(found("http://cdn.exemplo.com/a.iso"), None, "never over plain http");
+        assert_eq!(found("http://127.0.0.1:8080/a.iso"), Some("127.0.0.1"), "this computer is fine");
+        let exact = [login("arquivos.exemplo.com")];
+        assert!(SiteLogin::find(&exact, "https://sub.arquivos.exemplo.com/a").is_none(), "subdomains need *.");
         assert!(!format!("{:?}", logins[0]).contains("segredo"));
     }
 

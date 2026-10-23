@@ -99,7 +99,7 @@ fn network_page(proxy: &ProxySettings) -> (gtk::Box, ReadProxy, ReadLogins) {
     let logins_title = gtk::Label::builder().label("Logins por site").xalign(0.0).build();
     logins_title.add_css_class("heading");
     let logins_hint = gtk::Label::builder()
-        .label("Usuário e senha enviados aos links diretos do site e dos subdomínios dele (autenticação HTTP). Ficam só no seu usuário, fora das configurações.")
+        .label("Usuário e senha enviados aos links diretos do site, só por https (autenticação HTTP). Para valer também nos subdomínios, use *.exemplo.com. Ficam só no seu usuário, fora das configurações.")
         .xalign(0.0)
         .wrap(true)
         .width_chars(34)

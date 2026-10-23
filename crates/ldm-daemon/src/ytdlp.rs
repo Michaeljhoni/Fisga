@@ -94,7 +94,11 @@ fn apply_proxy(command: &mut Command, proxy: &ldm_ipc::ProxySettings) {
     match proxy.for_ytdlp() {
         None => {}
         Some(url) if url.is_empty() => {
+            // ffmpeg (HLS, merging) reads the environment, not --proxy.
             command.args(["--proxy", ""]);
+            for name in ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {
+                command.env_remove(name);
+            }
         }
         Some(url) => {
             for name in ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {

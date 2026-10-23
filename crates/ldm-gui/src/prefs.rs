@@ -17,11 +17,12 @@ use crate::window::show_error;
 use crate::{autostart, ipc};
 
 fn row(grid: &gtk::Grid, index: i32, caption: &str, widget: &impl IsA<gtk::Widget>, hint: Option<&str>) {
-    let label = gtk::Label::builder().label(caption).xalign(0.0).hexpand(true).wrap(true).build();
+    // A minimum width: wide controls (the weekday buttons) must not squeeze the text.
+    let label = gtk::Label::builder().label(caption).xalign(0.0).hexpand(true).wrap(true).width_chars(24).build();
     let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
     text.append(&label);
     if let Some(hint) = hint {
-        let hint = gtk::Label::builder().label(hint).xalign(0.0).wrap(true).max_width_chars(48).build();
+        let hint = gtk::Label::builder().label(hint).xalign(0.0).wrap(true).width_chars(34).max_width_chars(48).build();
         hint.add_css_class("dim-label");
         hint.add_css_class("caption");
         text.append(&hint);
@@ -201,8 +202,16 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
         page.set_margin_top(14);
         page.set_margin_bottom(6);
         page.set_margin_start(6);
-        page.set_margin_end(6);
-        notebook.append_page(page, Some(&gtk::Label::new(Some(title))));
+        page.set_margin_end(12);
+        // Scrolls instead of growing past small screens (the buttons must stay visible).
+        let scroll = gtk::ScrolledWindow::builder()
+            .child(page)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_width(true)
+            .propagate_natural_height(true)
+            .max_content_height(560)
+            .build();
+        notebook.append_page(&scroll, Some(&gtk::Label::new(Some(title))));
     }
 
     let cancel = gtk::Button::with_label("Cancelar");

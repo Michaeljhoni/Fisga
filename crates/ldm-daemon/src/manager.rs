@@ -418,9 +418,10 @@ impl Manager {
             let spec = RequestSpec { url: request.url.clone(), headers: request_headers(&request) };
             let result = ldm_core::probe(&self.client, &spec).await;
             // A download waiting for a new address takes this one's link (see refresh.rs).
-            if let Some(target) = result.as_ref().ok().and_then(|p| self.awaiting_match(p.total, &p.file_name)) {
-                self.take_address(id, target).await;
-                return;
+            if let Ok(probe) = &result {
+                if self.try_take_address(id, probe.total, &probe.file_name).await {
+                    return;
+                }
             }
             self.update(id, |info| {
                 info.probing = false;
@@ -750,6 +751,9 @@ impl Manager {
             .jobs
             .get_mut(&id)
             .map(|job| {
+                // Before the state changes: a resume right after the job reports
+                // Paused installs a new token that must not be cleared here.
+                job.cancel = None;
                 let from_queue = job.from_queue;
                 // A paused download the queue started still belongs to it (see `queue_busy`).
                 if !matches!(result, JobResult::Paused) {
@@ -785,9 +789,6 @@ impl Manager {
                 }
             }
         });
-        if let Some(job) = self.inner.lock().unwrap().jobs.get_mut(&id) {
-            job.cancel = None;
-        }
         if let Some((summary, body)) = message {
             notify::send(&summary, &body);
         }

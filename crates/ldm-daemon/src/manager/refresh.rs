@@ -96,32 +96,44 @@ impl Manager {
         Ok(())
     }
 
-    /// A download waiting for a new address that a file of this size and name fits.
-    pub(super) fn awaiting_match(&self, total: Option<u64>, name: &str) -> Option<u64> {
-        let total = total?;
-        let inner = self.inner.lock().unwrap();
-        let candidates: Vec<&DownloadInfo> = inner
-            .jobs
-            .values()
-            .map(|job| &job.info)
-            .filter(|info| info.awaiting_url && info.total == Some(total))
-            .collect();
-        candidates.iter().find(|info| info.name == name).or(candidates.first()).map(|info| info.id)
-    }
-
-    /// The browser sent the file a download is waiting for (`new`, still
-    /// pending): its link, cookies and headers go to `target`, and `new` goes away.
-    pub(super) async fn take_address(self: &Arc<Self>, new: u64, target: u64) {
-        let Some(sent) = self.inner.lock().unwrap().jobs.remove(&new).map(|job| job.request) else { return };
+    /// The browser sent a file (`new`, a pending download that was just
+    /// probed): if a download waits for a new address of a file of this size
+    /// (the same name first), it takes `new`'s link, cookies and headers, and
+    /// `new` goes away. Returns whether that happened.
+    pub(super) async fn try_take_address(self: &Arc<Self>, new: u64, total: Option<u64>, name: &str) -> bool {
+        let Some(total) = total else { return false };
+        // One lock for the match and the removal: `new` must still be pending
+        // (not confirmed and started meanwhile), and a target is taken once
+        // (a double click in the browser gives one link, then a normal download).
+        let taken = {
+            let mut inner = self.inner.lock().unwrap();
+            let pending = inner.jobs.get(&new).is_some_and(|job| job.info.state == State::Pending);
+            let mut candidates: Vec<&DownloadInfo> = inner
+                .jobs
+                .values()
+                .map(|job| &job.info)
+                .filter(|info| info.awaiting_url && info.total == Some(total))
+                .collect();
+            candidates.sort_by_key(|info| (info.name != name, info.id));
+            match candidates.first().map(|info| info.id).filter(|_| pending) {
+                Some(target) => {
+                    let sent = inner.jobs.remove(&new).expect("checked above").request;
+                    let job = inner.jobs.get_mut(&target).expect("found above");
+                    job.info.awaiting_url = false;
+                    Some((target, sent, job.request.clone()))
+                }
+                None => None,
+            }
+        };
+        let Some((target, sent, old)) = taken else { return false };
         let _ = self.updates.send(Response::Removed { id: new });
-        let Some(old) = self.inner.lock().unwrap().jobs.get(&target).map(|job| job.request.clone()) else { return };
         let request = AddRequest {
-            url: sent.url,
-            referrer: sent.referrer.or(old.referrer.clone()),
-            page_url: sent.page_url.or(old.page_url.clone()),
-            user_agent: sent.user_agent.or(old.user_agent.clone()),
-            cookies: sent.cookies,
-            headers: sent.headers,
+            url: sent.url.clone(),
+            referrer: sent.referrer.clone().or(old.referrer.clone()),
+            page_url: sent.page_url.clone().or(old.page_url.clone()),
+            user_agent: sent.user_agent.clone().or(old.user_agent.clone()),
+            cookies: sent.cookies.clone(),
+            headers: sent.headers.clone(),
             ..old
         };
         tracing::info!(new, target, "endereço capturado do navegador");
@@ -130,8 +142,14 @@ impl Manager {
                 let name = self.inner.lock().unwrap().jobs.get(&target).map(|j| j.info.name.clone()).unwrap_or_default();
                 notify::send("Endereço atualizado", &format!("{name} continua de onde parou."));
             }
-            Err(e) => tracing::warn!(target, error = %e, "não foi possível usar o endereço capturado"),
+            Err(e) => {
+                // The browser's click is not lost: it becomes a download of its own.
+                tracing::warn!(target, error = %e, "não foi possível usar o endereço capturado");
+                notify::send("Endereço não atualizado", &format!("{e}. O link virou um download novo."));
+                let _ = self.add(AddRequest { confirm: true, ..sent });
+            }
         }
+        true
     }
 
     /// Pauses the download if it runs, swaps its link, and resumes it.
@@ -152,6 +170,12 @@ impl Manager {
         let path = {
             let mut inner = self.inner.lock().unwrap();
             let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
+            // It may have finished meanwhile.
+            can_refresh(&job.info)?;
+            // Not started by the queue until the control file below is fixed.
+            if job.info.state == State::Queued {
+                job.info.state = State::Paused;
+            }
             job.info.url = url.clone();
             job.info.page = request.page_url.clone().or(request.referrer.clone());
             job.info.awaiting_url = false;
@@ -238,19 +262,39 @@ mod tests {
         let fresh = sized_server(4).await;
         let cookies = serde_json::from_str(r#"[{"name":"sessao","value":"nova"}]"#).unwrap();
         let sent = manager.add(AddRequest { url: fresh.clone(), confirm: true, cookies, ..Default::default() }).unwrap();
+        // A double click in the browser: the second one stays a download of its own.
+        let again = manager.add(AddRequest { url: fresh.clone(), confirm: true, ..Default::default() }).unwrap();
         for _ in 0..100 {
-            if manager.state(sent).is_none() {
+            if manager.state(sent).is_none() || manager.state(again).is_none() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        assert_eq!(manager.state(sent), None, "the browser's download was absorbed");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let absorbed = [sent, again].into_iter().filter(|id| manager.state(*id).is_none()).count();
+        assert_eq!(absorbed, 1, "one of the browser's downloads was absorbed, not both");
         assert_eq!(manager.state(unrelated), Some(State::Pending));
         let info = info(&manager, id);
         assert_eq!(info.url, fresh);
         assert!(!info.awaiting_url);
-        let cookies = manager.inner.lock().unwrap().jobs[&id].request.cookies.clone();
-        assert_eq!(cookies[0].value, "nova", "with the browser's new cookies");
+        if manager.state(sent).is_none() {
+            let cookies = manager.inner.lock().unwrap().jobs[&id].request.cookies.clone();
+            assert_eq!(cookies[0].value, "nova", "with the browser's new cookies");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_download_already_confirmed_is_not_absorbed() {
+        let manager = manager();
+        let id = paused(&manager).await;
+        manager.update(id, |info| info.total = Some(4));
+        manager.await_url(id, true).unwrap();
+        let sent = manager.add(AddRequest { url: sized_server(4).await, confirm: true, ..Default::default() }).unwrap();
+        // Confirmed (and started) before its probe came back.
+        manager.confirm(sent, super::super::Answer::default()).unwrap();
+        assert!(!manager.try_take_address(sent, Some(4), "arquivo.iso").await);
+        assert!(manager.state(sent).is_some());
+        assert!(info(&manager, id).awaiting_url, "still waiting");
     }
 
     #[tokio::test]

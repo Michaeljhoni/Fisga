@@ -625,6 +625,13 @@ pub struct DownloadInfo {
     /// Position in its queue: lower starts first.
     #[serde(default)]
     pub order: i64,
+    /// The page the download came from (to get a fresh link from it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
+    /// Waiting for a new address: the next download of the same file sent
+    /// by the browser replaces this one's link (`Request::AwaitUrl`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub awaiting_url: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -672,6 +679,12 @@ pub enum Request {
     SetQueue { id: u64, queue: u64 },
     /// Moves a download inside its queue.
     Reorder { id: u64, direction: Direction },
+    /// IDM's "Refresh download address": another link to the same file (an
+    /// expired one renewed); the download continues where it stopped.
+    RefreshUrl { id: u64, url: String },
+    /// Waits for (or stops waiting for) the browser to send the same file
+    /// again, and takes its link.
+    AwaitUrl { id: u64, waiting: bool },
     Shutdown,
     GetSettings,
     /// Replaces the settings; subscribers receive `Response::Settings`.
@@ -1003,6 +1016,12 @@ mod tests {
         assert_eq!(info.category, Category::Other);
         assert!(info.formats.is_empty());
         assert_eq!((info.queue, info.order), (MAIN_QUEUE, 0));
+        assert!(!info.awaiting_url && info.page.is_none());
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(!json.contains("awaitingUrl") && !json.contains("page"), "{json}");
+        let request: Request =
+            serde_json::from_str(r#"{"type":"refresh_url","id":2,"url":"https://e.com/novo"}"#).unwrap();
+        assert!(matches!(request, Request::RefreshUrl { id: 2, .. }));
         assert!(!serde_json::to_string(&info).unwrap().contains("formats"), "empty list not written");
     }
 }

@@ -177,6 +177,30 @@ if "$BIN/ldm" queue list | grep -q Noite; then echo "queue still there"; exit 1;
 wait_state "$b" baixando 10
 wait_state "$c" concluído 60
 wait_state "$b" concluído 60
+
+step "refresh address: a new link to the same file continues the download"
+# "?token=..." is another link to the same file (the test server ignores it).
+"$BIN/ldm" add "$BASE/files/31457280.bin?token=antigo" >/dev/null; id="$(last_id)"
+sleep 2
+"$BIN/ldm" pause "$id"; wait_state "$id" pausado 20
+if "$BIN/ldm" refresh "$id" "$BASE/files/7340032.bin" 2>"$SANDBOX/err"; then echo "accepted another file"; exit 1; fi
+grep "outro arquivo" "$SANDBOX/err"
+"$BIN/ldm" refresh "$id" "$BASE/files/31457280.bin?token=novo"
+wait_state "$id" concluído 60
+"$BIN/ldm" get "$BASE/files/31457280.bin" -o "$SANDBOX/reference" >/dev/null
+cmp "$DL/31457280.bin" "$SANDBOX/reference/31457280.bin"; echo "content ok after the new link"
+
+step "refresh address: caught from the browser"
+"$BIN/ldm" add "$BASE/files/26214400.bin?token=velho" >/dev/null; id="$(last_id)"
+sleep 2
+"$BIN/ldm" pause "$id"; wait_state "$id" pausado 20
+"$BIN/ldm" refresh "$id" --capture
+"$BIN/ldm" list | grep "aguardando novo endereço"
+host "{\"type\":\"download\",\"url\":\"$BASE/files/26214400.bin?token=fresco\",\"kind\":\"direct\"}" | grep -q '"pending":true'
+wait_state "$id" concluído 60
+test -z "$(state_of $((id + 1)))"; echo "the browser's download went to #$id instead of a new one"
+"$BIN/ldm" get "$BASE/files/26214400.bin" -o "$SANDBOX/reference" >/dev/null
+cmp "$DL/26214400.bin" "$SANDBOX/reference/26214400.bin"; echo "content ok"
 "$BIN/ldm" settings --speed-limit 0 >/dev/null
 
 step "native host: invalid message"

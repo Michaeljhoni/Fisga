@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{notify, ytdlp};
 
+mod refresh;
 mod scheduler;
 
 pub use scheduler::tick_interval;
@@ -174,6 +175,9 @@ impl Manager {
                 // Saved before queues existed: the order is the order of arrival.
                 if info.order == 0 {
                     info.order = info.id as i64;
+                }
+                if info.page.is_none() {
+                    info.page = request.page_url.clone().or(request.referrer.clone());
                 }
                 inner.jobs.insert(info.id, Job::new(info, request, false));
             }
@@ -381,6 +385,8 @@ impl Manager {
                 formats: Vec::new(),
                 queue,
                 order,
+                page: request.page_url.clone().or(request.referrer.clone()),
+                awaiting_url: false,
             };
             let _ = self.updates.send(Response::Update { item: info.clone() });
             inner.jobs.insert(id, Job::new(info, request, auto));
@@ -411,6 +417,11 @@ impl Manager {
         if request.kind == SourceKind::Direct {
             let spec = RequestSpec { url: request.url.clone(), headers: request_headers(&request) };
             let result = ldm_core::probe(&self.client, &spec).await;
+            // A download waiting for a new address takes this one's link (see refresh.rs).
+            if let Some(target) = result.as_ref().ok().and_then(|p| self.awaiting_match(p.total, &p.file_name)) {
+                self.take_address(id, target).await;
+                return;
+            }
             self.update(id, |info| {
                 info.probing = false;
                 match result {
@@ -562,6 +573,8 @@ impl Manager {
         {
             let mut inner = self.inner.lock().unwrap();
             let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
+            // Resumed by hand: no longer waiting for a new address.
+            job.info.awaiting_url = false;
             if matches!(job.info.state, State::Paused | State::Failed) {
                 job.info.state = State::Queued;
                 job.info.error = None;

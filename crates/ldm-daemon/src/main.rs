@@ -142,6 +142,8 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: UnixStream, 
             }
             Request::SetQueue { id, queue } => result(manager.set_queue(id, queue)),
             Request::Reorder { id, direction } => result(manager.reorder(id, direction)),
+            Request::RefreshUrl { id, url } => result(manager.refresh_url(id, url).await),
+            Request::AwaitUrl { id, waiting } => result(manager.await_url(id, waiting)),
             Request::List => Response::Downloads { items: manager.list() },
             Request::Pause { id } => result(manager.pause(id)),
             Request::Resume { id } => result(manager.resume(id)),

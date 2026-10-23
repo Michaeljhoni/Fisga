@@ -104,6 +104,7 @@ struct Actions {
     move_up: gio::SimpleAction,
     move_down: gio::SimpleAction,
     move_to_queue: gio::SimpleAction,
+    refresh_url: gio::SimpleAction,
 }
 
 /// Opens the row menu for a list item, at a point of one of its cells.
@@ -131,6 +132,7 @@ fn row_menu_model(queues: &[Queue]) -> gio::Menu {
     let section = gio::Menu::new();
     section.append(Some("Retomar"), Some("win.resume"));
     section.append(Some("Pausar"), Some("win.pause"));
+    section.append(Some("Atualizar endereço…"), Some("win.refresh-url"));
     menu.append_section(None, &section);
     let section = gio::Menu::new();
     section.append(Some("Mover para cima"), Some("win.move-up"));
@@ -377,6 +379,7 @@ impl MainWindow {
             move_up: gio::SimpleAction::new("move-up", None),
             move_down: gio::SimpleAction::new("move-down", None),
             move_to_queue: gio::SimpleAction::new("move-to-queue", Some(glib::VariantTy::UINT64)),
+            refresh_url: gio::SimpleAction::new("refresh-url", None),
         };
         for action in [
             &actions.resume,
@@ -387,6 +390,7 @@ impl MainWindow {
             &actions.move_up,
             &actions.move_down,
             &actions.move_to_queue,
+            &actions.refresh_url,
         ] {
             window.add_action(action);
         }
@@ -532,6 +536,12 @@ impl MainWindow {
                 }
             });
         }
+        let (s, w) = (selection.clone(), window.clone());
+        self.actions.refresh_url.connect_activate(move |_, _| {
+            if let Some(info) = Self::selected(&s) {
+                crate::refresh::show(w.upcast_ref(), &info);
+            }
+        });
         let s = selection.clone();
         self.actions.move_to_queue.connect_activate(move |_, target| {
             let queue = target.and_then(|t| t.get::<u64>());
@@ -648,6 +658,7 @@ fn update_actions(actions: &Actions, selected: Option<DownloadInfo>) {
     actions.move_up.set_enabled(unfinished);
     actions.move_down.set_enabled(unfinished);
     actions.move_to_queue.set_enabled(state.is_some());
+    actions.refresh_url.set_enabled(matches!(state, Some(State::Queued | State::Running | State::Paused | State::Failed)));
 }
 
 fn about(parent: &gtk::ApplicationWindow) {
@@ -734,7 +745,7 @@ pub fn open_folder(window: &gtk::Window, info: &DownloadInfo) {
     }
 }
 
-fn looks_like_url(text: &str) -> bool {
+pub fn looks_like_url(text: &str) -> bool {
     let text = text.trim();
     ["http://", "https://", "ftp://"].iter().any(|scheme| text.starts_with(scheme)) && !text.contains(char::is_whitespace)
 }
@@ -850,6 +861,8 @@ mod tests {
             formats: Vec::new(),
             queue: ldm_ipc::MAIN_QUEUE,
             order: 1,
+            page: None,
+            awaiting_url: false,
         }
     }
 }

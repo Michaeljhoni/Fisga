@@ -20,6 +20,7 @@ mod item;
 mod power;
 mod prefs;
 mod progress;
+mod refresh;
 mod tray;
 mod window;
 

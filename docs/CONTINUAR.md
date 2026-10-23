@@ -107,6 +107,16 @@ Dados no Linux:
     para mostrar a contagem. `Request::CancelPower` / `ldm schedule --cancel` cancelam.
   - O relógio é conferido a cada 15 s (`LDM_SCHEDULER_TICK_MS`).
 
+- **Atualizar endereço** (pacote 3, `manager/refresh.rs`):
+  - `Request::RefreshUrl { id, url }`: sonda o link novo, recusa outro tamanho, troca o link,
+    limpa o ETag do `.ldm-part.json` (um link novo costuma vir com outro ETag, e o motor
+    recomeçaria do zero) e retoma.
+  - `Request::AwaitUrl { id, waiting }` (`DownloadInfo.awaiting_url`): o próximo download
+    pendente vindo do navegador com o mesmo tamanho (de preferência o mesmo nome) é absorvido
+    em `probe_pending`; o link, os cookies e os cabeçalhos dele vão para o download antigo.
+  - `DownloadInfo.page` (página ou referer) alimenta o botão "Abrir a página".
+  - O `range_server` ignora a query string, para os testes simularem links novos.
+
 **Extensão**
 - Botão sobre os players, menu de contexto e detecção de streams.
 - Usa a URL atual do frame (`frameUrlOf`). Isso corrigiu o bug de baixar o vídeo recomendado em
@@ -213,14 +223,12 @@ Mudanças só de documentação podem ir direto para o `main`.
 
 ## Próximos passos (em ordem de prioridade)
 
-Antes de seguir, peça ao dono para testar as várias filas no Arch: criar a fila "Noite" com 1
-por vez (☰ → Filas e agendador), mandar dois downloads para ela pela janela Novo download,
-subir o segundo pelo clique direito, e excluir a fila (os downloads vão para a principal).
-O pacote 2 está completo; o próximo é o pacote 3.
+O pacote 2 está completo e testado no Arch (23/10). No pacote 3, o "Atualizar endereço" está
+pronto; peça ao dono para testar: pausar um download, clique direito → Atualizar endereço… →
+Capturar do navegador, clicar no link de novo na página, e ver o download continuar.
 
 ### Pacote 3: rede e casos especiais
-- **Atualizar o endereço** de um download cujo link expirou, como o "Refresh download address"
-  do IDM: um novo `Request` que troca a URL de um job pausado ou com falha e continua do `.ldm-part`.
+- ~~Atualizar o endereço~~ (feito; falta o dono testar num site de verdade com link expirado).
 - **Proxy** HTTP/SOCKS (o `reqwest` já suporta) e **login por site**.
 - **Limite de velocidade por download** (hoje só existe o global).
 - **Download em lote**: uma lista de URLs, ou um padrão `arquivo_*.zip` com intervalo.

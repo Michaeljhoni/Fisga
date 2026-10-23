@@ -2,7 +2,7 @@
 //!
 //!   cargo run -p ldm-core --example range_server -- [port] [delay-ms-per-16KiB]
 //!
-//! `GET /files/<bytes>.bin` returns `<bytes>` of deterministic data.
+//! `GET /files/<bytes>.bin` returns `<bytes>` of deterministic data (any query string is ignored).
 
 use std::time::Duration;
 
@@ -30,7 +30,9 @@ async fn handle(mut socket: TcpStream, delay: Duration) -> std::io::Result<()> {
         let head = String::from_utf8_lossy(&pending[..head_end]).to_string();
         pending.drain(..head_end);
 
+        // The query is ignored: "?token=..." stands for another link to the same file.
         let path = head.split_whitespace().nth(1).unwrap_or("/");
+        let path = path.split('?').next().unwrap_or(path);
         let size = path
             .strip_prefix("/files/")
             .and_then(|p| p.strip_suffix(".bin"))

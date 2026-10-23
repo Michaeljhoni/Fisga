@@ -105,6 +105,13 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
   tempo e seu agendador. Elas aparecem na barra lateral. A janela *Novo download* tem o campo
   *Fila* (quando há mais de uma). No clique direito de um download: *Mover para cima*, *Mover para
   baixo* e *Mover para a fila ▸*. Excluir uma fila manda os downloads dela para a principal.
+- **Atualizar endereço** (o *Refresh download address* do IDM): no clique direito de um download
+  cujo link expirou (comum em sites de arquivos e links assinados), *Atualizar endereço…*. Cole um
+  novo link do mesmo arquivo, ou clique em *Capturar do navegador*: a página abre, você clica no
+  link de novo, e o LDM usa esse link (com os cookies novos) em vez de criar outro download. Nos
+  dois casos o download continua de onde parou. O LDM confere o tamanho e recusa um link de outro
+  arquivo. A captura funciona com links diretos de tamanho conhecido e com a extensão pedindo
+  confirmação (o padrão).
 - **Agendador** (por fila, como o *Scheduler* do IDM): a fila só roda das HH:MM às HH:MM nos
   dias escolhidos. Fora desse horário os downloads ficam *na fila*; *Baixar agora* e retomar um
   download à mão começam na hora mesmo assim. No horário de parada, os downloads da fila voltam
@@ -179,6 +186,8 @@ ldm add https://exemplo.com/arquivo.iso -Q 1     # direto na fila 1
 ldm move 7 -Q 1                                  # move o download 7 para a fila 1
 ldm move 7 --top                                 # primeiro da fila (--up, --down, --bottom)
 ldm queue rm 1                                   # exclui (os downloads vão para a principal)
+ldm refresh 7 https://exemplo.com/novo-link      # link expirado: novo endereço do mesmo arquivo
+ldm refresh 7 --capture                          # usa o próximo link do mesmo arquivo vindo do navegador
 ```
 
 ## Desenvolvimento

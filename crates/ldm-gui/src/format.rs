@@ -124,6 +124,9 @@ pub fn state_label(state: State) -> &'static str {
 }
 
 pub fn status(info: &DownloadInfo) -> String {
+    if info.awaiting_url {
+        return "Aguardando novo endereço".into();
+    }
     match (&info.error, info.state) {
         (Some(error), State::Failed) => format!("Erro: {error}"),
         (_, State::Running) if info.connections > 1 => format!("Baixando ({} conexões)", info.connections),
@@ -191,6 +194,8 @@ mod tests {
             formats: Vec::new(),
             queue: 0,
             order: 1,
+            page: None,
+            awaiting_url: false,
         }
     }
 
@@ -271,6 +276,8 @@ mod tests {
         let mut failed = info(State::Failed, 0, None, 0.0);
         failed.error = Some("HTTP 404".into());
         assert_eq!(status(&failed), "Erro: HTTP 404");
+        failed.awaiting_url = true;
+        assert_eq!(status(&failed), "Aguardando novo endereço");
     }
 
     #[test]

@@ -149,6 +149,19 @@ enum Command {
         #[arg(short = 'Q', long)]
         queue_id: Option<u64>,
     },
+    /// Atualiza o endereço de um download cujo link expirou (continua de onde parou)
+    Refresh {
+        id: u64,
+        /// O novo endereço do mesmo arquivo
+        #[arg(required_unless_present_any = ["capture", "cancel"], conflicts_with_all = ["capture", "cancel"])]
+        url: Option<String>,
+        /// Espera o navegador mandar o mesmo arquivo de novo e usa o link dele
+        #[arg(long, conflicts_with = "cancel")]
+        capture: bool,
+        /// Para de esperar o novo endereço
+        #[arg(long)]
+        cancel: bool,
+    },
     /// Mostra, cria, altera ou exclui filas
     Queue {
         #[command(subcommand)]
@@ -247,6 +260,20 @@ async fn main() -> anyhow::Result<()> {
             };
             simple(request).await
         }
+        Command::Refresh { id, url, capture, cancel } => match url {
+            Some(url) => {
+                simple(Request::RefreshUrl { id, url }).await?;
+                println!("endereço atualizado: o download #{id} continua de onde parou");
+                Ok(())
+            }
+            None => {
+                simple(Request::AwaitUrl { id, waiting: capture && !cancel }).await?;
+                if capture {
+                    println!("aguardando: abra a página do arquivo e clique no link de novo no navegador");
+                }
+                Ok(())
+            }
+        },
         Command::Queue { command } => queues(command.unwrap_or(QueueCommand::List)).await,
         Command::Move { id, queue_id, up, down, top, bottom } => {
             let direction = [(up, Direction::Up), (down, Direction::Down), (top, Direction::Top), (bottom, Direction::Bottom)]
@@ -628,6 +655,9 @@ fn row(item: &DownloadInfo) -> String {
     let mut line = format!("{:>4}  {:<10} {:<20} {:>11}  {}", item.id, state_label(item.state), progress, speed, item.name);
     if let Some(error) = &item.error {
         line.push_str(&format!("\n      └ {error}"));
+    }
+    if item.awaiting_url {
+        line.push_str("\n      └ aguardando novo endereço: clique no link de novo no navegador");
     }
     line
 }

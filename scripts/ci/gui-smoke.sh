@@ -124,6 +124,17 @@ xdotool windowfocus --sync "$prefs" key ctrl+Page_Down
 sleep 1
 shot 5c-rede
 xdotool windowfocus --sync "$prefs" key Escape || true
+xdotool search --name "^Preferências$" windowclose 2>/dev/null || true
+sleep 0.5
+
+echo "== batch download window"
+xdotool windowfocus --sync "$main" key ctrl+shift+n
+batch="$(find_window "^Adicionar em lote$")"
+xdotool windowfocus --sync "$batch" type --delay 20 "$BASE/files/aula_*.bin"
+sleep 1
+shot 5d-lote
+xdotool windowfocus --sync "$batch" key Escape || true
+xdotool search --name "^Adicionar em lote$" windowclose 2>/dev/null || true
 
 echo "== background mode (session autostart): no window, but it answers the browser"
 pkill -f "$BIN/ldm-gui" || true

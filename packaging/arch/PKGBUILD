@@ -23,6 +23,9 @@ optdepends=(
 )
 provides=('ldm')
 conflicts=('ldm')
+# makepkg's GCC LTO turns ring's C code (TLS) into objects the Rust linker cannot
+# read; the Rust side keeps its own LTO (Cargo.toml, profile.release).
+options=('!lto')
 source=("ldm::${LDM_GIT:-git+https://github.com/Michaeljhoni/ldm.git}")
 sha256sums=('SKIP')
 

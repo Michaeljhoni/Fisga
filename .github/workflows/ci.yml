@@ -24,8 +24,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # --locked: a Cargo.lock out of date fails here, not in makepkg.
       - name: Unit and integration tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets

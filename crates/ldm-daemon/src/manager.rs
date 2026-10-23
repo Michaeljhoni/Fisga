@@ -954,7 +954,11 @@ fn write_json(path: &Path, value: &impl Serialize, mode: u32) -> anyhow::Result<
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("json.tmp");
+    // One temporary file per write: two saves at the same time (the autosave
+    // and an action) must not rename each other's.
+    static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = WRITES.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("json.{}.{n}.tmp", std::process::id()));
     let mut file = std::fs::OpenOptions::new().create(true).write(true).truncate(true).mode(mode).open(&tmp)?;
     file.write_all(&serde_json::to_vec_pretty(value)?)?;
     std::fs::rename(tmp, path)?;
@@ -986,8 +990,11 @@ mod tests {
     const URL: &str = "http://127.0.0.1:9/file.iso";
 
     pub(super) fn manager() -> Arc<Manager> {
+        // Tests run in parallel: a counter keeps their folders apart.
+        static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNT.fetch_add(1, Ordering::Relaxed);
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("ldmd-test-{}-{nanos}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ldmd-test-{}-{nanos}-{n}", std::process::id()));
         let manager = Manager::load(dir.join("downloads.json"), dir.join("settings.json")).unwrap();
         let settings = Settings { download_dir: Some(dir.join("Downloads")), ..Settings::default() };
         manager.set_settings(settings).unwrap();

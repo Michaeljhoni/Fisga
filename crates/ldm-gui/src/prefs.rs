@@ -524,6 +524,7 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
 
     let w = window.clone();
     cancel.connect_clicked(move |_| w.close());
+    crate::window::close_on_escape(&window);
 
     let (w, d, l) = (window.clone(), dir.clone(), dir_label.clone());
     choose.connect_clicked(move |_| {

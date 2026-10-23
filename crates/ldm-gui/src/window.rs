@@ -697,6 +697,20 @@ fn about(parent: &gtk::ApplicationWindow) {
         .present();
 }
 
+/// Esc closes the window (dialogs: Preferências, Adicionar em lote...).
+pub fn close_on_escape(window: &impl IsA<gtk::Window>) {
+    let keys = gtk::EventControllerKey::new();
+    let w = window.as_ref().downgrade();
+    keys.connect_key_pressed(move |_, key, _, _| match (key, w.upgrade()) {
+        (gdk::Key::Escape, Some(window)) => {
+            window.close();
+            glib::Propagation::Stop
+        }
+        _ => glib::Propagation::Proceed,
+    });
+    window.as_ref().add_controller(keys);
+}
+
 /// Sends a request; failures are shown over `parent` (or logged).
 pub fn send(request: Request, parent: Option<gtk::Window>) {
     glib::spawn_future_local(async move {

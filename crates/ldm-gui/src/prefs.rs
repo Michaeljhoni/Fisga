@@ -11,7 +11,10 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{gio, glib, pango};
-use ldm_ipc::{Category, Queue, Request, Schedule, Settings, TimeOfDay, WhenDone, MAIN_QUEUE, WEEKDAYS};
+use ldm_ipc::{
+    Category, ProxyMode, ProxySettings, Queue, Request, Schedule, Settings, SiteLogin, TimeOfDay, WhenDone, MAIN_QUEUE,
+    WEEKDAYS,
+};
 
 use crate::window::show_error;
 use crate::{autostart, ipc};
@@ -54,7 +57,134 @@ fn parse_time(entry: &gtk::Entry, what: &str) -> Result<TimeOfDay, String> {
 pub enum Page {
     General = 0,
     Queues = 1,
+    Network = 2,
 }
+
+/// One site login in the "Rede" tab.
+struct LoginRow {
+    row: gtk::Box,
+    host: gtk::Entry,
+    user: gtk::Entry,
+    password: gtk::PasswordEntry,
+}
+
+/// The "Rede" tab: the proxy and the site logins. Returns the tab, a function
+/// that reads the proxy back, and one that reads the logins back (`None`
+/// until they arrived from the daemon, so saving never wipes them).
+fn network_page(proxy: &ProxySettings) -> (gtk::Box, ReadProxy, ReadLogins) {
+    const MODES: [ProxyMode; 3] = [ProxyMode::System, ProxyMode::None, ProxyMode::Manual];
+    let mode = gtk::DropDown::from_strings(&["Do sistema", "Sem proxy", "Manual"]);
+    mode.set_selected(MODES.iter().position(|m| *m == proxy.mode).unwrap_or(0) as u32);
+    let url = gtk::Entry::builder().text(&proxy.url).placeholder_text("http://host:3128").width_chars(30).build();
+    url.set_sensitive(proxy.mode == ProxyMode::Manual);
+    let u = url.clone();
+    mode.connect_selected_notify(move |mode| u.set_sensitive(MODES.get(mode.selected() as usize) == Some(&ProxyMode::Manual)));
+
+    let grid = gtk::Grid::builder().column_spacing(18).row_spacing(14).build();
+    row(
+        &grid,
+        0,
+        "Proxy",
+        &mode,
+        Some("\u{201c}Do sistema\u{201d} usa as variáveis http_proxy e https_proxy. Vale para todos os downloads, inclusive os vídeos de sites."),
+    );
+    row(
+        &grid,
+        1,
+        "Endereço do proxy",
+        &url,
+        Some("http://host:porta ou socks5://host:porta; com senha: socks5://usuário:senha@host:porta."),
+    );
+
+    let logins_title = gtk::Label::builder().label("Logins por site").xalign(0.0).build();
+    logins_title.add_css_class("heading");
+    let logins_hint = gtk::Label::builder()
+        .label("Usuário e senha enviados aos links diretos do site e dos subdomínios dele (autenticação HTTP). Ficam só no seu usuário, fora das configurações.")
+        .xalign(0.0)
+        .wrap(true)
+        .width_chars(34)
+        .max_width_chars(60)
+        .build();
+    logins_hint.add_css_class("dim-label");
+    logins_hint.add_css_class("caption");
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let loading = gtk::Label::builder().label("Carregando…").xalign(0.0).build();
+    list.append(&loading);
+    let add = gtk::Button::builder().label("Adicionar login").halign(gtk::Align::Start).sensitive(false).build();
+
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 14);
+    page.append(&grid);
+    page.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    page.append(&logins_title);
+    page.append(&logins_hint);
+    page.append(&list);
+    page.append(&add);
+
+    let rows: Rc<RefCell<Vec<Rc<LoginRow>>>> = Rc::default();
+    let loaded = Rc::new(Cell::new(false));
+    let add_row = {
+        let (rows, list) = (rows.clone(), list.clone());
+        Rc::new(move |login: &SiteLogin| {
+            let host = gtk::Entry::builder().text(&login.host).placeholder_text("arquivos.exemplo.com").hexpand(true).build();
+            let user = gtk::Entry::builder().text(&login.user).placeholder_text("usuário").width_chars(12).build();
+            let password = gtk::PasswordEntry::builder().show_peek_icon(true).build();
+            password.set_text(&login.password);
+            password.set_width_chars(12);
+            password.set_placeholder_text(Some("senha"));
+            let remove = gtk::Button::builder().icon_name("user-trash-symbolic").tooltip_text("Esquecer este login").build();
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            row.append(&host);
+            row.append(&user);
+            row.append(&password);
+            row.append(&remove);
+            list.append(&row);
+            let entry = Rc::new(LoginRow { row, host, user, password });
+            rows.borrow_mut().push(entry.clone());
+            let (rows, list) = (rows.clone(), list.clone());
+            remove.connect_clicked(move |_| {
+                list.remove(&entry.row);
+                rows.borrow_mut().retain(|other| !Rc::ptr_eq(other, &entry));
+            });
+        })
+    };
+    let a = add_row.clone();
+    add.connect_clicked(move |_| a(&SiteLogin { host: String::new(), user: String::new(), password: String::new() }));
+    let (l, a, add_button) = (loaded.clone(), add_row.clone(), add.clone());
+    glib::spawn_future_local(async move {
+        match ipc::call(Request::GetLogins).await {
+            Ok(ldm_ipc::Response::Logins { logins }) => {
+                for login in &logins {
+                    a(login);
+                }
+                loading.set_visible(false);
+                l.set(true);
+                add_button.set_sensitive(true);
+            }
+            _ => loading.set_label("Não foi possível ler os logins do ldmd."),
+        }
+    });
+
+    let read_proxy = Box::new(move || {
+        let proxy = ProxySettings {
+            mode: MODES.get(mode.selected() as usize).copied().unwrap_or_default(),
+            url: url.text().trim().to_string(),
+        };
+        proxy.check().map(|_| proxy)
+    });
+    let read_logins = Box::new(move || {
+        loaded.get().then(|| {
+            rows.borrow()
+                .iter()
+                .map(|r| SiteLogin { host: r.host.text().trim().to_string(), user: r.user.text().to_string(), password: r.password.text().to_string() })
+                .filter(|login| !login.host.is_empty())
+                .collect()
+        })
+    });
+    (page, read_proxy, read_logins)
+}
+
+type ReadProxy = Box<dyn Fn() -> Result<ProxySettings, String>>;
+type ReadLogins = Box<dyn Fn() -> Option<Vec<SiteLogin>>>;
 
 /// The settings of one queue, in the "Filas" tab.
 struct QueueEditor {
@@ -352,8 +482,10 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
     row(&grid, 7, "Iniciar com a sessão", &session, Some("Abre o LDM na bandeja, sem janela, ao entrar no sistema."));
 
     let (queues_box, read_queues) = queues_page(window.upcast_ref(), settings.all_queues(), settings.new_queue_id());
+    let (network_box, read_proxy, read_logins) = network_page(&settings.proxy);
     let notebook = gtk::Notebook::new();
-    let pages: [(&gtk::Widget, &str); 2] = [(grid.upcast_ref(), "Geral"), (queues_box.upcast_ref(), "Filas")];
+    let pages: [(&gtk::Widget, &str); 3] =
+        [(grid.upcast_ref(), "Geral"), (queues_box.upcast_ref(), "Filas"), (network_box.upcast_ref(), "Rede")];
     for (page, title) in pages {
         page.set_margin_top(14);
         page.set_margin_bottom(6);
@@ -425,6 +557,15 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
                 return;
             }
         };
+        let proxy = match read_proxy() {
+            Ok(proxy) => proxy,
+            Err(message) => {
+                notebook.set_current_page(Some(Page::Network as u32));
+                show_error(Some(&w), "Confira o proxy", &message);
+                return;
+            }
+        };
+        let logins = read_logins();
         let mut new = Settings {
             download_dir: dir.borrow().clone(),
             category_folders: folders.is_active(),
@@ -437,6 +578,7 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
             schedule: settings.schedule.clone(),
             queues: Vec::new(),
             last_queue_id: settings.last_queue_id,
+            proxy,
         };
         for queue in queues {
             new.set_queue(queue);
@@ -450,7 +592,14 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
         button.set_sensitive(false);
         let (w, button) = (w.clone(), button.clone());
         glib::spawn_future_local(async move {
-            match ipc::call(Request::SetSettings { settings: new }).await {
+            let saved = match ipc::call(Request::SetSettings { settings: new }).await {
+                Ok(_) => match logins {
+                    Some(logins) => ipc::call(Request::SetLogins { logins }).await,
+                    None => Ok(ldm_ipc::Response::Ok),
+                },
+                Err(e) => Err(e),
+            };
+            match saved {
                 Ok(_) => w.close(),
                 Err(e) => {
                     show_error(Some(&w), "Não foi possível salvar", &e.to_string());

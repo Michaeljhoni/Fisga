@@ -64,7 +64,9 @@ pub async fn run(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel: 
         .args(["--print", "after_move:LDMFILE %(filepath)s"])
         .args(["--concurrent-fragments", "4"]);
     // Per yt-dlp process: with several site videos at once the total is higher.
-    let limit = manager.settings().speed_limit;
+    let settings = manager.settings();
+    apply_proxy(&mut command, &settings.proxy);
+    let limit = settings.speed_limit;
     if limit > 0 {
         command.args(["--limit-rate", &limit.to_string()]);
     }
@@ -83,6 +85,24 @@ pub async fn run(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel: 
         let _ = tokio::fs::remove_file(path).await;
     }
     result
+}
+
+/// The proxy setting for yt-dlp. A manual proxy goes in the environment, not
+/// in `--proxy`: the command line of a process is visible to other users,
+/// and the address may hold a password.
+fn apply_proxy(command: &mut Command, proxy: &ldm_ipc::ProxySettings) {
+    match proxy.for_ytdlp() {
+        None => {}
+        Some(url) if url.is_empty() => {
+            command.args(["--proxy", ""]);
+        }
+        Some(url) => {
+            for name in ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {
+                command.env(name, &url);
+            }
+            command.env_remove("no_proxy").env_remove("NO_PROXY");
+        }
+    }
 }
 
 /// Referer, user agent, cookies and the URL itself. Returns the cookies file to delete.
@@ -216,9 +236,10 @@ pub fn parse_probe(json: &serde_json::Value) -> PageProbe {
 }
 
 /// Asks yt-dlp what the URL is before the user confirms it.
-pub async fn probe(id: u64, request: &AddRequest) -> Result<PageProbe, String> {
+pub async fn probe(id: u64, request: &AddRequest, proxy: &ldm_ipc::ProxySettings) -> Result<PageProbe, String> {
     let mut command = Command::new("yt-dlp");
     command.args(["-J", "--flat-playlist", "--no-playlist", "--no-warnings", "--no-colors"]);
+    apply_proxy(&mut command, proxy);
     let cookies_file = add_request_options(&mut command, &format!("{id}-probe"), request);
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     let output = tokio::time::timeout(PROBE_TIMEOUT, command.output()).await;

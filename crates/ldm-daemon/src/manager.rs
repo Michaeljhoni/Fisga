@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{notify, ytdlp};
 
+mod network;
 mod refresh;
 mod scheduler;
 
@@ -94,7 +95,10 @@ struct StoredJob {
 pub struct Manager {
     inner: Mutex<Inner>,
     updates: broadcast::Sender<Response>,
-    client: reqwest::Client,
+    /// Rebuilt when the proxy changes (see network.rs).
+    client: Mutex<reqwest::Client>,
+    logins: Mutex<Vec<ldm_ipc::SiteLogin>>,
+    logins_path: PathBuf,
     store: PathBuf,
     dirty: AtomicBool,
     /// Never locked while `inner` is held: take a copy first.
@@ -191,10 +195,17 @@ impl Manager {
         let power_delay = std::env::var("LDM_POWER_DELAY").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
         let scheduler_path = scheduler::saved_path(&store);
         let saved = scheduler::load_saved(&scheduler_path);
+        let client = network::build_client(&settings.proxy).or_else(|e| {
+            tracing::warn!(error = %e, "proxy das configurações inválido; usando o do sistema");
+            ldm_core::build_client()
+        })?;
+        let logins_path = network::logins_path(&settings_path);
         Ok(Arc::new(Self {
             inner: Mutex::new(inner),
             updates: broadcast::channel(256).0,
-            client: ldm_core::build_client()?,
+            client: Mutex::new(client),
+            logins: Mutex::new(network::load_logins(&logins_path)),
+            logins_path,
             store,
             dirty: AtomicBool::new(false),
             limiter: Arc::new(ldm_core::RateLimiter::new(settings.speed_limit)),
@@ -219,8 +230,16 @@ impl Manager {
                 bail!("a pasta de downloads precisa ser um caminho absoluto");
             }
         }
-        write_json(&self.settings_path, &settings, 0o644)?;
         let old = self.settings();
+        // A new proxy needs a new client; a wrong one is refused before anything is saved.
+        let client = match settings.proxy != old.proxy {
+            true => Some(network::build_client(&settings.proxy)?),
+            false => None,
+        };
+        write_json(&self.settings_path, &settings, 0o644)?;
+        if let Some(client) = client {
+            self.set_client(client);
+        }
         let changed: Vec<u64> = settings
             .all_queues()
             .into_iter()
@@ -415,8 +434,8 @@ impl Manager {
         };
         let keep_name = request.file_name.is_some();
         if request.kind == SourceKind::Direct {
-            let spec = RequestSpec { url: request.url.clone(), headers: request_headers(&request) };
-            let result = ldm_core::probe(&self.client, &spec).await;
+            let spec = RequestSpec { url: request.url.clone(), headers: self.headers(&request) };
+            let result = ldm_core::probe(&self.client(), &spec).await;
             // A download waiting for a new address takes this one's link (see refresh.rs).
             if let Ok(probe) = &result {
                 if self.try_take_address(id, probe.total, &probe.file_name).await {
@@ -439,7 +458,7 @@ impl Manager {
             self.refresh_pending_dirs();
             return;
         }
-        let result = ytdlp::probe(id, &request).await;
+        let result = ytdlp::probe(id, &request, &self.settings().proxy).await;
         self.update(id, |info| {
             info.probing = false;
             match result {
@@ -684,7 +703,7 @@ impl Manager {
         path: Option<PathBuf>,
         cancel: CancellationToken,
     ) -> JobResult {
-        let spec = RequestSpec { url: request.url.clone(), headers: request_headers(request) };
+        let spec = RequestSpec { url: request.url.clone(), headers: self.headers(request) };
         let settings = self.settings();
         let target = match path {
             Some(path) => Target::File(path),
@@ -699,7 +718,8 @@ impl Manager {
             ..Default::default()
         };
         let (events_tx, mut events) = mpsc::unbounded_channel();
-        let download = ldm_core::download(&self.client, &spec, target, &opts, events_tx, cancel);
+        let client = self.client();
+        let download = ldm_core::download(&client, &spec, target, &opts, events_tx, cancel);
         tokio::pin!(download);
         loop {
             tokio::select! {

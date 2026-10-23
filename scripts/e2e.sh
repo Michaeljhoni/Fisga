@@ -203,6 +203,31 @@ test -z "$(state_of $((id + 1)))"; echo "the browser's download went to #$id ins
 cmp "$DL/26214400.bin" "$SANDBOX/reference/26214400.bin"; echo "content ok"
 "$BIN/ldm" settings --speed-limit 0 >/dev/null
 
+step "site login: a password-protected file"
+"$BIN/ldm" add "$BASE/private/files/9437184.bin" >/dev/null; id="$(last_id)"
+wait_state "$id" erro 30
+"$BIN/ldm" list | grep "401"
+echo "senha" | "$BIN/ldm" login add 127.0.0.1 teste
+"$BIN/ldm" login | grep "127.0.0.1 .* teste"
+if grep -q senha "$XDG_CONFIG_HOME/ldm/settings.json" "$HOME/.local/state/ldm/ldmd.log" 2>/dev/null; then
+  echo "the password leaked into the settings or the log"; exit 1
+fi
+test "$(stat -c %a "$XDG_CONFIG_HOME/ldm/logins.json")" = 600; echo "logins.json is private"
+"$BIN/ldm" resume "$id"
+wait_state "$id" concluído 60
+test "$(stat -c %s "$DL/9437184.bin")" -eq 9437184; echo "downloaded with the site login"
+"$BIN/ldm" login rm 127.0.0.1 | grep "nenhum login"
+
+step "proxy: downloads go through it"
+# The test server is also a proxy; this host does not exist, so only the proxy can serve it.
+"$BIN/ldm" settings --proxy "$BASE" | grep "proxy:.*127.0.0.1"
+"$BIN/ldm" add "http://ldm-proxy-test.invalid/files/8388608.bin" >/dev/null; id="$(last_id)"
+wait_state "$id" concluído 60
+test "$(stat -c %s "$DL/8388608.bin")" -eq 8388608; echo "downloaded through the proxy"
+if "$BIN/ldm" settings --proxy "ftp://proxy:21" 2>"$SANDBOX/err"; then echo "accepted an ftp proxy"; exit 1; fi
+grep "não suportado" "$SANDBOX/err"
+"$BIN/ldm" settings --proxy sistema | grep "proxy:.*sistema"
+
 step "native host: invalid message"
 host '{"type":"nope"}'
 

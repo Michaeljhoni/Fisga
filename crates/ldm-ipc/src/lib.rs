@@ -280,6 +280,121 @@ pub struct Settings {
     /// The highest queue id ever used: ids are never reused, so a download
     /// (or an open window) never ends up in a newer queue that took the id.
     pub last_queue_id: u64,
+    pub proxy: ProxySettings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyMode {
+    /// `http_proxy`/`https_proxy`/`all_proxy` from the environment, as before.
+    #[default]
+    System,
+    /// Straight to the sites, whatever the environment says.
+    None,
+    /// `ProxySettings::url`.
+    Manual,
+}
+
+/// The proxy for every download (the engine and yt-dlp).
+#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProxySettings {
+    pub mode: ProxyMode,
+    /// `http://host:3128`, `socks5://host:1080`, with an optional `user:password@`.
+    pub url: String,
+}
+
+/// Hides the password of `user:password@host`.
+fn redact_url(text: &str) -> String {
+    match url::Url::parse(text) {
+        Ok(mut url) if url.password().is_some() => {
+            let _ = url.set_password(Some("***"));
+            url.to_string()
+        }
+        _ => text.to_string(),
+    }
+}
+
+/// The settings are logged: the proxy password must not be.
+impl std::fmt::Debug for ProxySettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxySettings").field("mode", &self.mode).field("url", &redact_url(&self.url)).finish()
+    }
+}
+
+impl ProxySettings {
+    /// What is wrong with a manual proxy address, if anything.
+    pub fn check(&self) -> Result<(), String> {
+        if self.mode != ProxyMode::Manual {
+            return Ok(());
+        }
+        let url = url::Url::parse(self.url.trim())
+            .map_err(|_| format!("endereço de proxy inválido: {} (use http://host:porta ou socks5://host:porta)", redact_url(&self.url)))?;
+        if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h") {
+            return Err(format!("tipo de proxy não suportado: {} (use http, https, socks5 ou socks5h)", url.scheme()));
+        }
+        if url.host_str().map_or(true, str::is_empty) {
+            return Err("o endereço do proxy precisa de um host".into());
+        }
+        Ok(())
+    }
+
+    /// `--proxy` for yt-dlp (an empty value means no proxy); `None`: the environment's.
+    pub fn for_ytdlp(&self) -> Option<String> {
+        match self.mode {
+            ProxyMode::System => None,
+            ProxyMode::None => Some(String::new()),
+            ProxyMode::Manual => Some(self.url.trim().to_string()),
+        }
+    }
+
+    pub fn describe(&self) -> String {
+        match self.mode {
+            ProxyMode::System => "o do sistema (variáveis http_proxy/https_proxy)".into(),
+            ProxyMode::None => "nenhum".into(),
+            ProxyMode::Manual => redact_url(self.url.trim()),
+        }
+    }
+}
+
+/// IDM's "site logins": downloads from `host` (and its subdomains) send this
+/// user and password (HTTP Basic). Kept apart from the settings, in a file
+/// only the user can read.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SiteLogin {
+    pub host: String,
+    pub user: String,
+    pub password: String,
+}
+
+impl std::fmt::Debug for SiteLogin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SiteLogin").field("host", &self.host).field("user", &self.user).finish_non_exhaustive()
+    }
+}
+
+impl SiteLogin {
+    /// `https://Arquivos.Exemplo.com/pasta` → `arquivos.exemplo.com`; `*.exemplo.com` → `exemplo.com`.
+    pub fn normalize_host(text: &str) -> String {
+        let text = text.trim();
+        let host = match text.contains("://") {
+            true => url::Url::parse(text).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default(),
+            false => text.split(['/', ':']).next().unwrap_or_default().to_string(),
+        };
+        host.trim_start_matches("*.").trim_start_matches('.').to_ascii_lowercase()
+    }
+
+    pub fn matches(&self, host: &str) -> bool {
+        let host = host.to_ascii_lowercase();
+        !self.host.is_empty() && (host == self.host || host.ends_with(&format!(".{}", self.host)))
+    }
+
+    /// The login for `url`: the most specific host wins.
+    pub fn find<'a>(logins: &'a [SiteLogin], url: &str) -> Option<&'a SiteLogin> {
+        let host = url::Url::parse(url).ok()?.host_str()?.to_string();
+        logins.iter().filter(|login| login.matches(&host)).max_by_key(|login| login.host.len())
+    }
 }
 
 /// The main queue: always there, it cannot be removed or renamed.
@@ -328,6 +443,7 @@ impl Default for Settings {
             schedule: Schedule::default(),
             queues: Vec::new(),
             last_queue_id: MAIN_QUEUE,
+            proxy: ProxySettings::default(),
         }
     }
 }
@@ -691,6 +807,10 @@ pub enum Request {
     SetSettings { settings: Settings },
     /// Calls off the suspend/power off planned after a scheduled queue.
     CancelPower,
+    /// The site logins (`Response::Logins`). Not part of the settings: they are
+    /// never broadcast nor logged.
+    GetLogins,
+    SetLogins { logins: Vec<SiteLogin> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -705,6 +825,7 @@ pub enum Response {
     /// The planned suspend/power off changed (`None`: nothing planned). Sent to
     /// subscribers, and right after subscribing while one is planned.
     Power { plan: Option<PowerPlan> },
+    Logins { logins: Vec<SiteLogin> },
     Ok,
     Error { message: String },
 }
@@ -993,6 +1114,38 @@ mod tests {
         assert!(WhenDone::Poweroff > WhenDone::Suspend && WhenDone::Suspend > WhenDone::Nothing);
         let request: Request = serde_json::from_str(r#"{"type":"reorder","id":4,"direction":"top"}"#).unwrap();
         assert!(matches!(request, Request::Reorder { id: 4, direction: Direction::Top }));
+    }
+
+    #[test]
+    fn proxy_settings() {
+        let manual = |url: &str| ProxySettings { mode: ProxyMode::Manual, url: url.into() };
+        assert!(manual("http://proxy.local:3128").check().is_ok());
+        assert!(manual("socks5h://ana:senha@10.0.0.1:1080").check().is_ok());
+        assert!(manual("ftp://proxy:21").check().is_err());
+        assert!(manual("proxy.local:3128").check().is_err(), "needs the scheme");
+        assert!(ProxySettings { mode: ProxyMode::System, url: "lixo".into() }.check().is_ok(), "unused url");
+        let secret = manual("socks5://ana:senha@host:1080");
+        assert!(!format!("{secret:?}").contains("senha"), "{secret:?}");
+        assert!(!secret.describe().contains("senha"));
+        assert_eq!(secret.for_ytdlp().as_deref(), Some("socks5://ana:senha@host:1080"));
+        assert_eq!(ProxySettings { mode: ProxyMode::None, url: String::new() }.for_ytdlp().as_deref(), Some(""));
+        assert_eq!(ProxySettings::default().for_ytdlp(), None);
+        // settings.json written before the proxy existed still loads.
+        let settings: Settings = serde_json::from_str(r#"{"connections":4}"#).unwrap();
+        assert_eq!(settings.proxy.mode, ProxyMode::System);
+    }
+
+    #[test]
+    fn site_logins() {
+        assert_eq!(SiteLogin::normalize_host("https://Arquivos.Exemplo.com:8443/pasta"), "arquivos.exemplo.com");
+        assert_eq!(SiteLogin::normalize_host(" *.exemplo.com "), "exemplo.com");
+        assert_eq!(SiteLogin::normalize_host("exemplo.com/x"), "exemplo.com");
+        let login = |host: &str| SiteLogin { host: host.into(), user: "ana".into(), password: "segredo".into() };
+        let logins = [login("exemplo.com"), login("cdn.exemplo.com")];
+        assert_eq!(SiteLogin::find(&logins, "https://cdn.exemplo.com/a.iso").unwrap().host, "cdn.exemplo.com");
+        assert_eq!(SiteLogin::find(&logins, "https://www.EXEMPLO.com/a.iso").unwrap().host, "exemplo.com");
+        assert!(SiteLogin::find(&logins, "https://outroexemplo.com/a.iso").is_none());
+        assert!(!format!("{:?}", logins[0]).contains("segredo"));
     }
 
     #[test]

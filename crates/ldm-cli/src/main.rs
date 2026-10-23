@@ -8,8 +8,8 @@ use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use ldm_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
 use ldm_ipc::{
-    AddRequest, Conflict, Connection, Direction, DownloadInfo, Queue, Request, Response, Settings, State, TimeOfDay,
-    WhenDone, MAIN_QUEUE, WEEKDAYS,
+    AddRequest, Conflict, Connection, Direction, DownloadInfo, ProxyMode, ProxySettings, Queue, Request, Response,
+    Settings, SiteLogin, State, TimeOfDay, WhenDone, MAIN_QUEUE, WEEKDAYS,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -80,6 +80,20 @@ struct SettingsArgs {
     /// Ícone na bandeja (o ldm-gui continua rodando ao fechar a janela)
     #[arg(long)]
     tray: Option<bool>,
+    /// Proxy: "sistema" (variáveis http_proxy...), "nenhum", ou um endereço como
+    /// http://host:3128 ou socks5://usuário:senha@host:1080
+    #[arg(long)]
+    proxy: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum LoginCommand {
+    /// Lista os sites com login (sem as senhas)
+    List,
+    /// Guarda o usuário e a senha de um site; a senha é lida da entrada padrão
+    Add { host: String, user: String },
+    /// Esquece o login de um site
+    Rm { host: String },
 }
 
 #[derive(clap::Args)]
@@ -161,6 +175,11 @@ enum Command {
         /// Para de esperar o novo endereço
         #[arg(long)]
         cancel: bool,
+    },
+    /// Usuário e senha por site (autenticação HTTP dos links diretos)
+    Login {
+        #[command(subcommand)]
+        command: Option<LoginCommand>,
     },
     /// Mostra, cria, altera ou exclui filas
     Queue {
@@ -275,6 +294,7 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         Command::Queue { command } => queues(command.unwrap_or(QueueCommand::List)).await,
+        Command::Login { command } => logins(command.unwrap_or(LoginCommand::List)).await,
         Command::Move { id, queue_id, up, down, top, bottom } => {
             let direction = [(up, Direction::Up), (down, Direction::Down), (top, Direction::Top), (bottom, Direction::Bottom)]
                 .into_iter()
@@ -462,8 +482,16 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         speed_limit,
         watch_clipboard,
         tray,
+        proxy,
     } = args;
     let mut current = get_settings().await?;
+    if let Some(proxy) = &proxy {
+        current.proxy = match proxy.trim() {
+            "sistema" | "system" => ProxySettings { mode: ProxyMode::System, url: current.proxy.url.clone() },
+            "nenhum" | "none" | "" => ProxySettings { mode: ProxyMode::None, url: current.proxy.url.clone() },
+            url => ProxySettings { mode: ProxyMode::Manual, url: url.to_string() },
+        };
+    }
     let changed = dir.is_some()
         || category_folders.is_some()
         || max_parallel.is_some()
@@ -471,7 +499,8 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         || show_progress.is_some()
         || speed_limit.is_some()
         || watch_clipboard.is_some()
-        || tray.is_some();
+        || tray.is_some()
+        || proxy.is_some();
     if let Some(dir) = dir {
         current.download_dir = if dir.as_os_str() == "padrao" { None } else { Some(std::path::absolute(&dir)?) };
     }
@@ -498,6 +527,46 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
     println!("capturar links copiados: {}", if current.watch_clipboard { "sim" } else { "não" });
     println!("ícone na bandeja:        {}", if current.tray { "sim" } else { "não" });
     println!("agendador:               {}", schedule_summary(&current));
+    println!("proxy:                   {}", current.proxy.describe());
+    Ok(())
+}
+
+async fn logins(command: LoginCommand) -> anyhow::Result<()> {
+    ldm_ipc::ensure_daemon().await?;
+    let Response::Logins { mut logins } = ldm_ipc::call(&Request::GetLogins).await? else {
+        bail!("resposta inesperada do daemon");
+    };
+    match command {
+        LoginCommand::List => {}
+        LoginCommand::Add { host, user } => {
+            use std::io::{BufRead, IsTerminal};
+            if std::io::stdin().is_terminal() {
+                eprint!("Senha de {user} em {host} (aparece ao digitar): ");
+            }
+            let mut password = String::new();
+            std::io::stdin().lock().read_line(&mut password)?;
+            let password = password.trim_end_matches(['\r', '\n']).to_string();
+            logins.push(SiteLogin { host, user, password });
+        }
+        LoginCommand::Rm { host } => {
+            let host = SiteLogin::normalize_host(&host);
+            let before = logins.len();
+            logins.retain(|login| login.host != host);
+            if logins.len() == before {
+                bail!("nenhum login para {host}");
+            }
+        }
+    }
+    ldm_ipc::call(&Request::SetLogins { logins }).await?;
+    let Response::Logins { logins } = ldm_ipc::call(&Request::GetLogins).await? else {
+        bail!("resposta inesperada do daemon");
+    };
+    if logins.is_empty() {
+        println!("nenhum login por site");
+    }
+    for login in logins {
+        println!("{:<30} {}", login.host, login.user);
+    }
     Ok(())
 }
 

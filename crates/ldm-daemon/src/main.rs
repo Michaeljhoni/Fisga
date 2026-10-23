@@ -154,6 +154,8 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: UnixStream, 
             Request::GetSettings => Response::Settings { settings: manager.settings() },
             Request::SetSettings { settings } => result(manager.set_settings(settings)),
             Request::CancelPower => result(manager.cancel_power()),
+            Request::GetLogins => Response::Logins { logins: manager.logins() },
+            Request::SetLogins { logins } => result(manager.set_logins(logins)),
             Request::Shutdown => {
                 shutdown.cancel();
                 Response::Ok

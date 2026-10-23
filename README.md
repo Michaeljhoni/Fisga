@@ -112,6 +112,14 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
   dois casos o download continua de onde parou. O LDM confere o tamanho e recusa um link de outro
   arquivo. A captura funciona com links diretos de tamanho conhecido e com a extensão pedindo
   confirmação (o padrão).
+- **Rede** (aba *Rede* das Preferências):
+  - **Proxy**: *Do sistema* (as variáveis `http_proxy`/`https_proxy`, o padrão), *Sem proxy* ou
+    *Manual*, com `http://host:porta` ou `socks5://usuário:senha@host:porta`. Vale para todos os
+    downloads, inclusive os vídeos de sites (o yt-dlp recebe o proxy pelo ambiente, para a senha
+    não aparecer na lista de processos).
+  - **Logins por site** (os *Site logins* do IDM): usuário e senha enviados aos links diretos de
+    um site e dos subdomínios dele (autenticação HTTP). Ficam em `~/.config/ldm/logins.json`,
+    legível só pelo seu usuário, nunca no `settings.json` nem no log.
 - **Agendador** (por fila, como o *Scheduler* do IDM): a fila só roda das HH:MM às HH:MM nos
   dias escolhidos. Fora desse horário os downloads ficam *na fila*; *Baixar agora* e retomar um
   download à mão começam na hora mesmo assim. No horário de parada, os downloads da fila voltam
@@ -188,6 +196,10 @@ ldm move 7 --top                                 # primeiro da fila (--up, --dow
 ldm queue rm 1                                   # exclui (os downloads vão para a principal)
 ldm refresh 7 https://exemplo.com/novo-link      # link expirado: novo endereço do mesmo arquivo
 ldm refresh 7 --capture                          # usa o próximo link do mesmo arquivo vindo do navegador
+ldm settings --proxy socks5://127.0.0.1:1080     # ou http://host:3128, "nenhum", "sistema"
+ldm login add arquivos.exemplo.com ana           # pede a senha (lida da entrada padrão)
+ldm login                                        # lista os sites com login (sem as senhas)
+ldm login rm arquivos.exemplo.com
 ```
 
 ## Desenvolvimento

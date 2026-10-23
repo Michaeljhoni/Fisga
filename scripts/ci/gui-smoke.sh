@@ -120,6 +120,9 @@ shot 5-preferencias
 xdotool windowfocus --sync "$prefs" key ctrl+Page_Down
 sleep 1
 shot 5b-filas
+xdotool windowfocus --sync "$prefs" key ctrl+Page_Down
+sleep 1
+shot 5c-rede
 xdotool windowfocus --sync "$prefs" key Escape || true
 
 echo "== background mode (session autostart): no window, but it answers the browser"

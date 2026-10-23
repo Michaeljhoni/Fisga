@@ -15,7 +15,7 @@ use anyhow::{bail, Context};
 use ldm_core::RequestSpec;
 use ldm_ipc::{AddRequest, DownloadInfo, Response, SourceKind, State};
 
-use super::{request_headers, Manager};
+use super::Manager;
 use crate::notify;
 
 /// The new link may come with another ETag (another CDN node, a new
@@ -54,8 +54,8 @@ impl Manager {
         can_refresh(&info)?;
         let request = AddRequest { url, ..request };
         if request.kind == SourceKind::Direct {
-            let spec = RequestSpec { url: request.url.clone(), headers: request_headers(&request) };
-            let probe = ldm_core::probe(&self.client, &spec).await.context("o novo endereço não respondeu")?;
+            let spec = RequestSpec { url: request.url.clone(), headers: self.headers(&request) };
+            let probe = ldm_core::probe(&self.client(), &spec).await.context("o novo endereço não respondeu")?;
             match (info.total, probe.total) {
                 (Some(old), Some(new)) if old != new => {
                     bail!("o novo endereço é de outro arquivo: {new} bytes em vez de {old}")

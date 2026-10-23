@@ -117,6 +117,20 @@ Dados no Linux:
   - `DownloadInfo.page` (página ou referer) alimenta o botão "Abrir a página".
   - O `range_server` ignora a query string, para os testes simularem links novos.
 
+- **Proxy e logins por site** (pacote 3, `manager/network.rs`):
+  - `Settings.proxy: ProxySettings { mode: System|None|Manual, url }`. O cliente do `reqwest`
+    fica num `Mutex` e é recriado em `set_settings` quando o proxy muda; um proxy inválido é
+    recusado antes de salvar. `ldm_core::build_client_with(Proxy::...)`.
+  - O yt-dlp recebe o proxy manual pelas variáveis `*_proxy` (não pelo `--proxy`, para a senha
+    não aparecer no `/proc/<pid>/cmdline`); "sem proxy" é `--proxy ""`.
+  - `SiteLogin { host, user, password }` em `~/.config/ldm/logins.json` (0600), pedidos
+    `GetLogins`/`SetLogins`, nunca no `Settings` (que é logado e transmitido). `Manager::headers`
+    acrescenta `Authorization: Basic` aos links diretos do host e dos subdomínios (o mais
+    específico vence), a não ser que o navegador já tenha mandado um `Authorization`. O
+    `Debug` de `ProxySettings` e de `SiteLogin` esconde as senhas.
+  - Não vale para o yt-dlp (o login de sites de vídeo é outro assunto: cookies do navegador).
+  - O `range_server` também é um proxy HTTP e tem `/private/files/...` com senha `teste:senha`.
+
 **Extensão**
 - Botão sobre os players, menu de contexto e detecção de streams.
 - Usa a URL atual do frame (`frameUrlOf`). Isso corrigiu o bug de baixar o vídeo recomendado em
@@ -228,8 +242,8 @@ pronto; peça ao dono para testar: pausar um download, clique direito → Atuali
 Capturar do navegador, clicar no link de novo na página, e ver o download continuar.
 
 ### Pacote 3: rede e casos especiais
-- ~~Atualizar o endereço~~ (feito; falta o dono testar num site de verdade com link expirado).
-- **Proxy** HTTP/SOCKS (o `reqwest` já suporta) e **login por site**.
+- ~~Atualizar o endereço~~ (feito e testado no Arch).
+- ~~Proxy HTTP/SOCKS e login por site~~ (feito; falta o dono testar com um proxy de verdade).
 - **Limite de velocidade por download** (hoje só existe o global).
 - **Download em lote**: uma lista de URLs, ou um padrão `arquivo_*.zip` com intervalo.
 - HLS/DASH sem yt-dlp, e FTP.

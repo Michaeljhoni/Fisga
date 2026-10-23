@@ -77,13 +77,33 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub const DEFAULT_USER_AGENT: &str = concat!("ldm/", env!("CARGO_PKG_VERSION"));
 
-/// Builds the HTTP client shared by all downloads. Per-download headers come from
-/// [`RequestSpec`].
+/// The proxy the HTTP client goes through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Proxy<'a> {
+    /// `http_proxy`, `https_proxy`, `all_proxy` and `no_proxy` from the environment.
+    System,
+    /// None, whatever the environment says.
+    Direct,
+    /// `http://host:port`, `socks5://user:password@host:port`, `socks5h://...`.
+    Url(&'a str),
+}
+
+/// Builds the HTTP client shared by all downloads, with the system's proxy.
+/// Per-download headers come from [`RequestSpec`].
 pub fn build_client() -> Result<reqwest::Client> {
-    Ok(reqwest::Client::builder()
+    build_client_with(Proxy::System)
+}
+
+pub fn build_client_with(proxy: Proxy) -> Result<reqwest::Client> {
+    let builder = reqwest::Client::builder()
         .user_agent(DEFAULT_USER_AGENT)
         .redirect(reqwest::redirect::Policy::limited(10))
         .connect_timeout(Duration::from_secs(20))
-        .pool_max_idle_per_host(16)
-        .build()?)
+        .pool_max_idle_per_host(16);
+    let builder = match proxy {
+        Proxy::System => builder,
+        Proxy::Direct => builder.no_proxy(),
+        Proxy::Url(url) => builder.proxy(reqwest::Proxy::all(url)?),
+    };
+    Ok(builder.build()?)
 }

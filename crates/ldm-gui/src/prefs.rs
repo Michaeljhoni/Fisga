@@ -483,9 +483,40 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
 
     let (queues_box, read_queues) = queues_page(window.upcast_ref(), settings.all_queues(), settings.new_queue_id());
     let (network_box, read_proxy, read_logins) = network_page(&settings.proxy);
+
+    // "Ao concluir".
+    let done = &settings.on_complete;
+    let sound = gtk::Switch::builder().active(done.sound).build();
+    let antivirus = gtk::Switch::builder().active(done.antivirus).build();
+    let command = gtk::Entry::builder()
+        .text(&done.command)
+        .placeholder_text("mv \"$LDM_FILE\" ~/Concluídos/")
+        .width_chars(30)
+        .build();
+    let done_grid = gtk::Grid::builder().column_spacing(18).row_spacing(14).build();
+    row(&done_grid, 0, "Tocar um som", &sound, Some("O som de \u{201c}concluído\u{201d} do sistema."));
+    row(
+        &done_grid,
+        1,
+        "Verificar com o antivírus",
+        &antivirus,
+        Some("Usa o ClamAV (pacote clamav). Se achar um vírus, avisa, marca o download e não roda o comando abaixo."),
+    );
+    row(
+        &done_grid,
+        2,
+        "Rodar um comando",
+        &command,
+        Some("No shell, com o arquivo em $LDM_FILE (e $LDM_NAME, $LDM_URL, $LDM_DIR). Use as variáveis entre aspas. Vazio = nada."),
+    );
+
     let notebook = gtk::Notebook::new();
-    let pages: [(&gtk::Widget, &str); 3] =
-        [(grid.upcast_ref(), "Geral"), (queues_box.upcast_ref(), "Filas"), (network_box.upcast_ref(), "Rede")];
+    let pages: [(&gtk::Widget, &str); 4] = [
+        (grid.upcast_ref(), "Geral"),
+        (queues_box.upcast_ref(), "Filas"),
+        (network_box.upcast_ref(), "Rede"),
+        (done_grid.upcast_ref(), "Ao concluir"),
+    ];
     for (page, title) in pages {
         page.set_margin_top(14);
         page.set_margin_bottom(6);
@@ -567,6 +598,11 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
             }
         };
         let logins = read_logins();
+        let on_complete = ldm_ipc::OnComplete {
+            sound: sound.is_active(),
+            antivirus: antivirus.is_active(),
+            command: command.text().trim().to_string(),
+        };
         let mut new = Settings {
             download_dir: dir.borrow().clone(),
             category_folders: folders.is_active(),
@@ -581,6 +617,7 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
             last_queue_id: settings.last_queue_id,
             proxy,
             hidden_columns: settings.hidden_columns.clone(),
+            on_complete,
         };
         for queue in queues {
             new.set_queue(queue);

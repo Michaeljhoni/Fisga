@@ -283,6 +283,27 @@ pub struct Settings {
     pub proxy: ProxySettings,
     /// Columns of the main window's list the user hid ("size", "added"...).
     pub hidden_columns: Vec<String>,
+    pub on_complete: OnComplete,
+}
+
+/// What happens when a download finishes, in this order: the antivirus
+/// (an infected file stops here), the user's command, the sound.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct OnComplete {
+    /// The desktop's "complete" sound.
+    pub sound: bool,
+    /// Scan the file with ClamAV (`clamdscan`, else `clamscan`).
+    pub antivirus: bool,
+    /// Run in `sh -c`, with the file in `$LDM_FILE` (and `$LDM_NAME`,
+    /// `$LDM_URL`, `$LDM_DIR`); empty = nothing.
+    pub command: String,
+}
+
+impl Default for OnComplete {
+    fn default() -> Self {
+        Self { sound: true, antivirus: false, command: String::new() }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -473,6 +494,7 @@ impl Default for Settings {
             last_queue_id: MAIN_QUEUE,
             proxy: ProxySettings::default(),
             hidden_columns: vec!["added".into()],
+            on_complete: OnComplete::default(),
         }
     }
 }

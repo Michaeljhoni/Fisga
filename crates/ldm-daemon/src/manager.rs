@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{notify, ytdlp};
 
+mod complete;
 mod network;
 mod refresh;
 mod scheduler;
@@ -117,6 +118,10 @@ pub struct Manager {
     power_delay: Duration,
     /// `$LDM_POWER_CMD` replaces `systemctl` (tests); it gets "suspend" or "poweroff".
     power_command: Option<String>,
+    /// `$LDM_CLAMSCAN_CMD` replaces ClamAV (tests); it gets the file as "$1".
+    scan_command: Option<String>,
+    /// `$LDM_SOUND_CMD` replaces the sound player (tests).
+    sound_command: Option<String>,
 }
 
 /// Where a download of `category` goes when the user did not pick a folder.
@@ -228,6 +233,8 @@ impl Manager {
             power: Mutex::new(None),
             power_delay: Duration::from_secs(power_delay),
             power_command: std::env::var("LDM_POWER_CMD").ok().filter(|c| !c.is_empty()),
+            scan_command: std::env::var("LDM_CLAMSCAN_CMD").ok().filter(|c| !c.is_empty()),
+            sound_command: std::env::var("LDM_SOUND_CMD").ok().filter(|c| !c.is_empty()),
         }))
     }
 
@@ -881,6 +888,9 @@ impl Manager {
                 }
             }
         });
+        if let JobResult::Completed(path) = &result {
+            tokio::spawn(self.clone().after_complete(id, path.clone()));
+        }
         if let Some((summary, body)) = message {
             notify::send(&summary, &body);
         }

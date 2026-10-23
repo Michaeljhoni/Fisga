@@ -85,6 +85,15 @@ struct SettingsArgs {
     /// socks5://usuário:senha@host:1080, sem deixá-la no histórico do shell)
     #[arg(long)]
     proxy: Option<String>,
+    /// Tocar um som ao concluir um download
+    #[arg(long)]
+    sound: Option<bool>,
+    /// Verificar cada download concluído com o ClamAV
+    #[arg(long)]
+    antivirus: Option<bool>,
+    /// Comando a rodar ao concluir (no shell, com o arquivo em "$LDM_FILE"; "" = nenhum)
+    #[arg(long)]
+    on_complete: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -581,6 +590,9 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         watch_clipboard,
         tray,
         proxy,
+        sound,
+        antivirus,
+        on_complete,
     } = args;
     let mut current = get_settings().await?;
     if let Some(proxy) = &proxy {
@@ -602,7 +614,15 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         || speed_limit.is_some()
         || watch_clipboard.is_some()
         || tray.is_some()
-        || proxy.is_some();
+        || proxy.is_some()
+        || sound.is_some()
+        || antivirus.is_some()
+        || on_complete.is_some();
+    current.on_complete.sound = sound.unwrap_or(current.on_complete.sound);
+    current.on_complete.antivirus = antivirus.unwrap_or(current.on_complete.antivirus);
+    if let Some(command) = on_complete {
+        current.on_complete.command = command.trim().to_string();
+    }
     if let Some(dir) = dir {
         current.download_dir = if dir.as_os_str() == "padrao" { None } else { Some(std::path::absolute(&dir)?) };
     }
@@ -630,6 +650,13 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
     println!("ícone na bandeja:        {}", if current.tray { "sim" } else { "não" });
     println!("agendador:               {}", schedule_summary(&current));
     println!("proxy:                   {}", current.proxy.describe());
+    let done = &current.on_complete;
+    println!("ao concluir, som:        {}", if done.sound { "sim" } else { "não" });
+    println!("ao concluir, antivírus:  {}", if done.antivirus { "sim (ClamAV)" } else { "não" });
+    match done.command.as_str() {
+        "" => println!("ao concluir, comando:    nenhum"),
+        command => println!("ao concluir, comando:    {command}"),
+    }
     Ok(())
 }
 

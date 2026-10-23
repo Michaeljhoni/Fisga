@@ -137,6 +137,14 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
     em `~/.config/ldm/logins.json`, legível só pelo seu usuário, nunca no log.
   - Trocar o proxy vale para os downloads que começarem depois; os que estão baixando continuam
     pelo caminho antigo até serem pausados e retomados.
+- **Ao concluir** (aba *Ao concluir* das Preferências), nesta ordem:
+  - **Verificar com o antivírus**: o ClamAV (`clamdscan`, ou `clamscan` sem o serviço). Se achar
+    um vírus, avisa, marca o download ("Concluído — atenção: ...") e não roda o comando.
+  - **Rodar um comando**, no shell, com o arquivo em `$LDM_FILE` (e `$LDM_NAME`, `$LDM_URL`,
+    `$LDM_DIR`), por exemplo `mv "$LDM_FILE" ~/Concluídos/`. O nome do arquivo nunca entra no
+    texto do comando, só nas variáveis: use-as entre aspas.
+  - **Tocar um som** (ligado por padrão): o "concluído" do tema de sons, com `canberra-gtk-play`,
+    `paplay` ou `pw-play`.
 - **Agendador** (por fila, como o *Scheduler* do IDM): a fila só roda das HH:MM às HH:MM nos
   dias escolhidos. Fora desse horário os downloads ficam *na fila*; *Baixar agora* e retomar um
   download à mão começam na hora mesmo assim. No horário de parada, os downloads da fila voltam
@@ -203,6 +211,8 @@ ldm batch 'https://site/aula_*.mp4' --from 01 --to 20   # em lote: aula_01.mp4 .
 ldm batch --file links.txt -Q 1 --paused         # uma lista de links ("-" = entrada padrão)
 ldm batch 'https://site/parte-*.rar' --from a --to f --dry-run   # só mostra os endereços
 ldm export --unfinished > pendentes.txt          # os endereços da lista (importe com ldm batch --file)
+ldm settings --antivirus true --sound false      # ao concluir: ClamAV sim, som não
+ldm settings --on-complete 'mv "$LDM_FILE" ~/Concluídos/'   # comando ao concluir ("" = nenhum)
 ldm settings --watch-clipboard false             # não abrir a janela para links copiados
 ldm settings --tray false                        # sem ícone na bandeja
 ldm schedule --on --start 02:00 --stop 08:00     # a fila só roda de madrugada

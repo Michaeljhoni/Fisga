@@ -266,8 +266,11 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   Delete e Ctrl+C da janela ficam desligados), `window::COLUMNS` com ações `win.column-<id>` e
   `Settings.hidden_columns`, coluna "Adicionado em" (`format::added`). Exportar = os endereços
   da vista atual num `.txt`; importar abre esse texto na janela de lote. CLI: `ldm export`.
-- Som ao concluir, mover ou abrir o arquivo automaticamente ao concluir.
-- Verificação com ClamAV ao terminar.
+- ~~Som, comando e ClamAV ao concluir~~ (feito, `manager/complete.rs`, `Settings.on_complete`):
+  `after_complete` roda depois de `finish` (também para os vídeos do yt-dlp): ClamAV (infectado
+  = `info.error` num download concluído, e para aí), o comando do usuário em `sh -c` com
+  `$LDM_FILE`... no ambiente (nunca no texto), e o som. Nos testes, `LDM_CLAMSCAN_CMD` e
+  `LDM_SOUND_CMD` trocam o ClamAV e o tocador.
 - **Grabber**: baixar arquivos de um site com filtros.
 - Pacotes: AUR (prioridade, pois o dono usa Arch), Flatpak, .deb e .rpm.
 

@@ -158,6 +158,8 @@ pub fn status(info: &DownloadInfo) -> String {
     }
     let status: String = match (&info.error, info.state) {
         (Some(error), State::Failed) => return format!("Erro: {error}"),
+        // Finished, but the antivirus flagged it.
+        (Some(warning), State::Completed) => return format!("Concluído \u{2014} atenção: {warning}"),
         (_, State::Running) if info.connections > 1 => format!("Baixando ({} conexões)", info.connections),
         (_, state) => state_label(state).into(),
     };
@@ -330,6 +332,9 @@ mod tests {
         assert_eq!(status(&failed), "Erro: HTTP 404");
         failed.awaiting_url = true;
         assert_eq!(status(&failed), "Aguardando novo endereço");
+        let mut flagged = info(State::Completed, 0, None, 0.0);
+        flagged.error = Some("o ClamAV encontrou Eicar".into());
+        assert_eq!(status(&flagged), "Concluído \u{2014} atenção: o ClamAV encontrou Eicar");
         let mut limited = info(State::Paused, 0, None, 0.0);
         limited.speed_limit = 512 * 1024;
         assert_eq!(status(&limited), "Pausado · máx. 512,0 KB/s");

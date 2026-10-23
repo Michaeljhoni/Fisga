@@ -15,6 +15,9 @@ export LDM_CLIPBOARD_CMD="tail -n 0 -F '$SANDBOX/clipboard'"
 touch "$SANDBOX/clipboard"
 # Scheduler: check the clock often, and record "suspend"/"poweroff" instead of running systemctl.
 export LDM_SCHEDULER_TICK_MS=500 LDM_POWER_DELAY=1 LDM_POWER_CMD="echo >> '$SANDBOX/power'"
+# On complete: a stand-in ClamAV that finds a "virus" in 2621441.bin, and a sound that leaves a mark.
+export LDM_CLAMSCAN_CMD='f() { case "$1" in *2621441*) echo "$1: Eicar-Test FOUND"; exit 1;; esac; }; f'
+export LDM_SOUND_CMD="echo som >> '$SANDBOX/som'"
 mkdir -p "$HOME/Downloads" "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME"
 # .bin files belong to the "Programas" category, saved in its own subfolder.
 DL="$HOME/Downloads/Programas"
@@ -287,6 +290,20 @@ test "$(state_of "$last")" = pausado; test "$(state_of $((last - 1)))" = pausado
 test "$("$BIN/ldm" batch --file "$SANDBOX/exportado.txt" --dry-run | wc -l)" -eq "$(sort -u "$SANDBOX/exportado.txt" | wc -l)"
 echo "the exported list reads back as a batch"
 "$BIN/ldm" rm "$last"; "$BIN/ldm" rm $((last - 1))
+
+step "on complete: antivirus, the user's command, the sound"
+"$BIN/ldm" settings --antivirus true --on-complete "printf '%s\n' \"\$LDM_FILE\" >> '$SANDBOX/feito'" | grep "antivírus:  sim"
+rm -f "$SANDBOX/som"
+"$BIN/ldm" add "$BASE/files/1966080.bin" --wait >/dev/null
+for _ in $(seq 1 30); do [ -s "$SANDBOX/som" ] && break; sleep 0.2; done
+grep -qx "$HOME/Downloads/1966080.bin" "$SANDBOX/feito"; grep -q som "$SANDBOX/som"; echo "clean file: command got its path, sound played"
+"$BIN/ldm" add "$BASE/files/2621441.bin" --wait >/dev/null
+id="$(last_id)"
+for _ in $(seq 1 30); do "$BIN/ldm" list | grep -q "ClamAV encontrou" && break; sleep 0.2; done
+"$BIN/ldm" list | grep "ClamAV encontrou Eicar-Test"
+if grep -q 2621441 "$SANDBOX/feito"; then echo "the command ran on an infected file"; exit 1; fi
+echo "infected file flagged, command skipped"
+"$BIN/ldm" settings --antivirus false --on-complete "" | grep "comando:    nenhum"
 
 step "list"
 "$BIN/ldm" list

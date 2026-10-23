@@ -1,7 +1,8 @@
 //! "Novo download" window, shown for every pending download (IDM's "Download
-//! File Info"): name, size and destination folder, the quality of a site
-//! video, what to do when the file already exists, with "Baixar agora",
-//! "Adicionar à fila" and "Cancelar". Closing the window cancels.
+//! File Info"): name, size and destination folder, the queue (when there is
+//! more than one), the quality of a site video, what to do when the file
+//! already exists, with "Baixar agora", "Adicionar à fila" and "Cancelar".
+//! Closing the window cancels.
 //!
 //! The title is always exactly `Novo download`, so compositors can match it
 //! (niri: `window-rule { match app-id="io.ldm.Ldm" title="^Novo download$" ... }`).
@@ -12,7 +13,7 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib, pango};
-use ldm_ipc::{Category, Conflict, DownloadInfo, Existing, MediaFormat, Request, SourceKind};
+use ldm_ipc::{Category, Conflict, DownloadInfo, Existing, MediaFormat, Queue, Request, SourceKind};
 
 use crate::format;
 use crate::ipc;
@@ -31,6 +32,9 @@ pub struct ConfirmDialog {
     formats: RefCell<Vec<MediaFormat>>,
     quality: gtk::DropDown,
     quality_caption: gtk::Label,
+    /// The queue, with the ids of its entries; hidden with only the main queue.
+    queue: gtk::DropDown,
+    queue_ids: Vec<u64>,
     /// "Já existe": shown when the destination file is already there.
     exists_caption: gtk::Label,
     exists_box: gtk::Box,
@@ -84,6 +88,7 @@ impl ConfirmDialog {
         parent: Option<&gtk::ApplicationWindow>,
         info: &DownloadInfo,
         category_folders: bool,
+        queues: Vec<Queue>,
     ) -> Rc<Self> {
         let window = gtk::Window::builder()
             .application(app)
@@ -127,12 +132,20 @@ impl ConfirmDialog {
         let exists_caption = caption("Já existe");
         exists_caption.set_visible(false);
         exists_caption.set_valign(gtk::Align::Start);
+        let names: Vec<&str> = queues.iter().map(|q| q.name.as_str()).collect();
+        let queue_choice = gtk::DropDown::from_strings(&names);
+        queue_choice.set_halign(gtk::Align::Start);
+        queue_choice.set_selected(queues.iter().position(|q| q.id == info.queue).unwrap_or(0) as u32);
+        let queue_caption = caption("Fila");
+        queue_choice.set_visible(queues.len() > 1);
+        queue_caption.set_visible(queues.len() > 1);
 
         let grid = gtk::Grid::builder().column_spacing(12).row_spacing(10).build();
         for (row, (label, widget)) in [
             (caption("Endereço"), url.upcast_ref::<gtk::Widget>()),
             (caption("Salvar como"), name.upcast_ref()),
             (caption("Pasta"), dir_row.upcast_ref()),
+            (queue_caption, queue_choice.upcast_ref()),
             (quality_caption.clone(), quality.upcast_ref()),
             (caption("Tamanho"), size.upcast_ref()),
             (exists_caption.clone(), exists_box.upcast_ref()),
@@ -181,6 +194,8 @@ impl ConfirmDialog {
             formats: RefCell::default(),
             quality,
             quality_caption,
+            queue: queue_choice,
+            queue_ids: queues.iter().map(|q| q.id).collect(),
             exists_caption,
             exists_box,
             exists_label,
@@ -446,6 +461,7 @@ impl ConfirmDialog {
         }
         self.name.set_sensitive(!busy);
         self.quality.set_sensitive(!busy);
+        self.queue.set_sensitive(!busy);
         self.exists_choice.set_sensitive(!busy);
     }
 
@@ -455,7 +471,8 @@ impl ConfirmDialog {
         // The first quality is the best one, which yt-dlp picks by itself.
         let format = self.selected_format().filter(|_| self.quality.selected() > 0).map(|f| f.key);
         let conflict = self.conflict();
-        let request = Request::Confirm { id: self.id, now, file_name, output_dir, format, conflict };
+        let queue = self.queue_ids.get(self.queue.selected() as usize).copied().filter(|_| self.queue.is_visible());
+        let request = Request::Confirm { id: self.id, now, file_name, output_dir, format, conflict, queue };
         self.set_busy(true);
         self.error.set_visible(false);
         let this = self.clone();

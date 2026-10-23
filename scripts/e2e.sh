@@ -156,6 +156,29 @@ for _ in $(seq 1 40); do [ -s "$SANDBOX/power" ] && break; sleep 0.5; done
 test "$(cat "$SANDBOX/power")" = suspend; echo "queue done: suspend requested"
 "$BIN/ldm" schedule --off | grep "desligado"
 
+step "queues: one at a time in a second queue, its order, and removing it"
+"$BIN/ldm" settings --speed-limit 4096 >/dev/null   # 4 MiB/s: slow enough to watch the queue
+"$BIN/ldm" queue add Noite --max-parallel 1 | grep "Noite"
+q="$("$BIN/ldm" queue list | awk '$2 == "Noite" { print $1 }')"
+"$BIN/ldm" add "$BASE/files/20971520.bin" -Q "$q" >/dev/null; a="$(last_id)"
+"$BIN/ldm" add "$BASE/files/15728640.bin" -Q "$q" >/dev/null; b="$(last_id)"
+"$BIN/ldm" add "$BASE/files/12582912.bin" -Q "$q" >/dev/null; c="$(last_id)"
+sleep 1
+"$BIN/ldm" list | grep "\[Noite\]"
+test "$(state_of "$a")" = baixando; test "$(state_of "$b")" = na; test "$(state_of "$c")" = na
+echo "one at a time in queue #$q"
+"$BIN/ldm" move "$c" --top
+wait_state "$a" concluído 60
+sleep 1
+test "$(state_of "$c")" = baixando; test "$(state_of "$b")" = na; echo "moved to the top: #$c went before #$b"
+"$BIN/ldm" queue rm "$q" >/dev/null
+if "$BIN/ldm" queue list | grep -q Noite; then echo "queue still there"; exit 1; fi
+# #b is back in the main queue, which has free slots.
+wait_state "$b" baixando 10
+wait_state "$c" concluído 60
+wait_state "$b" concluído 60
+"$BIN/ldm" settings --speed-limit 0 >/dev/null
+
 step "native host: invalid message"
 host '{"type":"nope"}'
 

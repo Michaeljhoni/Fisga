@@ -189,6 +189,8 @@ mod tests {
             probing: false,
             category: Category::Other,
             formats: Vec::new(),
+            queue: 0,
+            order: 1,
         }
     }
 

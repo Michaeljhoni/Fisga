@@ -1,6 +1,6 @@
-//! Download list, queue and job lifecycle.
+//! Download list, queues and job lifecycle.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -9,7 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context};
 use ldm_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
 use ldm_ipc::{
-    AddRequest, Category, Conflict, DownloadInfo, LocalTime, PowerPlan, Response, Settings, SourceKind, State,
+    AddRequest, Category, Conflict, Direction, DownloadInfo, LocalTime, PowerPlan, Response, Settings, SourceKind,
+    State, MAIN_QUEUE,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
@@ -31,6 +32,8 @@ pub struct Answer {
     /// A `MediaFormat::key` (quality of a site video).
     pub format: Option<String>,
     pub conflict: Option<Conflict>,
+    /// Another queue (a `Queue::id`).
+    pub queue: Option<u64>,
 }
 
 pub enum JobResult {
@@ -43,7 +46,7 @@ struct Job {
     info: DownloadInfo,
     request: AddRequest,
     cancel: Option<CancellationToken>,
-    /// "Baixar agora": start even when `max_parallel` downloads are running.
+    /// "Baixar agora": start even when its queue is full or outside its hours.
     forced: bool,
     /// The folder follows the category (no folder was chosen by the user), so it
     /// changes while the name of a pending download is still being found out.
@@ -64,6 +67,15 @@ impl Job {
 struct Inner {
     next_id: u64,
     jobs: BTreeMap<u64, Job>,
+}
+
+impl Inner {
+    /// A position after every download (new ones and ones moved to another
+    /// queue go to its end), never equal to an existing one.
+    fn next_order(&self) -> i64 {
+        let last = self.jobs.values().map(|j| j.info.order).max().unwrap_or(0);
+        (last + 1).max(self.next_id as i64)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -90,7 +102,7 @@ pub struct Manager {
     /// Speed limit shared by every direct download.
     limiter: Arc<ldm_core::RateLimiter>,
     /// Never locked while `inner` is held.
-    scheduler: Mutex<scheduler::State>,
+    scheduler: Mutex<scheduler::Scheduler>,
     scheduler_path: PathBuf,
     power: Mutex<Option<PowerPlan>>,
     /// Time to cancel a planned suspend/power off (`$LDM_POWER_DELAY`, seconds).
@@ -159,10 +171,19 @@ impl Manager {
                 if info.category == Category::Other {
                     info.category = Category::detect(&info.name, info.kind);
                 }
+                // Saved before queues existed: the order is the order of arrival.
+                if info.order == 0 {
+                    info.order = info.id as i64;
+                }
                 inner.jobs.insert(info.id, Job::new(info, request, false));
             }
         }
         let settings = load_settings(&settings_path);
+        for job in inner.jobs.values_mut() {
+            if settings.queue(job.info.queue).is_none() {
+                job.info.queue = MAIN_QUEUE;
+            }
+        }
         let power_delay = std::env::var("LDM_POWER_DELAY").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
         let scheduler_path = scheduler::saved_path(&store);
         let saved = scheduler::load_saved(&scheduler_path);
@@ -173,7 +194,7 @@ impl Manager {
             store,
             dirty: AtomicBool::new(false),
             limiter: Arc::new(ldm_core::RateLimiter::new(settings.speed_limit)),
-            scheduler: Mutex::new(scheduler::State::new(&settings.schedule, LocalTime::now(), saved)),
+            scheduler: Mutex::new(scheduler::Scheduler::new(&settings, LocalTime::now(), saved)),
             scheduler_path,
             settings: Mutex::new(settings),
             settings_path,
@@ -195,13 +216,100 @@ impl Manager {
             }
         }
         write_json(&self.settings_path, &settings, 0o644)?;
-        let schedule_changed = self.settings().schedule != settings.schedule;
+        let old = self.settings();
+        let changed: Vec<u64> = settings
+            .all_queues()
+            .into_iter()
+            .filter(|queue| old.queue(queue.id).map(|q| q.schedule) != Some(queue.schedule.clone()))
+            .map(|queue| queue.id)
+            .collect();
         *self.settings.lock().unwrap() = settings.clone();
         self.limiter.set_rate(settings.speed_limit);
         tracing::info!(?settings, "configurações alteradas");
-        let _ = self.updates.send(Response::Settings { settings });
+        let _ = self.updates.send(Response::Settings { settings: settings.clone() });
+        // Downloads of a removed queue go to the main one.
+        {
+            let mut inner = self.inner.lock().unwrap();
+            for job in inner.jobs.values_mut().filter(|j| settings.queue(j.info.queue).is_none()) {
+                job.info.queue = MAIN_QUEUE;
+                let _ = self.updates.send(Response::Update { item: job.info.clone() });
+                self.dirty.store(true, Ordering::Relaxed);
+            }
+        }
         self.refresh_pending_dirs();
-        self.scheduler_check(LocalTime::now(), schedule_changed);
+        self.scheduler_check(LocalTime::now(), &changed);
+        self.schedule();
+        Ok(())
+    }
+
+    fn check_queue(&self, queue: u64) -> anyhow::Result<()> {
+        match self.settings().queue(queue) {
+            Some(_) => Ok(()),
+            None => bail!("fila não encontrada: {queue}"),
+        }
+    }
+
+    /// Moves a download to the end of another queue.
+    pub fn set_queue(self: &Arc<Self>, id: u64, queue: u64) -> anyhow::Result<()> {
+        self.check_queue(queue)?;
+        {
+            let mut inner = self.inner.lock().unwrap();
+            let order = inner.next_order();
+            let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
+            if job.info.queue == queue {
+                return Ok(());
+            }
+            job.info.queue = queue;
+            job.info.order = order;
+            // "Baixar agora" was for the old queue: the new one's limit applies.
+            job.forced = false;
+            let _ = self.updates.send(Response::Update { item: job.info.clone() });
+        }
+        tracing::info!(id, queue, "download movido de fila");
+        self.save();
+        self.schedule();
+        Ok(())
+    }
+
+    /// Moves a download up or down in its queue (among the unfinished ones).
+    pub fn reorder(self: &Arc<Self>, id: u64, direction: Direction) -> anyhow::Result<()> {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            let job = inner.jobs.get(&id).context("download não encontrado")?;
+            let queue = job.info.queue;
+            let mut line: Vec<(i64, u64)> = inner
+                .jobs
+                .values()
+                .filter(|j| j.info.queue == queue && j.info.state != State::Completed)
+                .map(|j| (j.info.order, j.info.id))
+                .collect();
+            line.sort();
+            let Some(at) = line.iter().position(|(_, other)| *other == id) else { return Ok(()) };
+            let target = match direction {
+                Direction::Up => at.checked_sub(1),
+                Direction::Down => (at + 1 < line.len()).then_some(at + 1),
+                Direction::Top => (at > 0).then_some(0),
+                Direction::Bottom => (at + 1 < line.len()).then_some(line.len() - 1),
+            };
+            let Some(target) = target else { return Ok(()) };
+            let moved = line.remove(at);
+            line.insert(target, moved);
+            // Renumber the line, keeping the positions it already used (made
+            // distinct first: equal positions could not be swapped).
+            let mut orders: Vec<i64> = line.iter().map(|(order, _)| *order).collect();
+            orders.sort();
+            for i in 1..orders.len() {
+                orders[i] = orders[i].max(orders[i - 1] + 1);
+            }
+            for ((_, other), order) in line.into_iter().zip(orders) {
+                let job = inner.jobs.get_mut(&other).expect("id from map");
+                if job.info.order != order {
+                    job.info.order = order;
+                    let _ = self.updates.send(Response::Update { item: job.info.clone() });
+                }
+            }
+        }
+        self.save();
         self.schedule();
         Ok(())
     }
@@ -233,6 +341,8 @@ impl Manager {
         if request.kind == SourceKind::Direct && looks_like_manifest(&request.url) {
             request.kind = SourceKind::Stream;
         }
+        let queue = request.queue.unwrap_or(MAIN_QUEUE);
+        self.check_queue(queue)?;
         let probe = request.confirm;
         let name = display_name(&request);
         let category = Category::detect(request.file_name.as_deref().unwrap_or(&name), request.kind);
@@ -244,6 +354,7 @@ impl Manager {
         let id = {
             let mut inner = self.inner.lock().unwrap();
             let id = inner.next_id;
+            let order = inner.next_order();
             inner.next_id += 1;
             let state = match (request.confirm, request.start) {
                 (true, _) => State::Pending,
@@ -268,6 +379,8 @@ impl Manager {
                 probing: probe,
                 category,
                 formats: Vec::new(),
+                queue,
+                order,
             };
             let _ = self.updates.send(Response::Update { item: info.clone() });
             inner.jobs.insert(id, Job::new(info, request, auto));
@@ -341,8 +454,11 @@ impl Manager {
 
     /// Answers a pending download: queue it, or start it right away (`now`).
     pub fn confirm(self: &Arc<Self>, id: u64, answer: Answer) -> anyhow::Result<()> {
-        let Answer { now, file_name, output_dir, format, conflict } = answer;
+        let Answer { now, file_name, output_dir, format, conflict, queue } = answer;
         let settings = self.settings();
+        if let Some(queue) = queue {
+            self.check_queue(queue)?;
+        }
         let mut to_delete = Vec::new();
         {
             let mut inner = self.inner.lock().unwrap();
@@ -394,6 +510,10 @@ impl Manager {
                 job.info.name = name.clone();
                 job.request.file_name = Some(name);
             }
+            // Last, after every check that can refuse the answer.
+            if let Some(queue) = queue {
+                job.info.queue = queue;
+            }
             job.auto_dir = false;
             job.info.state = State::Queued;
             job.forced = now;
@@ -437,7 +557,8 @@ impl Manager {
     pub fn resume(self: &Arc<Self>, id: u64) -> anyhow::Result<()> {
         // Outside the scheduled window the queue waits, but a download resumed
         // by hand starts now, like "Baixar agora".
-        let forced = !self.queue_open();
+        let queue = self.inner.lock().unwrap().jobs.get(&id).map_or(MAIN_QUEUE, |j| j.info.queue);
+        let forced = !self.queue_open(queue);
         {
             let mut inner = self.inner.lock().unwrap();
             let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
@@ -475,27 +596,36 @@ impl Manager {
         Ok(())
     }
 
-    /// Starts queued downloads while there is a free slot ("Baixar agora" ones
-    /// start regardless). Outside the scheduled window only those start.
+    /// Starts queued downloads while their queue has a free slot ("Baixar
+    /// agora" ones start regardless). Outside its scheduled window a queue only
+    /// starts those.
     pub fn schedule(self: &Arc<Self>) {
-        let max_parallel = self.settings().max_parallel;
-        let open = self.queue_open();
+        let queues = self.settings().all_queues();
+        let limits: HashMap<u64, usize> = queues.iter().map(|q| (q.id, q.max_parallel)).collect();
+        let open: HashMap<u64, bool> = queues.iter().map(|q| (q.id, self.queue_open(q.id))).collect();
         let mut inner = self.inner.lock().unwrap();
-        let running = inner.jobs.values().filter(|j| j.info.state == State::Running).count();
-        // Forced first, then by id.
-        let mut queued: Vec<(bool, u64)> = inner
+        let mut running: HashMap<u64, usize> = HashMap::new();
+        for job in inner.jobs.values().filter(|j| j.info.state == State::Running) {
+            *running.entry(job.info.queue).or_default() += 1;
+        }
+        // Forced first, then in queue order.
+        let mut queued: Vec<(bool, i64, u64, u64)> = inner
             .jobs
             .values()
             .filter(|j| j.info.state == State::Queued)
-            .map(|j| (!j.forced, j.info.id))
+            .map(|j| (!j.forced, j.info.order, j.info.id, j.info.queue))
             .collect();
         queued.sort();
-        let forced = queued.iter().filter(|(not_forced, _)| !not_forced).count();
-        let to_start = match open {
-            true => forced + max_parallel.saturating_sub(running + forced),
-            false => forced,
-        };
-        for (_, id) in queued.into_iter().take(to_start) {
+        let mut to_start = Vec::new();
+        for (not_forced, _, id, queue) in queued {
+            let slots = running.entry(queue).or_default();
+            let free = open.get(&queue).copied().unwrap_or(true) && *slots < limits.get(&queue).copied().unwrap_or(1);
+            if !not_forced || free {
+                *slots += 1;
+                to_start.push(id);
+            }
+        }
+        for id in to_start {
             let job = inner.jobs.get_mut(&id).expect("id from map");
             let cancel = CancellationToken::new();
             job.cancel = Some(cancel.clone());
@@ -600,7 +730,7 @@ impl Manager {
 
     fn finish(self: &Arc<Self>, id: u64, result: JobResult) {
         let mut message = None;
-        let (requeue, from_queue) = self
+        let (requeue, from_queue, queue) = self
             .inner
             .lock()
             .unwrap()
@@ -612,11 +742,11 @@ impl Manager {
                 if !matches!(result, JobResult::Paused) {
                     job.from_queue = false;
                 }
-                (std::mem::take(&mut job.requeue), from_queue)
+                (std::mem::take(&mut job.requeue), from_queue, job.info.queue)
             })
             .unwrap_or_default();
         if from_queue && matches!(result, JobResult::Completed(_)) {
-            self.scheduler.lock().unwrap().completed = true;
+            self.scheduler.lock().unwrap().completed(queue);
         }
         self.update(id, |info| {
             info.speed = 0.0;
@@ -842,6 +972,56 @@ mod tests {
         manager.confirm(id, Answer { format: Some("720".into()), ..Default::default() }).unwrap();
         let request = manager.inner.lock().unwrap().jobs[&id].request.clone();
         assert_eq!(request.format.as_deref(), Some("720"));
+    }
+
+    fn add_to(manager: &Arc<Manager>, queue: u64, start: bool) -> u64 {
+        let request = AddRequest { url: URL.into(), start, queue: Some(queue), ..Default::default() };
+        manager.add(request).unwrap()
+    }
+
+    fn order_of(manager: &Arc<Manager>, queue: u64) -> Vec<u64> {
+        let mut line: Vec<(i64, u64)> =
+            manager.list().into_iter().filter(|i| i.queue == queue).map(|i| (i.order, i.id)).collect();
+        line.sort();
+        line.into_iter().map(|(_, id)| id).collect()
+    }
+
+    #[tokio::test]
+    async fn queues_have_their_own_limit() {
+        let manager = manager();
+        let mut settings = manager.settings();
+        settings.set_queue(ldm_ipc::Queue { id: 1, name: "Uma por vez".into(), max_parallel: 1, ..Default::default() });
+        manager.set_settings(settings).unwrap();
+        assert!(manager.add(AddRequest { url: URL.into(), queue: Some(9), ..Default::default() }).is_err());
+
+        // Paused so nothing runs (and fails) while the queue is set up.
+        let first = add_to(&manager, 1, false);
+        let second = add_to(&manager, 1, false);
+        let main = add_to(&manager, MAIN_QUEUE, false);
+        manager.reorder(second, Direction::Top).unwrap();
+        assert_eq!(order_of(&manager, 1), [second, first]);
+        manager.reorder(second, Direction::Down).unwrap();
+        assert_eq!(order_of(&manager, 1), [first, second]);
+        manager.reorder(first, Direction::Up).unwrap();
+        assert_eq!(order_of(&manager, 1), [first, second], "already at the top");
+
+        // One at a time in queue 1, the first in line first; the main queue is apart.
+        manager.reorder(second, Direction::Top).unwrap();
+        for id in [second, first, main] {
+            manager.resume(id).unwrap();
+        }
+        assert_eq!(manager.state(second), Some(State::Running));
+        assert_eq!(manager.state(first), Some(State::Queued));
+        assert_eq!(manager.state(main), Some(State::Running));
+
+        // Moving it goes to the end of the other queue; removing a queue moves its downloads to the main one.
+        manager.set_queue(first, MAIN_QUEUE).unwrap();
+        assert_eq!(order_of(&manager, MAIN_QUEUE).last(), Some(&first));
+        assert!(manager.set_queue(first, 9).is_err());
+        let mut settings = manager.settings();
+        settings.remove_queue(1);
+        manager.set_settings(settings).unwrap();
+        assert!(manager.list().iter().all(|i| i.queue == MAIN_QUEUE));
     }
 
     #[tokio::test]

@@ -1,17 +1,17 @@
 //! "Preferências". Geral: download folder, one subfolder per category,
-//! downloads at the same time, connections per file, the progress window, the
-//! speed limit, the clipboard monitor, the tray icon and session autostart.
-//! Agendador: when the queue runs and what to do when it is done. The settings
-//! live in the daemon (`~/.config/ldm/settings.json`); autostart is a file in
-//! `~/.config/autostart`.
+//! connections per file, the progress window, the speed limit, the clipboard
+//! monitor, the tray icon and session autostart. Filas: the queues, each with
+//! its downloads at the same time, its schedule and what to do when it is
+//! done. The settings live in the daemon (`~/.config/ldm/settings.json`);
+//! autostart is a file in `~/.config/autostart`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{gio, glib, pango};
-use ldm_ipc::{Category, Request, Schedule, Settings, TimeOfDay, WhenDone, WEEKDAYS};
+use ldm_ipc::{Category, Queue, Request, Schedule, Settings, TimeOfDay, WhenDone, MAIN_QUEUE, WEEKDAYS};
 
 use crate::window::show_error;
 use crate::{autostart, ipc};
@@ -49,84 +49,242 @@ fn parse_time(entry: &gtk::Entry, what: &str) -> Result<TimeOfDay, String> {
     TimeOfDay::parse(&entry.text()).ok_or_else(|| format!("{what}: use HH:MM, como 02:00 ou 23:30."))
 }
 
-/// The "Agendador" tab and a function that reads it back.
-fn schedule_page(schedule: &Schedule) -> (gtk::Grid, Box<dyn Fn() -> Result<Schedule, String>>) {
-    let enabled = gtk::Switch::builder().active(schedule.enabled).build();
-    let start = time_entry(Some(schedule.start));
-    let has_stop = gtk::CheckButton::builder().active(schedule.stop.is_some()).build();
-    let stop = time_entry(schedule.stop);
-    stop.set_sensitive(schedule.stop.is_some());
-    let s = stop.clone();
-    has_stop.connect_toggled(move |check| s.set_sensitive(check.is_active()));
-    let stop_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    stop_box.append(&has_stop);
-    stop_box.append(&stop);
-
-    let days_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    days_box.add_css_class("linked");
-    let days: Vec<gtk::ToggleButton> = WEEKDAYS
-        .iter()
-        .enumerate()
-        .map(|(i, name)| {
-            let mut label = name.to_string();
-            label[..1].make_ascii_uppercase();
-            let button = gtk::ToggleButton::builder().label(label).active(schedule.days.contains(&(i as u8))).build();
-            days_box.append(&button);
-            button
-        })
-        .collect();
-
-    let labels: Vec<&str> = WhenDone::ALL.iter().map(|w| w.label()).collect();
-    let when_done = gtk::DropDown::from_strings(&labels);
-    when_done.set_selected(WhenDone::ALL.iter().position(|w| *w == schedule.when_done).unwrap_or(0) as u32);
-
-    let grid = gtk::Grid::builder().column_spacing(18).row_spacing(14).build();
-    row(
-        &grid,
-        0,
-        "Usar o agendador",
-        &enabled,
-        Some("Os downloads da fila só rodam no horário abaixo. \u{201c}Baixar agora\u{201d} e retomar um download à mão continuam valendo na hora."),
-    );
-    row(&grid, 1, "Começar às", &start, None);
-    row(
-        &grid,
-        2,
-        "Parar às",
-        &stop_box,
-        Some("No horário de parada, os downloads voltam para a fila. Sem horário, a fila vai até terminar."),
-    );
-    row(&grid, 3, "Dias", &days_box, None);
-    row(
-        &grid,
-        4,
-        "Ao terminar a fila",
-        &when_done,
-        Some("Antes de suspender ou desligar, uma janela conta 60 segundos e deixa cancelar."),
-    );
-    let details = [start.upcast_ref::<gtk::Widget>(), stop_box.upcast_ref(), days_box.upcast_ref(), when_done.upcast_ref()]
-        .map(|w| w.clone());
-    let sync = move |on: bool| details.iter().for_each(|w| w.set_sensitive(on));
-    sync(schedule.enabled);
-    enabled.connect_active_notify(move |switch| sync(switch.is_active()));
-
-    let read = move || {
-        let start = parse_time(&start, "Começar às")?;
-        let stop = match has_stop.is_active() {
-            true => Some(parse_time(&stop, "Parar às")?),
-            false => None,
-        };
-        let days: Vec<u8> = days.iter().enumerate().filter(|(_, b)| b.is_active()).map(|(i, _)| i as u8).collect();
-        if enabled.is_active() && days.is_empty() {
-            return Err("Escolha pelo menos um dia para o agendador.".into());
-        }
-        let when_done = WhenDone::ALL.get(when_done.selected() as usize).copied().unwrap_or_default();
-        Ok(Schedule { enabled: enabled.is_active(), start, stop, days, when_done })
-    };
-    (grid, Box::new(read))
+/// The tab to open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Page {
+    General = 0,
+    Queues = 1,
 }
 
-pub fn show(parent: &gtk::Window, settings: Settings) {
+/// The settings of one queue, in the "Filas" tab.
+struct QueueEditor {
+    name: gtk::Entry,
+    parallel: gtk::SpinButton,
+    enabled: gtk::Switch,
+    start: gtk::Entry,
+    has_stop: gtk::CheckButton,
+    stop: gtk::Entry,
+    days: Vec<gtk::ToggleButton>,
+    when_done: gtk::DropDown,
+    /// Shown details depend on the scheduler switch.
+    details: Vec<gtk::Widget>,
+}
+
+impl QueueEditor {
+    fn new() -> (Self, gtk::Grid) {
+        let name = gtk::Entry::builder().width_chars(20).build();
+        let parallel = gtk::SpinButton::with_range(1.0, 20.0, 1.0);
+        let enabled = gtk::Switch::new();
+        let start = time_entry(None);
+        let has_stop = gtk::CheckButton::new();
+        let stop = time_entry(None);
+        let s = stop.clone();
+        has_stop.connect_toggled(move |check| s.set_sensitive(check.is_active()));
+        let stop_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        stop_box.append(&has_stop);
+        stop_box.append(&stop);
+        let days_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        days_box.add_css_class("linked");
+        let days: Vec<gtk::ToggleButton> = WEEKDAYS
+            .iter()
+            .map(|name| {
+                let mut label = name.to_string();
+                label[..1].make_ascii_uppercase();
+                let button = gtk::ToggleButton::with_label(&label);
+                days_box.append(&button);
+                button
+            })
+            .collect();
+        let labels: Vec<&str> = WhenDone::ALL.iter().map(|w| w.label()).collect();
+        let when_done = gtk::DropDown::from_strings(&labels);
+
+        let grid = gtk::Grid::builder().column_spacing(18).row_spacing(14).build();
+        row(&grid, 0, "Nome", &name, None);
+        row(&grid, 1, "Downloads ao mesmo tempo", &parallel, Some("Os outros desta fila esperam a vez."));
+        row(
+            &grid,
+            2,
+            "Usar o agendador",
+            &enabled,
+            Some("Os downloads desta fila só rodam no horário abaixo. \u{201c}Baixar agora\u{201d} e retomar um download à mão continuam valendo na hora."),
+        );
+        row(&grid, 3, "Começar às", &start, None);
+        row(
+            &grid,
+            4,
+            "Parar às",
+            &stop_box,
+            Some("No horário de parada, os downloads voltam para a fila. Sem horário, a fila vai até terminar."),
+        );
+        row(&grid, 5, "Dias", &days_box, None);
+        row(
+            &grid,
+            6,
+            "Ao terminar a fila",
+            &when_done,
+            Some("Antes de suspender ou desligar, uma janela conta 60 segundos e deixa cancelar."),
+        );
+        let details: Vec<gtk::Widget> =
+            vec![start.clone().upcast(), stop_box.upcast(), days_box.upcast(), when_done.clone().upcast()];
+        let d = details.clone();
+        enabled.connect_active_notify(move |switch| d.iter().for_each(|w| w.set_sensitive(switch.is_active())));
+        let editor = Self { name, parallel, enabled, start, has_stop, stop, days, when_done, details };
+        (editor, grid)
+    }
+
+    fn load(&self, queue: &Queue) {
+        self.name.set_text(&queue.name);
+        // The main queue keeps its name.
+        self.name.set_sensitive(queue.id != MAIN_QUEUE);
+        self.parallel.set_value(queue.max_parallel as f64);
+        let schedule = &queue.schedule;
+        self.enabled.set_active(schedule.enabled);
+        self.start.set_text(&schedule.start.to_string());
+        self.has_stop.set_active(schedule.stop.is_some());
+        self.stop.set_text(&schedule.stop.map(|t| t.to_string()).unwrap_or_default());
+        self.stop.set_sensitive(schedule.stop.is_some());
+        for (i, button) in self.days.iter().enumerate() {
+            button.set_active(schedule.days.contains(&(i as u8)));
+        }
+        let when_done = WhenDone::ALL.iter().position(|w| *w == schedule.when_done).unwrap_or(0);
+        self.when_done.set_selected(when_done as u32);
+        self.details.iter().for_each(|w| w.set_sensitive(schedule.enabled));
+    }
+
+    /// The edited queue, or what to fix.
+    fn read(&self, base: &Queue) -> Result<Queue, String> {
+        let start = parse_time(&self.start, "Começar às")?;
+        let stop = match self.has_stop.is_active() {
+            true => Some(parse_time(&self.stop, "Parar às")?),
+            false => None,
+        };
+        let days: Vec<u8> = self.days.iter().enumerate().filter(|(_, b)| b.is_active()).map(|(i, _)| i as u8).collect();
+        if self.enabled.is_active() && days.is_empty() {
+            return Err("Escolha pelo menos um dia para o agendador.".into());
+        }
+        let when_done = WhenDone::ALL.get(self.when_done.selected() as usize).copied().unwrap_or_default();
+        let name = match base.id {
+            MAIN_QUEUE => base.name.clone(),
+            _ => self.name.text().trim().to_string(),
+        };
+        if name.is_empty() {
+            return Err("Dê um nome à fila.".into());
+        }
+        Ok(Queue {
+            id: base.id,
+            name,
+            max_parallel: self.parallel.value() as usize,
+            schedule: Schedule { enabled: self.enabled.is_active(), start, stop, days, when_done },
+        })
+    }
+}
+
+/// Reads the edited queues back, or says what to fix.
+type ReadQueues = Box<dyn Fn() -> Result<Vec<Queue>, String>>;
+
+/// The "Filas" tab (IDM's scheduler window): pick a queue, create or remove
+/// one, and edit it.
+fn queues_page(parent: &gtk::Window, queues: Vec<Queue>, next_id: u64) -> (gtk::Box, ReadQueues) {
+    let queues = Rc::new(RefCell::new(queues));
+    let current = Rc::new(Cell::new(0usize));
+    let next_id = Rc::new(Cell::new(next_id));
+    // Set while the list is rebuilt, so `connect_selected_notify` does not react.
+    let rebuilding = Rc::new(Cell::new(false));
+    let (editor, grid) = QueueEditor::new();
+    let editor = Rc::new(editor);
+
+    let choice = gtk::DropDown::builder().hexpand(true).build();
+    let add = gtk::Button::builder().icon_name("list-add-symbolic").tooltip_text("Nova fila").build();
+    let remove = gtk::Button::builder()
+        .icon_name("user-trash-symbolic")
+        .tooltip_text("Excluir a fila (os downloads dela vão para a fila principal)")
+        .build();
+    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    bar.append(&gtk::Label::new(Some("Fila")));
+    bar.append(&choice);
+    bar.append(&add);
+    bar.append(&remove);
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 18);
+    page.append(&bar);
+    page.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    page.append(&grid);
+
+    // Shows the list of names and the queue at `index`.
+    let show = {
+        let (queues, current, rebuilding, editor, choice, remove) =
+            (queues.clone(), current.clone(), rebuilding.clone(), editor.clone(), choice.clone(), remove.clone());
+        Rc::new(move |index: usize| {
+            let list = queues.borrow();
+            let names: Vec<&str> = list.iter().map(|q| q.name.as_str()).collect();
+            rebuilding.set(true);
+            choice.set_model(Some(&gtk::StringList::new(&names)));
+            choice.set_selected(index as u32);
+            rebuilding.set(false);
+            current.set(index);
+            editor.load(&list[index]);
+            remove.set_sensitive(list[index].id != MAIN_QUEUE);
+        })
+    };
+    // Keeps the edits of the shown queue; false (and an error message) when they are invalid.
+    let store = {
+        let (queues, current, editor, parent) = (queues.clone(), current.clone(), editor.clone(), parent.clone());
+        Rc::new(move || {
+            let index = current.get();
+            let edited = editor.read(&queues.borrow()[index]);
+            match edited {
+                Ok(queue) => {
+                    queues.borrow_mut()[index] = queue;
+                    true
+                }
+                Err(message) => {
+                    show_error(Some(&parent), "Confira a fila", &message);
+                    false
+                }
+            }
+        })
+    };
+    show(0);
+
+    let (s, st, r, c) = (show.clone(), store.clone(), rebuilding.clone(), current.clone());
+    choice.connect_selected_notify(move |choice| {
+        if r.get() {
+            return;
+        }
+        let wanted = choice.selected() as usize;
+        // Invalid edits keep the queue on screen.
+        let index = if st() { wanted } else { c.get() };
+        s(index);
+    });
+    let (s, st, q, n) = (show.clone(), store.clone(), queues.clone(), next_id.clone());
+    add.connect_clicked(move |_| {
+        if !st() {
+            return;
+        }
+        let id = n.get();
+        n.set(id + 1);
+        q.borrow_mut().push(Queue { id, name: format!("Fila {id}"), max_parallel: 1, ..Queue::default() });
+        let last = q.borrow().len() - 1;
+        s(last);
+    });
+    let (s, q, c) = (show.clone(), queues.clone(), current.clone());
+    remove.connect_clicked(move |_| {
+        let index = c.get();
+        if index > 0 {
+            q.borrow_mut().remove(index);
+            s(0);
+        }
+    });
+
+    let read = move || {
+        let index = current.get();
+        let queue = editor.read(&queues.borrow()[index])?;
+        queues.borrow_mut()[index] = queue;
+        Ok(queues.borrow().clone())
+    };
+    (page, Box::new(read))
+}
+
+pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
     let window = gtk::Window::builder()
         .title("Preferências")
         .transient_for(parent)
@@ -150,8 +308,6 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
     dir_box.append(&reset);
 
     let folders = gtk::Switch::builder().active(settings.category_folders).build();
-    let parallel = gtk::SpinButton::with_range(1.0, 20.0, 1.0);
-    parallel.set_value(settings.max_parallel as f64);
     let connections = gtk::SpinButton::with_range(1.0, 32.0, 1.0);
     connections.set_value(settings.connections as f64);
     let progress = gtk::Switch::builder().active(settings.show_progress).build();
@@ -167,19 +323,18 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
     let grid = gtk::Grid::builder().column_spacing(18).row_spacing(14).build();
     row(&grid, 0, "Pasta de downloads", &dir_box, None);
     row(&grid, 1, "Separar por tipo de arquivo", &folders, Some(subfolders_hint.as_str()));
-    row(&grid, 2, "Downloads ao mesmo tempo", &parallel, Some("Os outros esperam na fila."));
-    row(&grid, 3, "Conexões por arquivo", &connections, Some("Para links diretos; vídeos de sites usam o yt-dlp."));
-    row(&grid, 4, "Mostrar a janela de progresso", &progress, Some("Ao clicar em \u{201c}Baixar agora\u{201d}."));
+    row(&grid, 2, "Conexões por arquivo", &connections, Some("Para links diretos; vídeos de sites usam o yt-dlp."));
+    row(&grid, 3, "Mostrar a janela de progresso", &progress, Some("Ao clicar em \u{201c}Baixar agora\u{201d}."));
     row(
         &grid,
-        5,
+        4,
         "Limite de velocidade (KB/s)",
         &limit,
         Some("Todos os downloads juntos; 0 = sem limite. Vale na hora, até para os que estão baixando."),
     );
     row(
         &grid,
-        6,
+        5,
         "Capturar links copiados",
         &clipboard,
         Some(
@@ -189,16 +344,17 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
     );
     row(
         &grid,
-        7,
+        6,
         "Ícone na bandeja",
         &tray,
         Some("Fechar a janela deixa o LDM na bandeja, pronto para os downloads do navegador. Precisa de uma bandeja (waybar, noctalia, KDE...)."),
     );
-    row(&grid, 8, "Iniciar com a sessão", &session, Some("Abre o LDM na bandeja, sem janela, ao entrar no sistema."));
+    row(&grid, 7, "Iniciar com a sessão", &session, Some("Abre o LDM na bandeja, sem janela, ao entrar no sistema."));
 
-    let (schedule_grid, read_schedule) = schedule_page(&settings.schedule);
+    let (queues_box, read_queues) = queues_page(window.upcast_ref(), settings.all_queues(), settings.new_queue_id());
     let notebook = gtk::Notebook::new();
-    for (page, title) in [(&grid, "Geral"), (&schedule_grid, "Agendador")] {
+    let pages: [(&gtk::Widget, &str); 2] = [(grid.upcast_ref(), "Geral"), (queues_box.upcast_ref(), "Filas")];
+    for (page, title) in pages {
         page.set_margin_top(14);
         page.set_margin_bottom(6);
         page.set_margin_start(6);
@@ -213,6 +369,7 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
             .build();
         notebook.append_page(&scroll, Some(&gtk::Label::new(Some(title))));
     }
+    notebook.set_current_page(Some(page as u32));
 
     let cancel = gtk::Button::with_label("Cancelar");
     let save = gtk::Button::with_label("Salvar");
@@ -260,25 +417,30 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
 
     let w = window.clone();
     save.connect_clicked(move |button| {
-        let schedule = match read_schedule() {
-            Ok(schedule) => schedule,
+        let queues = match read_queues() {
+            Ok(queues) => queues,
             Err(message) => {
-                notebook.set_current_page(Some(1));
-                show_error(Some(&w), "Confira o agendador", &message);
+                notebook.set_current_page(Some(Page::Queues as u32));
+                show_error(Some(&w), "Confira a fila", &message);
                 return;
             }
         };
-        let new = Settings {
+        let mut new = Settings {
             download_dir: dir.borrow().clone(),
             category_folders: folders.is_active(),
-            max_parallel: parallel.value() as usize,
+            max_parallel: settings.max_parallel,
             connections: connections.value() as usize,
             show_progress: progress.is_active(),
             speed_limit: limit.value() as u64 * 1024,
             watch_clipboard: clipboard.is_active(),
             tray: tray.is_active(),
-            schedule,
+            schedule: settings.schedule.clone(),
+            queues: Vec::new(),
+            last_queue_id: settings.last_queue_id,
         };
+        for queue in queues {
+            new.set_queue(queue);
+        }
         if session.is_active() != autostart_was {
             if let Err(e) = autostart::set_enabled(session.is_active()) {
                 show_error(Some(&w), "Não foi possível mudar o início com a sessão", &e.to_string());

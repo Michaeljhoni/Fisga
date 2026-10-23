@@ -137,9 +137,11 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: UnixStream, 
                     Err(e) => Response::Error { message: e.to_string() },
                 }
             }
-            Request::Confirm { id, now, file_name, output_dir, format, conflict } => {
-                result(manager.confirm(id, Answer { now, file_name, output_dir, format, conflict }))
+            Request::Confirm { id, now, file_name, output_dir, format, conflict, queue } => {
+                result(manager.confirm(id, Answer { now, file_name, output_dir, format, conflict, queue }))
             }
+            Request::SetQueue { id, queue } => result(manager.set_queue(id, queue)),
+            Request::Reorder { id, direction } => result(manager.reorder(id, direction)),
             Request::List => Response::Downloads { items: manager.list() },
             Request::Pause { id } => result(manager.pause(id)),
             Request::Resume { id } => result(manager.resume(id)),

@@ -8,7 +8,8 @@ use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use ldm_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
 use ldm_ipc::{
-    AddRequest, Conflict, Connection, DownloadInfo, Request, Response, Settings, State, TimeOfDay, WhenDone, WEEKDAYS,
+    AddRequest, Conflict, Connection, Direction, DownloadInfo, Queue, Request, Response, Settings, State, TimeOfDay,
+    WhenDone, MAIN_QUEUE, WEEKDAYS,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -104,6 +105,32 @@ struct ScheduleArgs {
     /// Cancela a suspensão ou o desligamento planejado
     #[arg(long, conflicts_with_all = ["on", "off", "start", "stop", "days", "when_done"])]
     cancel: bool,
+    /// Fila (número em "ldm queue"; padrão: a principal)
+    #[arg(short = 'Q', long, default_value_t = MAIN_QUEUE)]
+    queue_id: u64,
+}
+
+#[derive(Subcommand)]
+enum QueueCommand {
+    /// Lista as filas
+    List,
+    /// Cria uma fila
+    Add {
+        name: String,
+        /// Downloads desta fila ao mesmo tempo
+        #[arg(long, default_value_t = 1)]
+        max_parallel: usize,
+    },
+    /// Muda o nome ou o número de downloads ao mesmo tempo de uma fila
+    Set {
+        id: u64,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        max_parallel: Option<usize>,
+    },
+    /// Exclui uma fila (os downloads dela vão para a fila principal)
+    Rm { id: u64 },
 }
 
 #[derive(Subcommand)]
@@ -118,6 +145,31 @@ enum Command {
         /// Pede confirmação na janela "Novo download" (ldm-gui) antes de começar
         #[arg(long, conflicts_with = "wait")]
         confirm: bool,
+        /// Fila do download (número em "ldm queue")
+        #[arg(short = 'Q', long)]
+        queue_id: Option<u64>,
+    },
+    /// Mostra, cria, altera ou exclui filas
+    Queue {
+        #[command(subcommand)]
+        command: Option<QueueCommand>,
+    },
+    /// Move um download para outra fila, ou dentro da fila dele
+    Move {
+        id: u64,
+        /// Para o fim desta fila
+        #[arg(short = 'Q', long, conflicts_with_all = ["up", "down", "top", "bottom"])]
+        queue_id: Option<u64>,
+        #[arg(long)]
+        up: bool,
+        #[arg(long)]
+        down: bool,
+        /// Para o começo da fila
+        #[arg(long)]
+        top: bool,
+        /// Para o fim da fila
+        #[arg(long)]
+        bottom: bool,
     },
     /// Baixa em primeiro plano, sem o daemon
     Get {
@@ -144,6 +196,9 @@ enum Command {
         /// Se o arquivo já existir: rename (novo nome), overwrite (substituir) ou resume (continuar)
         #[arg(long, value_parser = parse_conflict)]
         if_exists: Option<Conflict>,
+        /// Fila do download (número em "ldm queue")
+        #[arg(short = 'Q', long)]
+        queue_id: Option<u64>,
     },
     /// Pausa um download
     Pause { id: u64 },
@@ -178,8 +233,8 @@ enum Command {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
-        Command::Add { source, wait, confirm } => add(source, wait, confirm).await,
-        Command::Confirm { id, queue, dir, name, quality, if_exists } => {
+        Command::Add { source, wait, confirm, queue_id } => add(source, wait, confirm, queue_id).await,
+        Command::Confirm { id, queue, dir, name, quality, if_exists, queue_id } => {
             let output_dir = dir.map(|d| std::path::absolute(&d).unwrap_or(d));
             let request = Request::Confirm {
                 id,
@@ -188,8 +243,20 @@ async fn main() -> anyhow::Result<()> {
                 output_dir,
                 format: quality,
                 conflict: if_exists,
+                queue: queue_id,
             };
             simple(request).await
+        }
+        Command::Queue { command } => queues(command.unwrap_or(QueueCommand::List)).await,
+        Command::Move { id, queue_id, up, down, top, bottom } => {
+            let direction = [(up, Direction::Up), (down, Direction::Down), (top, Direction::Top), (bottom, Direction::Bottom)]
+                .into_iter()
+                .find_map(|(chosen, direction)| chosen.then_some(direction));
+            match (queue_id, direction) {
+                (Some(queue), _) => simple(Request::SetQueue { id, queue }).await,
+                (None, Some(direction)) => simple(Request::Reorder { id, direction }).await,
+                (None, None) => bail!("diga para onde: --queue-id N, --up, --down, --top ou --bottom"),
+            }
         }
         Command::Get { source } => get(source).await,
         Command::List => list().await,
@@ -278,9 +345,10 @@ async fn get(source: Source) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn add(source: Source, wait: bool, confirm: bool) -> anyhow::Result<()> {
+async fn add(source: Source, wait: bool, confirm: bool, queue: Option<u64>) -> anyhow::Result<()> {
     ldm_ipc::ensure_daemon().await?;
     let request = AddRequest {
+        queue,
         url: source.url.clone(),
         output_dir: source.dir.clone().map(|d| std::path::absolute(&d).unwrap_or(d)),
         file_name: source.name.clone(),
@@ -414,11 +482,15 @@ async fn get_settings() -> anyhow::Result<Settings> {
     }
 }
 
-fn schedule_summary(settings: &Settings) -> String {
-    match settings.schedule.enabled {
-        true => settings.schedule.describe(),
+fn schedule_text(queue: &Queue) -> String {
+    match queue.schedule.enabled {
+        true => queue.schedule.describe(),
         false => "desligado (a fila roda sempre)".into(),
     }
+}
+
+fn schedule_summary(settings: &Settings) -> String {
+    schedule_text(&settings.all_queues()[0])
 }
 
 async fn schedule(args: ScheduleArgs) -> anyhow::Result<()> {
@@ -429,8 +501,9 @@ async fn schedule(args: ScheduleArgs) -> anyhow::Result<()> {
         return Ok(());
     }
     let mut settings = get_settings().await?;
-    let before = settings.clone();
-    let schedule = &mut settings.schedule;
+    let Some(mut queue) = settings.queue(args.queue_id) else { bail!("fila não encontrada: {}", args.queue_id) };
+    let before = queue.clone();
+    let schedule = &mut queue.schedule;
     if args.on || args.off {
         schedule.enabled = args.on;
     }
@@ -440,11 +513,54 @@ async fn schedule(args: ScheduleArgs) -> anyhow::Result<()> {
         schedule.days = days;
     }
     schedule.when_done = args.when_done.unwrap_or(schedule.when_done);
-    if settings != before {
-        ldm_ipc::call(&Request::SetSettings { settings: settings.clone() }).await?;
+    if queue != before {
+        settings.set_queue(queue.clone());
+        ldm_ipc::call(&Request::SetSettings { settings }).await?;
     }
-    println!("agendador:        {}", schedule_summary(&settings));
-    println!("ao terminar:      {}", settings.schedule.when_done.label().to_lowercase());
+    println!("fila:             {}", queue.name);
+    println!("agendador:        {}", schedule_text(&queue));
+    println!("ao terminar:      {}", queue.schedule.when_done.label().to_lowercase());
+    Ok(())
+}
+
+async fn queues(command: QueueCommand) -> anyhow::Result<()> {
+    let mut settings = get_settings().await?;
+    match command {
+        QueueCommand::List => {}
+        QueueCommand::Add { name, max_parallel } => {
+            let id = settings.new_queue_id();
+            settings.set_queue(Queue { id, name, max_parallel, ..Queue::default() });
+        }
+        QueueCommand::Set { id, name, max_parallel } => {
+            let Some(mut queue) = settings.queue(id) else { bail!("fila não encontrada: {id}") };
+            if let Some(name) = name {
+                if id == MAIN_QUEUE {
+                    bail!("a fila principal não pode ser renomeada");
+                }
+                queue.name = name;
+            }
+            queue.max_parallel = max_parallel.unwrap_or(queue.max_parallel);
+            settings.set_queue(queue);
+        }
+        QueueCommand::Rm { id } => {
+            if id == MAIN_QUEUE {
+                bail!("a fila principal não pode ser excluída");
+            }
+            if settings.queue(id).is_none() {
+                bail!("fila não encontrada: {id}");
+            }
+            settings.remove_queue(id);
+        }
+    }
+    ldm_ipc::call(&Request::SetSettings { settings: settings.clone() }).await?;
+    // Read back: the daemon names and limits them (sanitized).
+    for queue in get_settings().await?.all_queues() {
+        let at_once = match queue.max_parallel {
+            1 => "1 por vez".to_string(),
+            n => format!("{n} ao mesmo tempo"),
+        };
+        println!("{:>4}  {:<20} {:<18} agendador: {}", queue.id, queue.name, at_once, schedule_text(&queue));
+    }
     Ok(())
 }
 
@@ -516,15 +632,23 @@ fn row(item: &DownloadInfo) -> String {
     line
 }
 
+/// In queue order; downloads outside the main queue show theirs.
 async fn list() -> anyhow::Result<()> {
-    let Response::Downloads { items } = ldm_ipc::call(&Request::List).await? else {
+    let Response::Downloads { mut items } = ldm_ipc::call(&Request::List).await? else {
         bail!("resposta inesperada do daemon");
     };
     if items.is_empty() {
         println!("nenhum download");
     }
+    let settings = get_settings().await?;
+    items.sort_by_key(|item| (item.order, item.id));
     for item in &items {
-        println!("{}", row(item));
+        let mut line = row(item);
+        if item.queue != MAIN_QUEUE {
+            let at = line.find('\n').unwrap_or(line.len());
+            line.insert_str(at, &format!("  [{}]", settings.queue_name(item.queue)));
+        }
+        println!("{line}");
     }
     Ok(())
 }

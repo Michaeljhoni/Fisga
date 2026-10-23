@@ -51,6 +51,9 @@ state_of() { "$BIN/ldm" list | awk -v id="$1" '$1 == id { print $2 }'; }
 find_window() { for _ in $(seq 1 75); do w="$(xdotool search --name "$1" 2>/dev/null | head -1)"; [ -n "$w" ] && { echo "$w"; return 0; }; sleep 0.2; done; echo "window '$1' not found" >&2; return 1; }
 shot() { import -window root "$OUT/$1.png"; echo "screenshot $1"; }
 
+# A second queue: the "Fila" field shows in "Novo download", and "Filas" in the sidebar.
+"$BIN/ldm" queue add Noite >/dev/null
+
 echo "== extension click -> pending + ldm-gui --pending"
 host "{\"type\":\"download\",\"url\":\"$URL\",\"kind\":\"direct\",\"title\":\"Vídeo de teste\"}"
 win="$(find_window "^Novo download$")"
@@ -116,7 +119,7 @@ sleep 1
 shot 5-preferencias
 xdotool windowfocus --sync "$prefs" key ctrl+Page_Down
 sleep 1
-shot 5b-agendador
+shot 5b-filas
 xdotool windowfocus --sync "$prefs" key Escape || true
 
 echo "== background mode (session autostart): no window, but it answers the browser"

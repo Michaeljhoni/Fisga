@@ -84,7 +84,7 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
 - **Progresso** (a janela de status do IDM): abre depois de "Baixar agora", com barra, quanto já
   baixou, velocidade, tempo restante, se dá para retomar, a pasta e **Pausar/Retomar**. Ao terminar
   vira **Download concluído**, com **Abrir** e **Abrir pasta**. Pode ser desligada nas Preferências.
-- **Preferências** (aba *Geral*): pasta de downloads, subpastas por tipo de arquivo, downloads ao mesmo tempo,
+- **Preferências** (aba *Geral*): pasta de downloads, subpastas por tipo de arquivo,
   conexões por arquivo, a janela de progresso, capturar links copiados e o **limite de velocidade** (KB/s para todos os
   downloads juntos; muda na hora, até nos que estão baixando, e aparece na barra de status). Ficam
   no daemon, em `~/.config/ldm/settings.json`. Vídeos de sites (yt-dlp) recebem o limite por
@@ -100,7 +100,12 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
   GNOME e o KDE leem essa pasta; no niri, Sway e Hyprland ela vale quando a sessão é iniciada pelo
   systemd (o `niri-session`, por exemplo). Se não funcionar, adicione ao `~/.config/niri/config.kdl`:
   `spawn-at-startup "ldm-gui" "--background"`.
-- **Agendador** (aba *Agendador*, como o *Scheduler* do IDM): a fila só roda das HH:MM às HH:MM nos
+- **Filas** (aba *Filas* das Preferências, ou ☰ → *Filas e agendador*), como no IDM: além da *Fila
+  principal*, crie outras ("Noite", "Trabalho"...), cada uma com seu número de downloads ao mesmo
+  tempo e seu agendador. Elas aparecem na barra lateral. A janela *Novo download* tem o campo
+  *Fila* (quando há mais de uma). No clique direito de um download: *Mover para cima*, *Mover para
+  baixo* e *Mover para a fila ▸*. Excluir uma fila manda os downloads dela para a principal.
+- **Agendador** (por fila, como o *Scheduler* do IDM): a fila só roda das HH:MM às HH:MM nos
   dias escolhidos. Fora desse horário os downloads ficam *na fila*; *Baixar agora* e retomar um
   download à mão começam na hora mesmo assim. No horário de parada, os downloads da fila voltam
   para ela e continuam na próxima vez. Sem horário de parada, a fila vai até acabar. **Ao terminar
@@ -168,6 +173,12 @@ ldm schedule --days seg,ter,qua,qui,sex --when-done desligar
 ldm schedule --stop nenhum                       # vai até terminar a fila
 ldm schedule --cancel                            # cancela o desligamento que está contando
 ldm schedule --off
+ldm queue add Noite --max-parallel 1             # outra fila (ldm queue = lista)
+ldm schedule -Q 1 --on --start 23:00 --stop 06:00 # agendador da fila 1
+ldm add https://exemplo.com/arquivo.iso -Q 1     # direto na fila 1
+ldm move 7 -Q 1                                  # move o download 7 para a fila 1
+ldm move 7 --top                                 # primeiro da fila (--up, --down, --bottom)
+ldm queue rm 1                                   # exclui (os downloads vão para a principal)
 ```
 
 ## Desenvolvimento
@@ -226,6 +237,6 @@ Hyprland, `windowrulev2 = float, class:^(io\.ldm\.Ldm)$, title:negative:^LDM$`.
       subpastas), Preferências
 - [x] Limite de velocidade global (muda na hora)
 - [x] Ícone na bandeja, iniciar com a sessão, agendador (suspender/desligar ao terminar)
-- [ ] Várias filas
+- [x] Várias filas, cada uma com limite e agendador, e ordem dentro da fila
 - [ ] HLS/DASH nativo (hoje via yt-dlp), FTP
 - [ ] Pacotes (AUR, Flatpak, .deb/.rpm)

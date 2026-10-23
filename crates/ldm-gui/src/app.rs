@@ -204,7 +204,7 @@ impl App {
             Event::Settings(settings) => {
                 if let Some(window) = self.window.borrow().as_ref() {
                     window.speed_limit.set(settings.speed_limit);
-                    window.schedule.replace(settings.schedule.clone());
+                    window.set_queues(settings.all_queues());
                 }
                 if !settings.tray && matches!(*self.tray.borrow(), TrayState::Failed) {
                     self.tray.replace(TrayState::Off);
@@ -225,7 +225,7 @@ impl App {
         }
     }
 
-    /// Returns true when the item is new or changed state or category.
+    /// Returns true when the item is new or changed state, category, queue or position.
     fn upsert(self: &Rc<Self>, info: DownloadInfo) -> bool {
         self.sync_dialog(&info);
         let progress = self.progress.borrow().get(&info.id).cloned();
@@ -235,7 +235,9 @@ impl App {
         let existing = self.items.borrow().get(&info.id).cloned();
         match existing {
             Some(item) => {
-                let changed = item.with_info(|old| old.state != info.state || old.category != info.category);
+                let changed = item.with_info(|old| {
+                    (old.state, old.category, old.queue, old.order) != (info.state, info.category, info.queue, info.order)
+                });
                 item.update(info);
                 changed
             }
@@ -313,7 +315,9 @@ impl App {
             dialog.present();
             return;
         }
-        let dialog = ConfirmDialog::new(&self.app, self.main_window().as_ref(), info, self.settings().category_folders);
+        let settings = self.settings();
+        let dialog =
+            ConfirmDialog::new(&self.app, self.main_window().as_ref(), info, settings.category_folders, settings.all_queues());
         let this = Rc::downgrade(self);
         let id = info.id;
         dialog.connect_closed(move || {

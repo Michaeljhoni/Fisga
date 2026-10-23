@@ -1,6 +1,7 @@
-//! Main window: categories on the left (like IDM), the download list on the
-//! right with pause, resume, remove, open file and open folder (also in the
-//! right-click menu of each row), updated live from the daemon.
+//! Main window: views, categories and queues on the left (like IDM), the
+//! download list on the right with pause, resume, remove, open file and open
+//! folder (also in the right-click menu of each row, with moving between and
+//! inside queues), updated live from the daemon.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -8,7 +9,7 @@ use std::rc::{Rc, Weak};
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib, pango};
-use ldm_ipc::{AddRequest, Category, DownloadInfo, Request, Schedule, State};
+use ldm_ipc::{AddRequest, Category, Direction, DownloadInfo, Queue, Request, State};
 
 use crate::app::App;
 use crate::format;
@@ -22,21 +23,25 @@ pub enum View {
     Unfinished,
     Finished,
     Category(Category),
+    Queue(u64),
 }
 
 impl View {
-    pub fn all() -> Vec<View> {
+    /// The sidebar, top to bottom.
+    pub fn all(queues: &[Queue]) -> Vec<View> {
         let mut views = vec![View::All, View::Unfinished, View::Finished];
         views.extend(Category::ALL.into_iter().map(View::Category));
+        views.extend(queues.iter().map(|queue| View::Queue(queue.id)));
         views
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self, queues: &[Queue]) -> String {
         match self {
-            View::All => "Todos os downloads",
-            View::Unfinished => "Em andamento",
-            View::Finished => "Concluídos",
-            View::Category(category) => category.label(),
+            View::All => "Todos os downloads".into(),
+            View::Unfinished => "Em andamento".into(),
+            View::Finished => "Concluídos".into(),
+            View::Category(category) => category.label().into(),
+            View::Queue(id) => queues.iter().find(|q| q.id == id).map(|q| q.name.clone()).unwrap_or_default(),
         }
     }
 
@@ -46,6 +51,16 @@ impl View {
             View::Unfinished => "media-playback-start-symbolic",
             View::Finished => "object-select-symbolic",
             View::Category(category) => format::category_icon(category),
+            View::Queue(_) => "view-list-symbolic",
+        }
+    }
+
+    /// Heading above the first entry of a group.
+    fn group(self) -> Option<&'static str> {
+        match self {
+            View::Category(_) => Some("Categorias"),
+            View::Queue(_) => Some("Filas"),
+            _ => None,
         }
     }
 
@@ -55,6 +70,7 @@ impl View {
             View::Unfinished => info.state != State::Completed,
             View::Finished => info.state == State::Completed,
             View::Category(category) => info.category == category,
+            View::Queue(id) => info.queue == id,
         }
     }
 }
@@ -63,13 +79,19 @@ pub struct MainWindow {
     pub window: gtk::ApplicationWindow,
     selection: gtk::SingleSelection,
     filter: gtk::CustomFilter,
+    sorter: gtk::CustomSorter,
     store: gio::ListStore,
-    counts: Vec<(View, gtk::Label)>,
+    sidebar: gtk::ListBox,
+    /// The sidebar entries, in order (queues change with the settings).
+    views: Rc<RefCell<Vec<View>>>,
+    current: Rc<Cell<View>>,
+    counts: RefCell<Vec<(View, gtk::Label)>>,
+    popover: gtk::PopoverMenu,
     status: gtk::Label,
     actions: Actions,
     /// From the settings, for the status bar.
     pub speed_limit: Cell<u64>,
-    pub schedule: RefCell<Schedule>,
+    queues: RefCell<Vec<Queue>>,
 }
 
 #[derive(Clone)]
@@ -79,6 +101,9 @@ struct Actions {
     remove: gio::SimpleAction,
     open_file: gio::SimpleAction,
     open_folder: gio::SimpleAction,
+    move_up: gio::SimpleAction,
+    move_down: gio::SimpleAction,
+    move_to_queue: gio::SimpleAction,
 }
 
 /// Opens the row menu for a list item, at a point of one of its cells.
@@ -97,7 +122,7 @@ fn add_row_menu(list_item: &gtk::ListItem, cell: &impl IsA<gtk::Widget>, menu: &
     cell.add_controller(gesture);
 }
 
-fn row_menu_model() -> gio::Menu {
+fn row_menu_model(queues: &[Queue]) -> gio::Menu {
     let menu = gio::Menu::new();
     let section = gio::Menu::new();
     section.append(Some("Abrir"), Some("win.open-file"));
@@ -106,6 +131,19 @@ fn row_menu_model() -> gio::Menu {
     let section = gio::Menu::new();
     section.append(Some("Retomar"), Some("win.resume"));
     section.append(Some("Pausar"), Some("win.pause"));
+    menu.append_section(None, &section);
+    let section = gio::Menu::new();
+    section.append(Some("Mover para cima"), Some("win.move-up"));
+    section.append(Some("Mover para baixo"), Some("win.move-down"));
+    if queues.len() > 1 {
+        let targets = gio::Menu::new();
+        for queue in queues {
+            let item = gio::MenuItem::new(Some(&queue.name), None);
+            item.set_action_and_target_value(Some("win.move-to-queue"), Some(&queue.id.to_variant()));
+            targets.append_item(&item);
+        }
+        section.append_submenu(Some("Mover para a fila"), &targets);
+    }
     menu.append_section(None, &section);
     let section = gio::Menu::new();
     section.append(Some("Copiar endereço"), Some("win.copy-url"));
@@ -156,9 +194,14 @@ fn header_button(icon: &str, tooltip: &str, action: &str) -> gtk::Button {
     gtk::Button::builder().icon_name(icon).tooltip_text(tooltip).action_name(action).build()
 }
 
-fn sidebar_row(view: View) -> (gtk::ListBoxRow, gtk::Label) {
+fn sidebar_row(view: View, queues: &[Queue]) -> (gtk::ListBoxRow, gtk::Label) {
     let icon = gtk::Image::from_icon_name(view.icon());
-    let label = gtk::Label::builder().label(view.label()).xalign(0.0).hexpand(true).build();
+    let label = gtk::Label::builder()
+        .label(view.label(queues))
+        .xalign(0.0)
+        .hexpand(true)
+        .ellipsize(pango::EllipsizeMode::End)
+        .build();
     let count = gtk::Label::new(None);
     count.add_css_class("dim-label");
     let row_box = gtk::Box::builder()
@@ -186,6 +229,7 @@ fn main_menu() -> gio::Menu {
     section.append(Some("Remover concluídos da lista"), Some("win.clear-completed"));
     menu.append_section(None, &section);
     let section = gio::Menu::new();
+    section.append(Some("Filas e agendador"), Some("win.queues"));
     section.append(Some("Preferências"), Some("win.preferences"));
     section.append(Some("Sobre o LDM"), Some("win.about"));
     menu.append_section(None, &section);
@@ -224,34 +268,29 @@ impl MainWindow {
         );
         window.set_titlebar(Some(&header));
 
-        // Sidebar: views and categories.
+        // Sidebar: views, categories and queues (filled by `set_queues`).
         let current = Rc::new(Cell::new(View::All));
+        let views: Rc<RefCell<Vec<View>>> = Rc::default();
         let sidebar = gtk::ListBox::new();
         sidebar.add_css_class("navigation-sidebar");
-        let mut counts = Vec::new();
-        for view in View::all() {
-            let (row, count) = sidebar_row(view);
-            sidebar.append(&row);
-            counts.push((view, count));
-        }
-        sidebar.set_header_func(|row, _| {
-            // A "Categorias" heading above the first category.
-            if row.index() == 3 {
-                let heading = gtk::Label::builder()
-                    .label("Categorias")
-                    .xalign(0.0)
-                    .margin_start(12)
-                    .margin_top(12)
-                    .margin_bottom(4)
-                    .build();
-                heading.add_css_class("dim-label");
-                heading.add_css_class("caption-heading");
-                row.set_header(Some(&heading));
-            } else {
-                row.set_header(gtk::Widget::NONE);
+        let v = views.clone();
+        sidebar.set_header_func(move |row, _| {
+            // "Categorias" and "Filas" above the first entry of each group.
+            let views = v.borrow();
+            let index = row.index() as usize;
+            let group = views.get(index).and_then(|view| view.group());
+            let first = group.is_some() && (index == 0 || views.get(index - 1).and_then(|view| view.group()) != group);
+            match group.filter(|_| first) {
+                Some(text) => {
+                    let heading =
+                        gtk::Label::builder().label(text).xalign(0.0).margin_start(12).margin_top(12).margin_bottom(4).build();
+                    heading.add_css_class("dim-label");
+                    heading.add_css_class("caption-heading");
+                    row.set_header(Some(&heading));
+                }
+                None => row.set_header(gtk::Widget::NONE),
             }
         });
-        sidebar.select_row(sidebar.row_at_index(0).as_ref());
         let sidebar_scroll = gtk::ScrolledWindow::builder()
             .child(&sidebar)
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -265,7 +304,15 @@ impl MainWindow {
                 .is_some_and(|item| item.with_info(|info| view_now.get().matches(info)))
         });
         let filtered = gtk::FilterListModel::new(Some(app.store.clone()), Some(filter.clone()));
-        let selection = gtk::SingleSelection::new(Some(filtered));
+        // In queue order (the order of arrival, unless moved up or down).
+        let sorter = gtk::CustomSorter::new(|a, b| {
+            let key = |object: &glib::Object| {
+                object.downcast_ref::<DownloadItem>().map(|item| item.with_info(|info| (info.order, info.id)))
+            };
+            key(a).cmp(&key(b)).into()
+        });
+        let sorted = gtk::SortListModel::new(Some(filtered), Some(sorter.clone()));
+        let selection = gtk::SingleSelection::new(Some(sorted));
         selection.set_autoselect(false);
         selection.set_can_unselect(true);
         // Built with autoselect on, the first row would start selected.
@@ -274,13 +321,15 @@ impl MainWindow {
         view.set_show_column_separators(true);
         view.set_reorderable(false);
         // Right click selects the row and opens its menu; the actions follow the selection.
-        let popover = gtk::PopoverMenu::builder().menu_model(&row_menu_model()).has_arrow(false).build();
+        let queues = app.settings().all_queues();
+        let popover = gtk::PopoverMenu::builder().menu_model(&row_menu_model(&queues)).has_arrow(false).build();
         popover.set_halign(gtk::Align::Start);
         popover.set_parent(&view);
         let p = popover.clone();
         view.connect_destroy(move |_| p.unparent());
-        let (s, v) = (selection.clone(), view.downgrade());
+        let (s, v, popover_) = (selection.clone(), view.downgrade(), popover.clone());
         let menu: RowMenu = Rc::new(move |item, cell, x, y| {
+            let popover = &popover_;
             let Some(view) = v.upgrade() else { return };
             s.set_selected(item.position());
             let (x, y) = cell.translate_coordinates(&view, x, y).unwrap_or((x, y));
@@ -325,34 +374,83 @@ impl MainWindow {
             remove: gio::SimpleAction::new("remove", None),
             open_file: gio::SimpleAction::new("open-file", None),
             open_folder: gio::SimpleAction::new("open-folder", None),
+            move_up: gio::SimpleAction::new("move-up", None),
+            move_down: gio::SimpleAction::new("move-down", None),
+            move_to_queue: gio::SimpleAction::new("move-to-queue", Some(glib::VariantTy::UINT64)),
         };
-        for action in [&actions.resume, &actions.pause, &actions.remove, &actions.open_file, &actions.open_folder] {
+        for action in [
+            &actions.resume,
+            &actions.pause,
+            &actions.remove,
+            &actions.open_file,
+            &actions.open_folder,
+            &actions.move_up,
+            &actions.move_down,
+            &actions.move_to_queue,
+        ] {
             window.add_action(action);
         }
+
+        let (filter_, v, c) = (filter.clone(), views.clone(), current.clone());
+        sidebar.connect_row_selected(move |_, row| {
+            let Some(row) = row else { return };
+            let view = v.borrow().get(row.index() as usize).copied();
+            if let Some(view) = view {
+                c.set(view);
+                filter_.changed(gtk::FilterChange::Different);
+            }
+        });
 
         let this = Self {
             window,
             selection,
             filter: filter.clone(),
+            sorter,
             store: app.store.clone(),
-            counts,
+            sidebar,
+            views,
+            current,
+            counts: RefCell::default(),
+            popover,
             status,
             actions,
             speed_limit: Cell::new(app.settings().speed_limit),
-            schedule: RefCell::new(app.settings().schedule),
+            queues: RefCell::default(),
         };
         this.connect(app, &view);
-
-        let filter_ = filter.clone();
-        sidebar.connect_row_selected(move |_, row| {
-            let Some(row) = row else { return };
-            if let Some(view) = View::all().get(row.index() as usize) {
-                current.set(*view);
-                filter_.changed(gtk::FilterChange::Different);
-            }
-        });
-        this.refresh(true);
+        this.set_queues(queues);
         this
+    }
+
+    /// The queues changed (settings): their sidebar entries, the row menu and
+    /// the status bar follow.
+    pub fn set_queues(&self, queues: Vec<Queue>) {
+        let same_entries = {
+            let old = self.queues.borrow();
+            !self.counts.borrow().is_empty()
+                && old.len() == queues.len()
+                && old.iter().zip(&queues).all(|(a, b)| a.id == b.id && a.name == b.name)
+        };
+        self.queues.replace(queues.clone());
+        if !same_entries {
+            self.popover.set_menu_model(Some(&row_menu_model(&queues)));
+            let views = View::all(&queues);
+            self.views.replace(views.clone());
+            while let Some(row) = self.sidebar.row_at_index(0) {
+                self.sidebar.remove(&row);
+            }
+            let mut counts = Vec::new();
+            for view in &views {
+                let (row, count) = sidebar_row(*view, &queues);
+                self.sidebar.append(&row);
+                counts.push((*view, count));
+            }
+            self.counts.replace(counts);
+            // Keep the current entry; a removed queue falls back to "Todos os downloads".
+            let at = views.iter().position(|view| *view == self.current.get()).unwrap_or(0);
+            self.sidebar.select_row(self.sidebar.row_at_index(at as i32).as_ref());
+        }
+        self.refresh(true);
     }
 
     fn selected(selection: &gtk::SingleSelection) -> Option<DownloadInfo> {
@@ -371,15 +469,17 @@ impl MainWindow {
         };
         let parent = window.clone();
         simple("add", Box::new(move || add_url_dialog(&parent)));
-        let (parent, a) = (window.clone(), app.clone());
-        simple(
-            "preferences",
-            Box::new(move || {
-                if let Some(app) = a.upgrade() {
-                    crate::prefs::show(parent.upcast_ref(), app.settings());
-                }
-            }),
-        );
+        for (name, page) in [("preferences", crate::prefs::Page::General), ("queues", crate::prefs::Page::Queues)] {
+            let (parent, a) = (window.clone(), app.clone());
+            simple(
+                name,
+                Box::new(move || {
+                    if let Some(app) = a.upgrade() {
+                        crate::prefs::show(parent.upcast_ref(), app.settings(), page);
+                    }
+                }),
+            );
+        }
         let parent = window.clone();
         simple("about", Box::new(move || about(&parent)));
         let a = app.clone();
@@ -422,6 +522,21 @@ impl MainWindow {
         self.actions.pause.connect_activate(move |_, _| {
             if let Some(info) = Self::selected(&s) {
                 send(Request::Pause { id: info.id }, None);
+            }
+        });
+        for (action, direction) in [(&self.actions.move_up, Direction::Up), (&self.actions.move_down, Direction::Down)] {
+            let s = selection.clone();
+            action.connect_activate(move |_, _| {
+                if let Some(info) = Self::selected(&s) {
+                    send(Request::Reorder { id: info.id, direction }, None);
+                }
+            });
+        }
+        let s = selection.clone();
+        self.actions.move_to_queue.connect_activate(move |_, target| {
+            let queue = target.and_then(|t| t.get::<u64>());
+            if let (Some(info), Some(queue)) = (Self::selected(&s), queue) {
+                send(Request::SetQueue { id: info.id, queue }, None);
             }
         });
         let (s, w) = (selection.clone(), window.clone());
@@ -470,8 +585,9 @@ impl MainWindow {
     pub fn refresh(&self, structural: bool) {
         if structural {
             self.filter.changed(gtk::FilterChange::Different);
+            self.sorter.changed(gtk::SorterChange::Different);
             let items: Vec<DownloadItem> = self.store.iter::<DownloadItem>().flatten().collect();
-            for (view, label) in &self.counts {
+            for (view, label) in self.counts.borrow().iter() {
                 let n = items.iter().filter(|item| item.with_info(|info| view.matches(info))).count();
                 label.set_label(&if n > 0 { n.to_string() } else { String::new() });
             }
@@ -504,9 +620,15 @@ impl MainWindow {
                 if self.speed_limit.get() > 0 {
                     text.push_str(&format!(" · limite de {}/s", format::bytes(self.speed_limit.get())));
                 }
-                let schedule = self.schedule.borrow();
-                if schedule.enabled {
-                    text.push_str(&format!(" · fila agendada: {}", schedule.describe()));
+                let scheduled: Vec<String> = self
+                    .queues
+                    .borrow()
+                    .iter()
+                    .filter(|queue| queue.schedule.enabled)
+                    .map(|queue| format!("{}: {}", queue.name, queue.schedule.describe()))
+                    .collect();
+                if !scheduled.is_empty() {
+                    text.push_str(&format!(" · agendado — {}", scheduled.join("; ")));
                 }
                 text
             }
@@ -522,6 +644,10 @@ fn update_actions(actions: &Actions, selected: Option<DownloadInfo>) {
     actions.remove.set_enabled(selected.is_some());
     actions.open_file.set_enabled(state == Some(State::Completed));
     actions.open_folder.set_enabled(selected.is_some_and(|i| i.path.is_some() || i.dir.is_some()));
+    let unfinished = state.is_some_and(|s| s != State::Completed);
+    actions.move_up.set_enabled(unfinished);
+    actions.move_down.set_enabled(unfinished);
+    actions.move_to_queue.set_enabled(state.is_some());
 }
 
 fn about(parent: &gtk::ApplicationWindow) {
@@ -693,9 +819,14 @@ mod tests {
         assert!(!View::Category(Category::Music).matches(&info));
         info.state = State::Completed;
         assert!(View::Finished.matches(&info) && !View::Unfinished.matches(&info));
-        // "Categorias" heading sits above index 3: the first category.
-        assert_eq!(View::all()[3], View::Category(Category::Video));
-        assert_eq!(View::all().len(), 3 + Category::ALL.len());
+        let queues = ldm_ipc::Settings::default().all_queues();
+        let views = View::all(&queues);
+        assert_eq!(views[3], View::Category(Category::Video));
+        assert_eq!(views.len(), 3 + Category::ALL.len() + 1);
+        assert_eq!(views.last(), Some(&View::Queue(ldm_ipc::MAIN_QUEUE)));
+        assert_eq!(View::Queue(0).label(&queues), ldm_ipc::MAIN_QUEUE_NAME);
+        assert_eq!(View::Queue(0).group(), Some("Filas"));
+        assert!(View::Queue(0).matches(&info) && !View::Queue(1).matches(&info));
     }
 
     fn serde_json_like(state: State, category: Category) -> DownloadInfo {
@@ -717,6 +848,8 @@ mod tests {
             probing: false,
             category,
             formats: Vec::new(),
+            queue: ldm_ipc::MAIN_QUEUE,
+            order: 1,
         }
     }
 }

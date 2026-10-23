@@ -5,18 +5,21 @@
 //! sleeping until the next start, so a suspended machine or a changed clock
 //! never leaves the queue in the wrong state.
 //!
+//! Every queue has its own schedule and state.
+//!
 //! A window only "finishes" (and suspends or powers off) when its start was
 //! seen: the clock crossed it, or the user set the schedule while inside it.
 //! Booting or restarting `ldmd` in the middle of a window never does, and
 //! what was started and finished is kept in `scheduler.json`, so a restart
 //! does not repeat the power off.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
-use ldm_ipc::{LocalTime, PowerPlan, Response, Schedule, State as JobState, WhenDone};
+use ldm_ipc::{LocalTime, PowerPlan, Response, Schedule, Settings, State as JobState, WhenDone, MAIN_QUEUE};
 use serde::{Deserialize, Serialize};
 
 use super::{now, write_json, Manager};
@@ -42,8 +45,43 @@ pub fn saved_path(store: &Path) -> PathBuf {
     store.with_file_name("scheduler.json")
 }
 
-pub fn load_saved(path: &Path) -> Saved {
-    std::fs::read(path).ok().and_then(|data| serde_json::from_slice(&data).ok()).unwrap_or_default()
+/// Per queue. The file of the first version had only the main queue's `Saved`.
+pub fn load_saved(path: &Path) -> HashMap<u64, Saved> {
+    let Ok(data) = std::fs::read(path) else { return HashMap::new() };
+    serde_json::from_slice(&data)
+        .or_else(|_| serde_json::from_slice::<Saved>(&data).map(|main| HashMap::from([(MAIN_QUEUE, main)])))
+        .unwrap_or_default()
+}
+
+/// The scheduler state of every queue.
+pub struct Scheduler {
+    pub queues: HashMap<u64, State>,
+    /// A queue finished with "suspend"/"power off", waiting for the other
+    /// queues' downloads to end.
+    power_wanted: Option<WhenDone>,
+    /// The user was told the power action waits for the other downloads.
+    waiting_for_others: bool,
+}
+
+impl Scheduler {
+    pub fn new(settings: &Settings, now: LocalTime, mut saved: HashMap<u64, Saved>) -> Self {
+        let queues = settings
+            .all_queues()
+            .iter()
+            .map(|queue| (queue.id, State::new(&queue.schedule, now, saved.remove(&queue.id).unwrap_or_default())))
+            .collect();
+        Self { queues, power_wanted: None, waiting_for_others: false }
+    }
+
+    pub fn completed(&mut self, queue: u64) {
+        if let Some(state) = self.queues.get_mut(&queue) {
+            state.completed = true;
+        }
+    }
+
+    fn saved(&self) -> HashMap<u64, Saved> {
+        self.queues.iter().map(|(id, state)| (*id, state.saved)).collect()
+    }
 }
 
 pub struct State {
@@ -76,94 +114,149 @@ impl State {
 }
 
 impl Manager {
-    /// Queued downloads may start (always, unless the scheduler is on and we
-    /// are outside its window).
-    pub fn queue_open(&self) -> bool {
-        self.scheduler.lock().unwrap().open
+    /// Queued downloads of `queue` may start (always, unless its scheduler is
+    /// on and we are outside its window).
+    pub fn queue_open(&self, queue: u64) -> bool {
+        self.scheduler.lock().unwrap().queues.get(&queue).map_or(true, |state| state.open)
     }
 
     /// Downloads waiting in the queue, or running or paused ones the queue
     /// started ("Pausar todos" does not finish the queue).
-    fn queue_busy(&self) -> bool {
+    fn queue_busy(&self, queue: u64) -> bool {
         self.inner.lock().unwrap().jobs.values().any(|job| {
-            job.info.state == JobState::Queued
-                || (matches!(job.info.state, JobState::Running | JobState::Paused) && job.from_queue)
+            job.info.queue == queue
+                && (job.info.state == JobState::Queued
+                    || (matches!(job.info.state, JobState::Running | JobState::Paused) && job.from_queue))
         })
     }
 
     pub fn scheduler_tick(self: &Arc<Self>, now: LocalTime) {
-        self.scheduler_check(now, false);
+        self.scheduler_check(now, &[]);
     }
 
-    /// `schedule_changed`: the user just set the schedule, so being inside a
+    /// `changed`: queues whose schedule the user just set, so being inside a
     /// window counts as its start.
-    pub fn scheduler_check(self: &Arc<Self>, now: LocalTime, schedule_changed: bool) {
-        let schedule = self.settings().schedule;
-        let window = schedule.enabled.then(|| schedule.window_at(now)).flatten();
-        let (opened, stopped, finished, saved) = {
+    pub fn scheduler_check(self: &Arc<Self>, now: LocalTime, changed: &[u64]) {
+        let queues = self.settings().all_queues();
+        let mut events = Vec::new();
+        let saved = {
             // Lock order: `scheduler`, then `inner` (never the other way around).
-            let mut state = self.scheduler.lock().unwrap();
-            let before = state.saved;
-            let ended = state.window.is_some() && state.window != window;
-            if state.window != window {
-                state.window = window;
-                state.completed = false;
-                if window.is_some() {
+            let mut scheduler = self.scheduler.lock().unwrap();
+            let before = scheduler.saved();
+            scheduler.queues.retain(|id, _| queues.iter().any(|q| q.id == *id));
+            for queue in &queues {
+                let schedule = &queue.schedule;
+                let state = scheduler
+                    .queues
+                    .entry(queue.id)
+                    .or_insert_with(|| State::new(schedule, now, Saved::default()));
+                let window = schedule.enabled.then(|| schedule.window_at(now)).flatten();
+                let ended = state.window.is_some() && state.window != window;
+                if state.window != window {
+                    state.window = window;
+                    state.completed = false;
+                    if window.is_some() {
+                        state.saved.started = window;
+                    }
+                }
+                if changed.contains(&queue.id) && window.is_some() {
                     state.saved.started = window;
                 }
-            }
-            if schedule_changed && window.is_some() {
-                state.saved.started = window;
-            }
-            let mut finished = false;
-            if let Some(key) = window {
-                let ready = state.saved.started == Some(key) && state.saved.done != Some(key) && state.completed;
-                if ready && !self.queue_busy() {
-                    state.saved.done = Some(key);
-                    state.completed = false;
-                    finished = true;
+                let mut finished = false;
+                if let Some(key) = window {
+                    let ready = state.saved.started == Some(key) && state.saved.done != Some(key) && state.completed;
+                    if ready && !self.queue_busy(queue.id) {
+                        state.saved.done = Some(key);
+                        state.completed = false;
+                        finished = true;
+                    }
                 }
+                let open = state.is_open(schedule);
+                let opened = open && !state.open;
+                state.open = open;
+                // Only the end of a window pauses downloads: turning the scheduler
+                // on outside its hours lets the running ones finish.
+                events.push((queue.clone(), opened, ended && !open && !finished, finished));
             }
-            let open = state.is_open(&schedule);
-            let opened = open && !state.open;
-            state.open = open;
-            let saved = (state.saved != before).then_some(state.saved);
-            // Only the end of a window pauses downloads: turning the scheduler
-            // on outside its hours lets the running ones finish.
-            (opened, ended && !open && !finished, finished, saved)
+            let saved = scheduler.saved();
+            (saved != before).then_some(saved)
         };
         if let Some(saved) = saved {
             if let Err(e) = write_json(&self.scheduler_path, &saved, 0o600) {
                 tracing::warn!(error = %e, "não foi possível salvar o estado do agendador");
             }
         }
-        if opened {
-            if schedule.enabled {
-                tracing::info!("agendador: a fila começou");
-                notify::send("Agendador", "A fila de downloads começou.");
+        let mut start = false;
+        for (queue, opened, stopped, finished) in events {
+            let name = &queue.name;
+            if opened && queue.schedule.enabled {
+                tracing::info!(queue = queue.id, "agendador: a fila começou");
+                notify::send("Agendador", &format!("A fila \u{201c}{name}\u{201d} começou."));
             }
+            start |= opened;
+            if stopped {
+                tracing::info!(queue = queue.id, "agendador: horário encerrado");
+                if self.requeue_running(queue.id) > 0 {
+                    notify::send(
+                        "Agendador",
+                        &format!("O horário da fila \u{201c}{name}\u{201d} acabou: os downloads voltaram para ela."),
+                    );
+                }
+            }
+            if finished {
+                tracing::info!(queue = queue.id, when_done = ?queue.schedule.when_done, "agendador: a fila terminou");
+                match queue.schedule.when_done {
+                    WhenDone::Nothing => {
+                        notify::send("Fila concluída", &format!("Os downloads da fila \u{201c}{name}\u{201d} terminaram."))
+                    }
+                    action => {
+                        let mut scheduler = self.scheduler.lock().unwrap();
+                        // Powering off wins over suspending.
+                        scheduler.power_wanted = scheduler.power_wanted.max(Some(action));
+                    }
+                }
+            }
+        }
+        if start {
             self.schedule();
         }
-        if stopped {
-            tracing::info!("agendador: horário encerrado");
-            if self.requeue_running() > 0 {
-                notify::send("Agendador", "O horário acabou: os downloads voltaram para a fila.");
+        self.power_when_idle(&queues);
+    }
+
+    /// Plans the wanted suspend/power off once no download is running or about
+    /// to start (queued in an open queue); until then, says it is waiting.
+    fn power_when_idle(self: &Arc<Self>, queues: &[ldm_ipc::Queue]) {
+        let Some(action) = self.scheduler.lock().unwrap().power_wanted else { return };
+        let open: Vec<u64> = queues.iter().map(|q| q.id).filter(|id| self.queue_open(*id)).collect();
+        let busy = self.inner.lock().unwrap().jobs.values().any(|job| {
+            job.info.state == JobState::Running || (job.info.state == JobState::Queued && open.contains(&job.info.queue))
+        });
+        let mut scheduler = self.scheduler.lock().unwrap();
+        if busy {
+            if !std::mem::replace(&mut scheduler.waiting_for_others, true) {
+                let what = if action == WhenDone::Suspend { "suspenso" } else { "desligado" };
+                notify::send(
+                    "Fila concluída",
+                    &format!("O computador será {what} quando os outros downloads terminarem."),
+                );
             }
+            return;
         }
-        if finished {
-            tracing::info!(when_done = ?schedule.when_done, "agendador: a fila terminou");
-            match schedule.when_done {
-                WhenDone::Nothing => notify::send("Fila concluída", "Os downloads agendados terminaram."),
-                action => self.plan_power(action),
-            }
-        }
+        scheduler.power_wanted = None;
+        scheduler.waiting_for_others = false;
+        drop(scheduler);
+        self.plan_power(action);
     }
 
     /// Pauses the downloads the queue started; they wait in the queue again.
-    fn requeue_running(&self) -> usize {
+    fn requeue_running(&self, queue: u64) -> usize {
         let mut inner = self.inner.lock().unwrap();
         let mut count = 0;
-        for job in inner.jobs.values_mut().filter(|j| j.info.state == JobState::Running && j.from_queue) {
+        for job in inner
+            .jobs
+            .values_mut()
+            .filter(|j| j.info.queue == queue && j.info.state == JobState::Running && j.from_queue)
+        {
             job.requeue = true;
             if let Some(cancel) = &job.cancel {
                 cancel.cancel();
@@ -320,7 +413,7 @@ mod tests {
         let (url, _server) = silent_server().await;
         set_schedule(&manager, "09:00", Some("17:00"), WhenDone::Nothing);
         manager.scheduler_tick(at(8, 0));
-        assert!(!manager.queue_open());
+        assert!(!manager.queue_open(MAIN_QUEUE));
 
         let queued = manager.add(AddRequest { url: url.clone(), start: true, ..Default::default() }).unwrap();
         assert_eq!(manager.state(queued), Some(JobState::Queued), "waits outside the window");
@@ -330,11 +423,11 @@ mod tests {
         assert_eq!(manager.state(now), Some(JobState::Running));
 
         manager.scheduler_tick(at(9, 0));
-        assert!(manager.queue_open());
+        assert!(manager.queue_open(MAIN_QUEUE));
         assert_eq!(manager.state(queued), Some(JobState::Running));
 
         manager.scheduler_tick(at(17, 0));
-        assert!(!manager.queue_open());
+        assert!(!manager.queue_open(MAIN_QUEUE));
         wait_for(&manager, queued, JobState::Queued).await;
         assert_eq!(manager.state(now), Some(JobState::Running), "started by hand: keeps going");
 
@@ -354,7 +447,7 @@ mod tests {
         assert_eq!(manager.state(id), Some(JobState::Running));
         set_schedule(&manager, "09:00", Some("17:00"), WhenDone::Nothing);
         manager.scheduler_tick(at(8, 0));
-        assert!(!manager.queue_open());
+        assert!(!manager.queue_open(MAIN_QUEUE));
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(manager.state(id), Some(JobState::Running));
     }
@@ -368,7 +461,7 @@ mod tests {
         // Mondays only: Sunday's window (until Monday 09:00) does not exist.
         manager.settings.lock().unwrap().schedule.days = vec![1];
         manager.scheduler_tick(at(8, 59));
-        assert!(!manager.queue_open());
+        assert!(!manager.queue_open(MAIN_QUEUE));
         let id = add(&manager, &url);
         manager.scheduler_tick(at(9, 0));
         wait_for(&manager, id, JobState::Completed).await;
@@ -376,7 +469,7 @@ mod tests {
         manager.scheduler_tick(at(9, 1));
         let plan = manager.power_plan().expect("planned");
         assert_eq!(plan.action, WhenDone::Suspend);
-        assert!(!manager.queue_open(), "without a stop time the window closes when the queue is done");
+        assert!(!manager.queue_open(MAIN_QUEUE), "without a stop time the window closes when the queue is done");
         let mut seen = false;
         while let Ok(update) = updates.try_recv() {
             seen |= matches!(update, Response::Power { plan: Some(_) });
@@ -390,9 +483,74 @@ mod tests {
         manager.scheduler_tick(at(9, 2));
         assert!(manager.power_plan().is_none());
         let saved = load_saved(&manager.scheduler_path);
-        assert_eq!(saved, Saved { started: Some(10), done: Some(10) });
+        assert_eq!(saved[&MAIN_QUEUE], Saved { started: Some(10), done: Some(10) });
         let schedule = manager.settings().schedule;
-        assert!(!State::new(&schedule, at(14, 0), saved).open, "a finished open-ended window stays closed");
+        assert!(!State::new(&schedule, at(14, 0), saved[&MAIN_QUEUE]).open, "a finished open-ended window stays closed");
+    }
+
+    #[test]
+    fn first_version_state_file_still_loads() {
+        let path = std::env::temp_dir().join(format!("ldm-scheduler-{}.json", std::process::id()));
+        std::fs::write(&path, r#"{"started":3,"done":3}"#).unwrap();
+        assert_eq!(load_saved(&path)[&MAIN_QUEUE], Saved { started: Some(3), done: Some(3) });
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn each_queue_has_its_own_schedule() {
+        let manager = manager();
+        let (url, _server) = silent_server().await;
+        let night = ldm_ipc::Queue {
+            id: 1,
+            name: "Noite".into(),
+            max_parallel: 2,
+            schedule: Schedule {
+                enabled: true,
+                start: TimeOfDay::parse("23:00").unwrap(),
+                stop: TimeOfDay::parse("06:00"),
+                ..Schedule::default()
+            },
+        };
+        manager.settings.lock().unwrap().set_queue(night);
+        manager.scheduler_tick(at(12, 0));
+        assert!(manager.queue_open(MAIN_QUEUE) && !manager.queue_open(1));
+        let main = add(&manager, &url);
+        let later = manager.add(AddRequest { url: url.clone(), start: true, queue: Some(1), ..Default::default() }).unwrap();
+        assert_eq!(manager.state(main), Some(JobState::Running));
+        assert_eq!(manager.state(later), Some(JobState::Queued));
+        manager.scheduler_tick(at(23, 0));
+        assert_eq!(manager.state(later), Some(JobState::Running));
+    }
+
+    #[tokio::test]
+    async fn power_off_waits_for_the_other_queues() {
+        let manager = manager();
+        let (slow, _server) = silent_server().await;
+        let fast = file_server().await;
+        let night = ldm_ipc::Queue {
+            id: 1,
+            name: "Noite".into(),
+            max_parallel: 1,
+            schedule: Schedule {
+                enabled: true,
+                start: TimeOfDay::parse("09:00").unwrap(),
+                stop: TimeOfDay::parse("17:00"),
+                when_done: WhenDone::Poweroff,
+                ..Schedule::default()
+            },
+        };
+        manager.settings.lock().unwrap().set_queue(night);
+        manager.scheduler_tick(at(8, 0));
+        let other = add(&manager, &slow);
+        let id = manager.add(AddRequest { url: fast, start: true, queue: Some(1), ..Default::default() }).unwrap();
+        manager.scheduler_tick(at(9, 0));
+        wait_for(&manager, id, JobState::Completed).await;
+        manager.scheduler_tick(at(9, 1));
+        assert!(manager.power_plan().is_none(), "the main queue is still downloading");
+        manager.pause(other).unwrap();
+        wait_for(&manager, other, JobState::Paused).await;
+        manager.scheduler_tick(at(9, 2));
+        assert_eq!(manager.power_plan().map(|p| p.action), Some(WhenDone::Poweroff));
     }
 
     #[tokio::test]
@@ -401,8 +559,9 @@ mod tests {
         let url = file_server().await;
         set_schedule(&manager, "09:00", Some("17:00"), WhenDone::Poweroff);
         // As if ldmd started at 10:00 (the machine was booted then).
-        *manager.scheduler.lock().unwrap() = State::new(&manager.settings().schedule, at(10, 0), Saved::default());
-        assert!(manager.queue_open(), "a window with a stop time is open");
+        let state = State::new(&manager.settings().schedule, at(10, 0), Saved::default());
+        manager.scheduler.lock().unwrap().queues.insert(MAIN_QUEUE, state);
+        assert!(manager.queue_open(MAIN_QUEUE), "a window with a stop time is open");
         let id = add(&manager, &url);
         wait_for(&manager, id, JobState::Completed).await;
         manager.scheduler_tick(at(10, 1));
@@ -418,7 +577,7 @@ mod tests {
         let manager = manager();
         let url = file_server().await;
         set_schedule(&manager, "09:00", Some("17:00"), WhenDone::Suspend);
-        manager.scheduler_check(at(10, 0), true);
+        manager.scheduler_check(at(10, 0), &[MAIN_QUEUE]);
         let id = add(&manager, &url);
         wait_for(&manager, id, JobState::Completed).await;
         manager.scheduler_tick(at(10, 1));

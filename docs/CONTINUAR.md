@@ -1,8 +1,8 @@
 # Onde paramos e como continuar
 
 Este arquivo passa o projeto de um assistente (ou de uma pessoa) para outro. Ele resume o que existe,
-como trabalhar no repositório e o que vem a seguir. Atualizado em 22/10/2026, com o pacote 2
-(bandeja, iniciar com a sessão e agendador).
+como trabalhar no repositório e o que vem a seguir. Atualizado em 23/10/2026, com o pacote 2
+completo (bandeja, iniciar com a sessão, agendador e várias filas).
 
 ## O projeto em uma frase
 
@@ -38,9 +38,9 @@ navegador ──Native Messaging──▶ ldm-native-host ──socket Unix─�
 | `crates/ldm-core` | Motor: sondagem com `Range`, segmentação dinâmica, retomada (`arquivo.ldm-part` + `arquivo.ldm-part.json`) e `RateLimiter` (limite de velocidade). Em `examples/range_server.rs` está o servidor de teste local. |
 | `crates/ldm-ipc` | Protocolo JSON por linha no socket `$XDG_RUNTIME_DIR/ldm/ldmd.sock`. Tipos `Request`, `Response`, `DownloadInfo`, `Settings`, `Category`, `MediaFormat`, `Conflict`, mais `existing()` e `unique_name()`. |
 | `crates/ldm-daemon` (`ldmd`) | Lista, fila e jobs (`manager.rs`); agendador e suspender/desligar (`manager/scheduler.rs`); yt-dlp para vídeos de sites (`ytdlp.rs`); abre o `ldm-gui --pending` para confirmar um download (`gui.rs`); monitor da área de transferência (`clipboard.rs`); notificações. |
-| `crates/ldm-cli` (`ldm`) | `add`, `get`, `list`, `confirm`, `pause`, `resume`, `rm`, `watch`, `settings`, `schedule`, `install-hosts`, `stop`. |
+| `crates/ldm-cli` (`ldm`) | `add`, `get`, `list`, `confirm`, `pause`, `resume`, `rm`, `watch`, `settings`, `schedule`, `queue`, `move`, `install-hosts`, `stop`. |
 | `crates/ldm-native-host` | Ponte entre a extensão e o `ldmd`. |
-| `crates/ldm-gui` (`ldm-gui`, app-id `io.ldm.Ldm`) | GTK4 0.10 (feature `v4_10`), glib 0.21. Janelas: principal (`window.rs`), Novo download (`confirm.rs`), progresso / Download concluído (`progress.rs`), Preferências com abas Geral e Agendador (`prefs.rs`), contagem antes de suspender/desligar (`power.rs`). Bandeja com o crate `ksni` 0.3 (`tray.rs`, roda no runtime tokio do `ipc.rs`); autostart (`autostart.rs`). `app.rs` mantém o estado e decide quando o app fica vivo. |
+| `crates/ldm-gui` (`ldm-gui`, app-id `io.ldm.Ldm`) | GTK4 0.10 (feature `v4_10`), glib 0.21. Janelas: principal (`window.rs`), Novo download (`confirm.rs`), progresso / Download concluído (`progress.rs`), Preferências com abas Geral e Filas (`prefs.rs`, `queues_page`), contagem antes de suspender/desligar (`power.rs`). Bandeja com o crate `ksni` 0.3 (`tray.rs`, roda no runtime tokio do `ipc.rs`); autostart (`autostart.rs`). `app.rs` mantém o estado e decide quando o app fica vivo. |
 | `extension/` | Extensão MV3 para Chrome e Firefox. `src/background.js` e `src/content.js` colocam o botão "Baixar" sobre os players; `build.sh` gera `extension/dist/`. |
 
 Dados no Linux:
@@ -71,7 +71,24 @@ Dados no Linux:
   - Só pega links de vídeo, música, programa, arquivo compactado e PDF.
   - Se nenhuma janela puder perguntar, o link é descartado.
 
-- **Agendador** (pacote 2), em `Settings.schedule`:
+- **Várias filas** (pacote 2): `ldm_ipc::Queue { id, name, max_parallel, schedule }`.
+  - A fila principal (`MAIN_QUEUE` = 0) continua nos campos antigos `Settings.max_parallel` e
+    `Settings.schedule`, para os `settings.json` antigos valerem; as outras ficam em
+    `Settings.queues`. Use `all_queues()`, `queue(id)`, `set_queue()` e `remove_queue()`.
+  - Cada download tem `DownloadInfo.queue` e `order` (posição; menor começa antes). Downloads
+    antigos recebem `order = id` ao carregar.
+  - `Manager::schedule` respeita o limite de cada fila. "Baixar agora" ocupa uma vaga da fila mas
+    começa mesmo se ela estiver cheia.
+  - `Request::SetQueue` (vai para o fim da outra fila) e `Request::Reorder` (subir, descer,
+    topo, fim, entre os não concluídos da fila). Excluir uma fila nas configurações manda os
+    downloads dela para a principal.
+  - O agendador é por fila (`Scheduler { queues }`), e o `scheduler.json` virou um mapa por fila
+    (o formato antigo ainda é lido).
+  - Uma fila que termina com "suspender/desligar" espera os downloads das outras filas
+    (`power_when_idle`: nada baixando nem na fila de uma fila aberta). Desligar vence suspender.
+  - A posição (`order`) vem de `Inner::next_order` (maior posição + 1), e os ids de fila nunca são
+    reaproveitados (`Settings.last_queue_id`).
+- **Agendador** (pacote 2), por fila (antes só em `Settings.schedule`):
   - Horário de início, de parada (opcional) e dias da semana. A janela que passa da meia-noite
     pertence ao dia em que começou (`Schedule::window_at`, testada em `ldm-ipc`).
   - Fora do horário a fila não inicia nada; "Baixar agora" e retomar à mão (`resume` com a fila
@@ -112,7 +129,11 @@ Dados no Linux:
   - **Clique direito** num download: Abrir, Abrir pasta, Retomar, Pausar, Copiar endereço e Remover.
 - **Preferências**: pasta, subpastas por tipo, downloads simultâneos, conexões, janela de
   progresso, limite de velocidade, captura de links copiados, ícone na bandeja e iniciar com a
-  sessão; a aba Agendador tem início, parada, dias e o que fazer ao terminar.
+  sessão. A aba Filas escolhe, cria e exclui filas, e edita nome, downloads ao mesmo tempo e o
+  agendador de cada uma (início, parada, dias e o que fazer ao terminar).
+- **Filas na GUI**: seção "Filas" na barra lateral (reconstruída em `MainWindow::set_queues`
+  quando as configurações mudam), lista ordenada por `order`, e no clique direito "Mover para
+  cima/baixo" e "Mover para a fila ▸". A janela Novo download tem o campo Fila.
 - Atalho `io.ldm.Ldm.desktop` no menu de aplicativos, com caminho absoluto no `Exec`.
 - **Bandeja** (pacote 2): `Settings.tray`, ligada por padrão. O ícone só existe numa instância
   "persistente" (janela principal aberta ou `--background`), nunca no `--pending`. Com o ícone
@@ -132,14 +153,14 @@ Dados no Linux:
   Cobre pausar e retomar, confirmação, fallback, configurações, limite de velocidade, arquivo
   existente, link copiado e o agendador (fila esperando, abrindo e "suspendendo" no fim).
 - `scripts/ci/gui-smoke.sh`: a GUI sob Xvfb com xdotool. Os screenshots ficam no artifact
-  `gui-screenshots` de cada execução. Inclui a aba Agendador e o `ldm-gui --background`
+  `gui-screenshots` de cada execução. Inclui uma segunda fila, a aba Filas e o `ldm-gui --background`
   confirmando um download sem abrir outro `--pending`. Não há bandeja no Xvfb, então o ícone
   em si só é testado de verdade no Arch.
 - `extension/test/real-clicks.mjs`: Chrome de verdade via CDP pela pipe, com native messaging
   simulado. Roda manualmente, no Windows, com `CHROME=...`.
 
-O dono testou no Arch: 5 downloads do YouTube corretos, e o pacote 1 inteiro (ok em 22/10).
-**Ainda não testou o pacote 2 no Arch.**
+O dono testou no Arch: 5 downloads do YouTube corretos, o pacote 1 (ok em 22/10) e a bandeja,
+a sessão e o agendador do pacote 2 (ok em 23/10). **Ainda não testou as várias filas.**
 
 ## Como trabalhar no repositório
 
@@ -192,18 +213,10 @@ Mudanças só de documentação podem ir direto para o `main`.
 
 ## Próximos passos (em ordem de prioridade)
 
-Antes de seguir, peça ao dono para testar o pacote 2 no Arch:
-- o ícone aparece na bandeja (waybar com o módulo `tray`, ou noctalia); clique abre a janela;
-  fechar a janela deixa o ícone; o menu pausa, retoma e sai;
-- Preferências → "Iniciar com a sessão", sair e entrar de novo no niri: o ícone volta sozinho
-  (se não voltar, `spawn-at-startup "ldm-gui" "--background"` no `config.kdl`);
-- agendador com início daqui a 2 minutos e "Suspender": a fila espera, começa na hora, e no fim
-  aparece a contagem de 60 s com "Cancelar".
-
-### Pacote 2: o que falta
-- **Várias filas**, com ordem e prioridade dentro de cada uma (mover para cima ou para baixo).
-  Hoje há uma fila só, ordenada por id, e o "Baixar agora" fura a fila. O agendador vale para
-  essa fila única; com várias filas, cada uma teria o seu `Schedule`.
+Antes de seguir, peça ao dono para testar as várias filas no Arch: criar a fila "Noite" com 1
+por vez (☰ → Filas e agendador), mandar dois downloads para ela pela janela Novo download,
+subir o segundo pelo clique direito, e excluir a fila (os downloads vão para a principal).
+O pacote 2 está completo; o próximo é o pacote 3.
 
 ### Pacote 3: rede e casos especiais
 - **Atualizar o endereço** de um download cujo link expirou, como o "Refresh download address"

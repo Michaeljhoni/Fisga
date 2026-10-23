@@ -90,6 +90,9 @@ pub struct AddRequest {
     /// `None` = the best one.
     #[serde(default)]
     pub format: Option<String>,
+    /// A `Queue::id`; `None` = the main queue.
+    #[serde(default)]
+    pub queue: Option<u64>,
 }
 
 fn yes() -> bool {
@@ -269,8 +272,46 @@ pub struct Settings {
     /// Icon in the system tray (StatusNotifierItem); closing the main window
     /// keeps `ldm-gui` running there.
     pub tray: bool,
-    /// When the queue runs (IDM's scheduler).
+    /// When the main queue runs (IDM's scheduler). `max_parallel` and this
+    /// field are the main queue's settings; `queues` holds the other ones.
     pub schedule: Schedule,
+    /// Queues created by the user, besides the main one.
+    pub queues: Vec<Queue>,
+    /// The highest queue id ever used: ids are never reused, so a download
+    /// (or an open window) never ends up in a newer queue that took the id.
+    pub last_queue_id: u64,
+}
+
+/// The main queue: always there, it cannot be removed or renamed.
+pub const MAIN_QUEUE: u64 = 0;
+pub const MAIN_QUEUE_NAME: &str = "Fila principal";
+
+/// A download queue, as in IDM: its own number of downloads at the same time
+/// and its own schedule. Every download belongs to one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Queue {
+    pub id: u64,
+    pub name: String,
+    /// Downloads of this queue running at the same time.
+    pub max_parallel: usize,
+    pub schedule: Schedule,
+}
+
+impl Default for Queue {
+    fn default() -> Self {
+        Self { id: MAIN_QUEUE, name: MAIN_QUEUE_NAME.into(), max_parallel: 3, schedule: Schedule::default() }
+    }
+}
+
+/// Where to move a download inside its queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Direction {
+    Up,
+    Down,
+    Top,
+    Bottom,
 }
 
 impl Default for Settings {
@@ -285,19 +326,81 @@ impl Default for Settings {
             watch_clipboard: true,
             tray: true,
             schedule: Schedule::default(),
+            queues: Vec::new(),
+            last_queue_id: MAIN_QUEUE,
         }
     }
 }
 
+fn sanitize_days(days: &mut Vec<u8>) {
+    days.retain(|day| *day < 7);
+    days.sort_unstable();
+    days.dedup();
+}
+
 impl Settings {
-    /// Keeps numbers in a usable range.
+    /// Keeps numbers in a usable range, and the queues unique and named.
     pub fn sanitized(mut self) -> Self {
         self.max_parallel = self.max_parallel.clamp(1, 20);
         self.connections = self.connections.clamp(1, 32);
-        self.schedule.days.retain(|day| *day < 7);
-        self.schedule.days.sort_unstable();
-        self.schedule.days.dedup();
+        sanitize_days(&mut self.schedule.days);
+        let mut seen = vec![MAIN_QUEUE];
+        self.queues.retain(|queue| {
+            let new = !seen.contains(&queue.id);
+            seen.push(queue.id);
+            new
+        });
+        for queue in &mut self.queues {
+            queue.max_parallel = queue.max_parallel.clamp(1, 20);
+            sanitize_days(&mut queue.schedule.days);
+            queue.name = queue.name.trim().to_string();
+            if queue.name.is_empty() {
+                queue.name = format!("Fila {}", queue.id);
+            }
+            self.last_queue_id = self.last_queue_id.max(queue.id);
+        }
         self
+    }
+
+    /// Every queue, the main one first.
+    pub fn all_queues(&self) -> Vec<Queue> {
+        let main = Queue {
+            id: MAIN_QUEUE,
+            name: MAIN_QUEUE_NAME.into(),
+            max_parallel: self.max_parallel,
+            schedule: self.schedule.clone(),
+        };
+        std::iter::once(main).chain(self.queues.iter().cloned()).collect()
+    }
+
+    pub fn queue(&self, id: u64) -> Option<Queue> {
+        self.all_queues().into_iter().find(|queue| queue.id == id)
+    }
+
+    pub fn queue_name(&self, id: u64) -> String {
+        self.queue(id).map(|queue| queue.name).unwrap_or_else(|| format!("fila {id}"))
+    }
+
+    /// Adds or replaces a queue (for the main one: its limit and schedule).
+    pub fn set_queue(&mut self, queue: Queue) {
+        if queue.id == MAIN_QUEUE {
+            self.max_parallel = queue.max_parallel;
+            self.schedule = queue.schedule;
+        } else if let Some(existing) = self.queues.iter_mut().find(|q| q.id == queue.id) {
+            *existing = queue;
+        } else {
+            self.last_queue_id = self.last_queue_id.max(queue.id);
+            self.queues.push(queue);
+        }
+    }
+
+    /// The main queue stays.
+    pub fn remove_queue(&mut self, id: u64) {
+        self.queues.retain(|queue| queue.id != id);
+    }
+
+    pub fn new_queue_id(&self) -> u64 {
+        self.queues.iter().map(|queue| queue.id).fold(self.last_queue_id, u64::max) + 1
     }
 }
 
@@ -345,8 +448,8 @@ impl From<TimeOfDay> for String {
     }
 }
 
-/// What to do when a scheduled queue finishes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// What to do when a scheduled queue finishes (ordered: powering off wins).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WhenDone {
     #[default]
@@ -516,6 +619,12 @@ pub struct DownloadInfo {
     /// Qualities of a site video, best first; empty for other downloads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub formats: Vec<MediaFormat>,
+    /// The `Queue::id` it belongs to.
+    #[serde(default)]
+    pub queue: u64,
+    /// Position in its queue: lower starts first.
+    #[serde(default)]
+    pub order: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -555,7 +664,14 @@ pub enum Request {
         /// The file already exists at the destination: what to do with it.
         #[serde(default)]
         conflict: Option<Conflict>,
+        /// Another queue for it (a `Queue::id`).
+        #[serde(default)]
+        queue: Option<u64>,
     },
+    /// Moves a download to another queue, at its end.
+    SetQueue { id: u64, queue: u64 },
+    /// Moves a download inside its queue.
+    Reorder { id: u64, direction: Direction },
     Shutdown,
     GetSettings,
     /// Replaces the settings; subscribers receive `Response::Settings`.
@@ -713,6 +829,7 @@ mod tests {
             output_dir: Some("/tmp".into()),
             format: None,
             conflict: None,
+            queue: None,
         };
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains(r#""type":"confirm""#), "{json}");
@@ -721,7 +838,15 @@ mod tests {
         let minimal: Request = serde_json::from_str(r#"{"type":"confirm","id":3}"#).unwrap();
         assert!(matches!(
             minimal,
-            Request::Confirm { id: 3, now: false, file_name: None, output_dir: None, format: None, conflict: None }
+            Request::Confirm {
+                id: 3,
+                now: false,
+                file_name: None,
+                output_dir: None,
+                format: None,
+                conflict: None,
+                queue: None
+            }
         ));
         let full: Request =
             serde_json::from_str(r#"{"type":"confirm","id":3,"format":"720","conflict":"overwrite"}"#).unwrap();
@@ -828,6 +953,36 @@ mod tests {
     }
 
     #[test]
+    fn queues() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.all_queues().len(), 1);
+        assert_eq!(settings.queue_name(MAIN_QUEUE), MAIN_QUEUE_NAME);
+        let id = settings.new_queue_id();
+        assert_eq!(id, 1);
+        settings.set_queue(Queue { id, name: " Noite ".into(), max_parallel: 99, ..Queue::default() });
+        settings.set_queue(Queue { id: MAIN_QUEUE, max_parallel: 5, ..Queue::default() });
+        // Duplicates and a fake "main" are dropped; empty names get one.
+        settings.queues.push(Queue { id, name: "outra".into(), ..Queue::default() });
+        settings.queues.push(Queue { id: MAIN_QUEUE, ..Queue::default() });
+        settings.queues.push(Queue { id: 7, name: "  ".into(), ..Queue::default() });
+        let settings = settings.sanitized();
+        assert_eq!(settings.max_parallel, 5, "the main queue's limit is the old setting");
+        let names: Vec<String> = settings.all_queues().into_iter().map(|q| q.name).collect();
+        assert_eq!(names, [MAIN_QUEUE_NAME, "Noite", "Fila 7"]);
+        assert_eq!(settings.queue(id).unwrap().max_parallel, 20);
+        assert_eq!(settings.new_queue_id(), 8);
+        let mut settings = settings;
+        settings.remove_queue(id);
+        settings.remove_queue(MAIN_QUEUE);
+        assert_eq!(settings.all_queues().len(), 2);
+        settings.remove_queue(7);
+        assert_eq!(settings.new_queue_id(), 8, "the id of a removed queue is not reused");
+        assert!(WhenDone::Poweroff > WhenDone::Suspend && WhenDone::Suspend > WhenDone::Nothing);
+        let request: Request = serde_json::from_str(r#"{"type":"reorder","id":4,"direction":"top"}"#).unwrap();
+        assert!(matches!(request, Request::Reorder { id: 4, direction: Direction::Top }));
+    }
+
+    #[test]
     fn sanitized_days() {
         let mut settings = Settings::default();
         settings.schedule.days = vec![6, 1, 9, 1];
@@ -847,6 +1002,7 @@ mod tests {
         assert!(!info.probing);
         assert_eq!(info.category, Category::Other);
         assert!(info.formats.is_empty());
+        assert_eq!((info.queue, info.order), (MAIN_QUEUE, 0));
         assert!(!serde_json::to_string(&info).unwrap().contains("formats"), "empty list not written");
     }
 }

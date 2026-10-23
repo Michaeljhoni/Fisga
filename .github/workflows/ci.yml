@@ -68,7 +68,8 @@ jobs:
 
       - name: Install and check the package
         run: |
-          pkg="$(ls packaging/arch/ldm-git-*.pkg.tar.zst)"
+          # Not ldm-git-debug-*, which makepkg also builds.
+          pkg="$(ls packaging/arch/ldm-git-r*.pkg.tar.zst)"
           pacman -Qlp "$pkg"
           pacman -U --noconfirm "$pkg"
           ldm --version

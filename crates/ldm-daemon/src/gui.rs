@@ -89,6 +89,18 @@ impl Gui {
         tokio::spawn(self.clone().fallback(manager.clone(), id, unanswered));
     }
 
+    /// Starts `ldm-gui --pending` unless a GUI is connected (or starting): it
+    /// shows whatever needs an answer, such as a planned power off.
+    pub fn show_window(&self) {
+        let recently = self.last_launch.lock().unwrap().is_some_and(|t| t.elapsed() < RELAUNCH_AFTER);
+        if self.has_confirmer() || recently {
+            return;
+        }
+        if let Err(e) = self.launch() {
+            tracing::warn!(error = %e, "não foi possível abrir o ldm-gui");
+        }
+    }
+
     fn launch(&self) -> anyhow::Result<()> {
         let program = self.program.as_ref().ok_or_else(|| anyhow::anyhow!("LDM_GUI vazio"))?;
         let mut command = tokio::process::Command::new(program);

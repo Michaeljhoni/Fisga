@@ -1,7 +1,8 @@
 # Onde paramos e como continuar
 
 Este arquivo passa o projeto de um assistente (ou de uma pessoa) para outro. Ele resume o que existe,
-como trabalhar no repositório e o que vem a seguir. Atualizado em 17/10/2026, no commit `e183c81`.
+como trabalhar no repositório e o que vem a seguir. Atualizado em 22/10/2026, com o pacote 2
+(bandeja, iniciar com a sessão e agendador).
 
 ## O projeto em uma frase
 
@@ -36,10 +37,10 @@ navegador ──Native Messaging──▶ ldm-native-host ──socket Unix─�
 |---|---|
 | `crates/ldm-core` | Motor: sondagem com `Range`, segmentação dinâmica, retomada (`arquivo.ldm-part` + `arquivo.ldm-part.json`) e `RateLimiter` (limite de velocidade). Em `examples/range_server.rs` está o servidor de teste local. |
 | `crates/ldm-ipc` | Protocolo JSON por linha no socket `$XDG_RUNTIME_DIR/ldm/ldmd.sock`. Tipos `Request`, `Response`, `DownloadInfo`, `Settings`, `Category`, `MediaFormat`, `Conflict`, mais `existing()` e `unique_name()`. |
-| `crates/ldm-daemon` (`ldmd`) | Lista, fila e jobs (`manager.rs`); yt-dlp para vídeos de sites (`ytdlp.rs`); abre o `ldm-gui --pending` para confirmar um download (`gui.rs`); monitor da área de transferência (`clipboard.rs`); notificações. |
-| `crates/ldm-cli` (`ldm`) | `add`, `get`, `list`, `confirm`, `pause`, `resume`, `rm`, `watch`, `settings`, `install-hosts`, `stop`. |
+| `crates/ldm-daemon` (`ldmd`) | Lista, fila e jobs (`manager.rs`); agendador e suspender/desligar (`manager/scheduler.rs`); yt-dlp para vídeos de sites (`ytdlp.rs`); abre o `ldm-gui --pending` para confirmar um download (`gui.rs`); monitor da área de transferência (`clipboard.rs`); notificações. |
+| `crates/ldm-cli` (`ldm`) | `add`, `get`, `list`, `confirm`, `pause`, `resume`, `rm`, `watch`, `settings`, `schedule`, `install-hosts`, `stop`. |
 | `crates/ldm-native-host` | Ponte entre a extensão e o `ldmd`. |
-| `crates/ldm-gui` (`ldm-gui`, app-id `io.ldm.Ldm`) | GTK4 0.10 (feature `v4_10`), glib 0.21. Janelas: principal (`window.rs`), Novo download (`confirm.rs`), progresso / Download concluído (`progress.rs`), Preferências (`prefs.rs`). `app.rs` mantém o estado. |
+| `crates/ldm-gui` (`ldm-gui`, app-id `io.ldm.Ldm`) | GTK4 0.10 (feature `v4_10`), glib 0.21. Janelas: principal (`window.rs`), Novo download (`confirm.rs`), progresso / Download concluído (`progress.rs`), Preferências com abas Geral e Agendador (`prefs.rs`), contagem antes de suspender/desligar (`power.rs`). Bandeja com o crate `ksni` 0.3 (`tray.rs`, roda no runtime tokio do `ipc.rs`); autostart (`autostart.rs`). `app.rs` mantém o estado e decide quando o app fica vivo. |
 | `extension/` | Extensão MV3 para Chrome e Firefox. `src/background.js` e `src/content.js` colocam o botão "Baixar" sobre os players; `build.sh` gera `extension/dist/`. |
 
 Dados no Linux:
@@ -70,6 +71,25 @@ Dados no Linux:
   - Só pega links de vídeo, música, programa, arquivo compactado e PDF.
   - Se nenhuma janela puder perguntar, o link é descartado.
 
+- **Agendador** (pacote 2), em `Settings.schedule`:
+  - Horário de início, de parada (opcional) e dias da semana. A janela que passa da meia-noite
+    pertence ao dia em que começou (`Schedule::window_at`, testada em `ldm-ipc`).
+  - Fora do horário a fila não inicia nada; "Baixar agora" e retomar à mão (`resume` com a fila
+    fechada marca `forced`) começam na hora.
+  - No fim da janela, só os jobs que a fila iniciou (`Job.from_queue`) são pausados e voltam para
+    `Queued` (`Job.requeue`). Ligar o agendador fora do horário não pausa nada.
+  - "Fila concluída" só vale numa janela cujo início foi visto (o relógio passou pelo horário,
+    ou o usuário mudou o agendamento dentro dela) e depois que um download iniciado pela fila
+    terminou. Pausados que a fila iniciou ainda contam como pendentes. Iniciar o `ldmd` no meio
+    de uma janela nunca suspende/desliga, e uma janela sem horário de parada fica fechada até o
+    próximo início. `started`/`done` ficam em `~/.local/share/ldm/scheduler.json`, para um
+    reinício não repetir o desligamento.
+  - Ao terminar a fila: nada, suspender ou desligar. O daemon anuncia um `PowerPlan`
+    (`Response::Power`), espera 60 s (`LDM_POWER_DELAY`) e roda `systemctl suspend|poweroff`
+    (`LDM_POWER_CMD` troca o comando nos testes). Sem GUI conectada, abre o `ldm-gui --pending`
+    para mostrar a contagem. `Request::CancelPower` / `ldm schedule --cancel` cancelam.
+  - O relógio é conferido a cada 15 s (`LDM_SCHEDULER_TICK_MS`).
+
 **Extensão**
 - Botão sobre os players, menu de contexto e detecção de streams.
 - Usa a URL atual do frame (`frameUrlOf`). Isso corrigiu o bug de baixar o vídeo recomendado em
@@ -91,21 +111,35 @@ Dados no Linux:
     Preferências (Ctrl+,) e Sobre.
   - **Clique direito** num download: Abrir, Abrir pasta, Retomar, Pausar, Copiar endereço e Remover.
 - **Preferências**: pasta, subpastas por tipo, downloads simultâneos, conexões, janela de
-  progresso, limite de velocidade e captura de links copiados.
+  progresso, limite de velocidade, captura de links copiados, ícone na bandeja e iniciar com a
+  sessão; a aba Agendador tem início, parada, dias e o que fazer ao terminar.
 - Atalho `io.ldm.Ldm.desktop` no menu de aplicativos, com caminho absoluto no `Exec`.
+- **Bandeja** (pacote 2): `Settings.tray`, ligada por padrão. O ícone só existe numa instância
+  "persistente" (janela principal aberta ou `--background`), nunca no `--pending`. Com o ícone
+  ativo, fechar a janela mantém o app (um `hold` do GApplication). Sem bandeja (o `spawn` do
+  `ksni` falha), fechar a janela fecha o app, como antes. Menu: resumo, Abrir, Adicionar URL,
+  Retomar todos, Pausar todos, Sair (só a interface).
+- **Iniciar com a sessão** (pacote 2): `~/.config/autostart/io.ldm.Ldm.desktop` com
+  `ldm-gui --background`. Nesse modo o `ksni` usa `assume_sni_available(true)`: o ícone aparece
+  quando o waybar/noctalia subir, mesmo que depois do LDM. Com "iniciar com a sessão" ligado e a
+  bandeja desligada, o `--background` roda sem nada visível (só confirma os downloads do
+  navegador); talvez valha avisar disso nas Preferências.
 
 **Testes** (todos no CI: `.github/workflows/ci.yml`, ubuntu-24.04)
-- `cargo test --workspace`: cerca de 60 testes unitários.
+- `cargo test --workspace`: cerca de 70 testes unitários.
 - `cargo clippy --workspace --all-targets`.
 - `scripts/e2e.sh target/debug`: daemon, CLI e host nativo de verdade contra o `range_server`.
   Cobre pausar e retomar, confirmação, fallback, configurações, limite de velocidade, arquivo
-  existente e link copiado.
+  existente, link copiado e o agendador (fila esperando, abrindo e "suspendendo" no fim).
 - `scripts/ci/gui-smoke.sh`: a GUI sob Xvfb com xdotool. Os screenshots ficam no artifact
-  `gui-screenshots` de cada execução.
+  `gui-screenshots` de cada execução. Inclui a aba Agendador e o `ldm-gui --background`
+  confirmando um download sem abrir outro `--pending`. Não há bandeja no Xvfb, então o ícone
+  em si só é testado de verdade no Arch.
 - `extension/test/real-clicks.mjs`: Chrome de verdade via CDP pela pipe, com native messaging
   simulado. Roda manualmente, no Windows, com `CHROME=...`.
 
-O dono testou no Arch: 5 downloads do YouTube corretos. **Ainda não testou o pacote 1 no Arch.**
+O dono testou no Arch: 5 downloads do YouTube corretos, e o pacote 1 inteiro (ok em 22/10).
+**Ainda não testou o pacote 2 no Arch.**
 
 ## Como trabalhar no repositório
 
@@ -158,26 +192,18 @@ Mudanças só de documentação podem ir direto para o `main`.
 
 ## Próximos passos (em ordem de prioridade)
 
-Ao entregar o pacote 1, a sugestão foi seguir para o pacote 2. Antes, peça ao dono para testar o
-pacote 1 no Arch: qualidade num vídeo do YouTube, copiar um link de `.iso`, baixar o mesmo
-arquivo duas vezes e o clique direito.
+Antes de seguir, peça ao dono para testar o pacote 2 no Arch:
+- o ícone aparece na bandeja (waybar com o módulo `tray`, ou noctalia); clique abre a janela;
+  fechar a janela deixa o ícone; o menu pausa, retoma e sai;
+- Preferências → "Iniciar com a sessão", sair e entrar de novo no niri: o ícone volta sozinho
+  (se não voltar, `spawn-at-startup "ldm-gui" "--background"` no `config.kdl`);
+- agendador com início daqui a 2 minutos e "Suspender": a fila espera, começa na hora, e no fim
+  aparece a contagem de 60 s com "Cancelar".
 
-### Pacote 2: rodar em segundo plano
-1. **Ícone na bandeja** (StatusNotifierItem via D-Bus; o niri mostra pela waybar ou noctalia).
-   - O `ldm-gui` passa a poder rodar escondido.
-   - Menu da bandeja: abrir LDM, pausar e retomar todos, sair.
-   - Caminhos possíveis: o crate `ksni`, ou implementar o SNI com zbus.
-2. **Iniciar com a sessão**:
-   - `~/.config/autostart/io.ldm.Ldm.desktop` com `ldm-gui --background`, ou um serviço de
-     usuário do systemd para o `ldmd`;
-   - uma opção para isso nas Preferências.
-3. **Agendador**, como o *Scheduler* do IDM:
-   - horário de início e de parada, e dias da semana;
-   - ao terminar a fila: nada, suspender ou desligar (`systemctl suspend` / `poweroff`, sempre
-     com confirmação);
-   - fica no `ldmd`, numa tarefa tokio que verifica o relógio, e a configuração vai no `Settings`.
-4. **Várias filas**, com ordem e prioridade dentro de cada uma (mover para cima ou para baixo).
-   Hoje há uma fila só, ordenada por id, e o "Baixar agora" fura a fila.
+### Pacote 2: o que falta
+- **Várias filas**, com ordem e prioridade dentro de cada uma (mover para cima ou para baixo).
+  Hoje há uma fila só, ordenada por id, e o "Baixar agora" fura a fila. O agendador vale para
+  essa fila única; com várias filas, cada uma teria o seu `Schedule`.
 
 ### Pacote 3: rede e casos especiais
 - **Atualizar o endereço** de um download cujo link expirou, como o "Refresh download address"

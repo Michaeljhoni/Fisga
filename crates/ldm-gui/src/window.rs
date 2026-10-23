@@ -2,13 +2,13 @@
 //! right with pause, resume, remove, open file and open folder (also in the
 //! right-click menu of each row), updated live from the daemon.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib, pango};
-use ldm_ipc::{AddRequest, Category, DownloadInfo, Request, State};
+use ldm_ipc::{AddRequest, Category, DownloadInfo, Request, Schedule, State};
 
 use crate::app::App;
 use crate::format;
@@ -69,6 +69,7 @@ pub struct MainWindow {
     actions: Actions,
     /// From the settings, for the status bar.
     pub speed_limit: Cell<u64>,
+    pub schedule: RefCell<Schedule>,
 }
 
 #[derive(Clone)]
@@ -338,6 +339,7 @@ impl MainWindow {
             status,
             actions,
             speed_limit: Cell::new(app.settings().speed_limit),
+            schedule: RefCell::new(app.settings().schedule),
         };
         this.connect(app, &view);
 
@@ -380,20 +382,10 @@ impl MainWindow {
         );
         let parent = window.clone();
         simple("about", Box::new(move || about(&parent)));
-        // Pause or resume every download in a given state (IDM's "Parar/Iniciar todos").
-        let bulk = |states: &'static [State], make: fn(u64) -> Request| {
-            let store = self.store.clone();
-            Box::new(move || {
-                for item in store.iter::<DownloadItem>().flatten() {
-                    let (id, state) = item.with_info(|info| (info.id, info.state));
-                    if states.contains(&state) {
-                        send(make(id), None);
-                    }
-                }
-            }) as Box<dyn Fn()>
-        };
-        simple("pause-all", bulk(&[State::Running, State::Queued], |id| Request::Pause { id }));
-        simple("resume-all", bulk(&[State::Paused, State::Failed], |id| Request::Resume { id }));
+        let a = app.clone();
+        simple("pause-all", Box::new(move || a.upgrade().iter().for_each(|app| app.pause_all())));
+        let a = app.clone();
+        simple("resume-all", Box::new(move || a.upgrade().iter().for_each(|app| app.resume_all())));
         let (parent, s) = (window.clone(), selection.clone());
         simple(
             "copy-url",
@@ -511,6 +503,10 @@ impl MainWindow {
                 }
                 if self.speed_limit.get() > 0 {
                     text.push_str(&format!(" · limite de {}/s", format::bytes(self.speed_limit.get())));
+                }
+                let schedule = self.schedule.borrow();
+                if schedule.enabled {
+                    text.push_str(&format!(" · fila agendada: {}", schedule.describe()));
                 }
                 text
             }

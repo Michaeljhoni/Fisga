@@ -1,24 +1,41 @@
 //! Application state: the download list mirrored from `ldmd`, the settings,
-//! the main window, and the open "Novo download" and progress windows.
+//! the main window, the open "Novo download" and progress windows, and the
+//! tray icon.
+//!
+//! Lifetime: `ldm-gui` quits when its last window closes, unless it lives in
+//! the tray (or was started with `--background`), where it keeps answering
+//! the browser's downloads until "Sair".
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
 use gtk::prelude::*;
 use gtk::{gio, glib};
-use ldm_ipc::{DownloadInfo, Settings, State};
+use ldm_ipc::{DownloadInfo, Request, Settings, State};
+use tokio::sync::mpsc;
 
 use crate::confirm::ConfirmDialog;
 use crate::ipc::{self, Event};
 use crate::item::DownloadItem;
+use crate::power::PowerDialog;
 use crate::progress::ProgressWindow;
-use crate::window::MainWindow;
+use crate::tray;
+use crate::window::{send, MainWindow};
 
 /// In `--pending` mode the app quits when its last window closes; it lingers this
 /// long first, in case another download arrives right after the user answered.
 const LINGER: Duration = Duration::from_secs(3);
+
+enum TrayState {
+    Off,
+    Starting,
+    On(tray::Handle),
+    /// No tray host when the main window opened: do not retry until the
+    /// setting changes.
+    Failed,
+}
 
 pub struct App {
     pub app: gtk::Application,
@@ -27,14 +44,28 @@ pub struct App {
     window: RefCell<Option<MainWindow>>,
     dialogs: RefCell<HashMap<u64, Rc<ConfirmDialog>>>,
     progress: RefCell<HashMap<u64, Rc<ProgressWindow>>>,
+    power: RefCell<Option<PowerDialog>>,
     settings: RefCell<Settings>,
+    settings_loaded: Cell<bool>,
     connection: RefCell<Result<(), String>>,
     /// Keeps the app alive until the first list arrives from the daemon.
     startup_hold: RefCell<Option<gio::ApplicationHoldGuard>>,
+    /// `--background`: stays running without windows.
+    background: Cell<bool>,
+    /// The main window was opened or `--background` was given: the tray icon
+    /// belongs here (not in a short-lived `--pending` instance).
+    persistent: Cell<bool>,
+    tray: RefCell<TrayState>,
+    tray_actions: mpsc::UnboundedSender<tray::Action>,
+    tray_receiver: RefCell<Option<mpsc::UnboundedReceiver<tray::Action>>>,
+    tray_summary: RefCell<String>,
+    /// Held while the app lives in the tray or in the background.
+    keep_alive: RefCell<Option<gio::ApplicationHoldGuard>>,
 }
 
 impl App {
     pub fn new(app: &gtk::Application) -> Rc<Self> {
+        let (tray_actions, tray_receiver) = mpsc::unbounded_channel();
         Rc::new(Self {
             app: app.clone(),
             store: gio::ListStore::new::<DownloadItem>(),
@@ -42,9 +73,18 @@ impl App {
             window: RefCell::default(),
             dialogs: RefCell::default(),
             progress: RefCell::default(),
+            power: RefCell::default(),
             settings: RefCell::default(),
+            settings_loaded: Cell::new(false),
             connection: RefCell::new(Err("conectando ao ldmd…".into())),
             startup_hold: RefCell::default(),
+            background: Cell::new(false),
+            persistent: Cell::new(false),
+            tray: RefCell::new(TrayState::Off),
+            tray_actions,
+            tray_receiver: RefCell::new(Some(tray_receiver)),
+            tray_summary: RefCell::default(),
+            keep_alive: RefCell::default(),
         })
     }
 
@@ -66,13 +106,40 @@ impl App {
                 this.handle(event);
             }
         });
+
+        let mut actions = self.tray_receiver.take().expect("start runs once");
+        let this = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            while let Some(action) = actions.recv().await {
+                let Some(this) = this.upgrade() else { return };
+                this.tray_action(action);
+            }
+        });
+
+        // The tray tooltip follows the downloads, once a second.
+        let this = Rc::downgrade(self);
+        glib::timeout_add_seconds_local(1, move || {
+            let Some(this) = this.upgrade() else { return glib::ControlFlow::Break };
+            this.refresh_tray();
+            glib::ControlFlow::Continue
+        });
     }
 
     pub fn settings(&self) -> Settings {
         self.settings.borrow().clone()
     }
 
+    /// `ldm-gui --background` (session autostart): no window, only the tray.
+    pub fn run_in_background(self: &Rc<Self>) {
+        self.background.set(true);
+        self.persistent.set(true);
+        self.update_hold();
+        self.sync_tray();
+    }
+
     pub fn show_main_window(self: &Rc<Self>) {
+        self.persistent.set(true);
+        self.sync_tray();
         let existing = self.main_window();
         if let Some(window) = existing {
             window.present();
@@ -93,6 +160,24 @@ impl App {
 
     pub fn main_window(&self) -> Option<gtk::ApplicationWindow> {
         self.window.borrow().as_ref().map(|w| w.window.clone())
+    }
+
+    /// "Pausar todos" / "Retomar todos" (IDM's "Parar/Iniciar todos").
+    pub fn pause_all(&self) {
+        self.for_each_in(&[State::Running, State::Queued], |id| Request::Pause { id });
+    }
+
+    pub fn resume_all(&self) {
+        self.for_each_in(&[State::Paused, State::Failed], |id| Request::Resume { id });
+    }
+
+    fn for_each_in(&self, states: &[State], make: fn(u64) -> Request) {
+        for item in self.store.iter::<DownloadItem>().flatten() {
+            let (id, state) = item.with_info(|info| (info.id, info.state));
+            if states.contains(&state) {
+                send(make(id), None);
+            }
+        }
     }
 
     fn handle(self: &Rc<Self>, event: Event) {
@@ -119,9 +204,16 @@ impl App {
             Event::Settings(settings) => {
                 if let Some(window) = self.window.borrow().as_ref() {
                     window.speed_limit.set(settings.speed_limit);
+                    window.schedule.replace(settings.schedule.clone());
+                }
+                if !settings.tray && matches!(*self.tray.borrow(), TrayState::Failed) {
+                    self.tray.replace(TrayState::Off);
                 }
                 *self.settings.borrow_mut() = settings;
+                self.settings_loaded.set(true);
+                self.sync_tray();
             }
+            Event::Power(plan) => self.sync_power(plan),
             Event::Disconnected(reason) => {
                 *self.connection.borrow_mut() = Err(reason);
                 self.startup_hold.replace(None);
@@ -188,6 +280,28 @@ impl App {
         }
     }
 
+    /// The countdown window of a planned suspend/power off.
+    fn sync_power(self: &Rc<Self>, plan: Option<ldm_ipc::PowerPlan>) {
+        let open = self.power.borrow_mut().take();
+        match (open, plan) {
+            (Some(dialog), Some(plan)) if dialog.plan == plan && dialog.is_open() => {
+                dialog.present();
+                self.power.replace(Some(dialog));
+            }
+            (open, plan) => {
+                if let Some(dialog) = open {
+                    dialog.close_externally();
+                    self.linger();
+                }
+                if let Some(plan) = plan {
+                    let dialog = PowerDialog::new(&self.app, self.main_window().as_ref(), plan);
+                    dialog.present();
+                    self.power.replace(Some(dialog));
+                }
+            }
+        }
+    }
+
     /// Keeps the app alive a moment after a window closes (see `LINGER`).
     fn linger(&self) {
         let guard = self.app.hold();
@@ -234,5 +348,97 @@ impl App {
         });
         self.progress.borrow_mut().insert(id, window.clone());
         window.present();
+    }
+
+    /// Starts or stops the tray icon to match the settings.
+    fn sync_tray(self: &Rc<Self>) {
+        if !self.settings_loaded.get() {
+            return;
+        }
+        let wanted = self.persistent.get() && self.settings.borrow().tray;
+        let current = self.tray.replace(TrayState::Off);
+        match (wanted, current) {
+            (true, TrayState::Off) => {
+                self.tray.replace(TrayState::Starting);
+                let this = Rc::downgrade(self);
+                let (actions, summary) = (self.tray_actions.clone(), self.summary());
+                // At login the tray host may start after us: wait for it in the background.
+                let wait_for_host = self.background.get();
+                glib::spawn_future_local(async move {
+                    let result = tray::spawn(actions, summary, wait_for_host).await;
+                    let Some(this) = this.upgrade() else { return };
+                    let still_wanted = this.persistent.get() && this.settings.borrow().tray;
+                    match result {
+                        Ok(handle) if still_wanted => {
+                            this.tray.replace(TrayState::On(handle));
+                        }
+                        Ok(handle) => {
+                            this.tray.replace(TrayState::Off);
+                            tray::shutdown(handle).await;
+                        }
+                        Err(e) => {
+                            eprintln!("ldm-gui: sem ícone na bandeja: {e}");
+                            this.tray.replace(TrayState::Failed);
+                        }
+                    }
+                    this.update_hold();
+                });
+            }
+            (false, TrayState::On(handle)) => {
+                glib::spawn_future_local(tray::shutdown(handle));
+            }
+            // Starting: the result is checked against the settings when it arrives.
+            (_, state) => {
+                self.tray.replace(state);
+            }
+        }
+        self.update_hold();
+    }
+
+    fn update_hold(&self) {
+        let keep = self.background.get() || matches!(*self.tray.borrow(), TrayState::On(_));
+        let held = self.keep_alive.borrow().is_some();
+        if keep && !held {
+            self.keep_alive.replace(Some(self.app.hold()));
+        } else if !keep && held {
+            self.keep_alive.replace(None);
+        }
+    }
+
+    fn summary(&self) -> String {
+        let infos: Vec<DownloadInfo> = self.store.iter::<DownloadItem>().flatten().map(|item| item.info()).collect();
+        crate::format::activity(&infos)
+    }
+
+    fn refresh_tray(&self) {
+        let TrayState::On(handle) = &*self.tray.borrow() else { return };
+        let summary = self.summary();
+        if *self.tray_summary.borrow() == summary {
+            return;
+        }
+        self.tray_summary.replace(summary.clone());
+        let handle = handle.clone();
+        glib::spawn_future_local(async move { tray::set_summary(&handle, summary).await });
+    }
+
+    fn tray_action(self: &Rc<Self>, action: tray::Action) {
+        match action {
+            tray::Action::Open => self.show_main_window(),
+            tray::Action::Add => {
+                self.show_main_window();
+                if let Some(window) = self.main_window() {
+                    let _ = WidgetExt::activate_action(&window, "win.add", None);
+                }
+            }
+            tray::Action::ResumeAll => self.resume_all(),
+            tray::Action::PauseAll => self.pause_all(),
+            // Only the interface quits: the downloads go on in ldmd.
+            tray::Action::Quit => {
+                if let TrayState::On(handle) = self.tray.replace(TrayState::Off) {
+                    glib::spawn_future_local(tray::shutdown(handle));
+                }
+                self.app.quit();
+            }
+        }
     }
 }

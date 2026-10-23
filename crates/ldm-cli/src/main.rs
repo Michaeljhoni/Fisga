@@ -7,7 +7,9 @@ use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use ldm_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
-use ldm_ipc::{AddRequest, Conflict, Connection, DownloadInfo, Request, Response, State};
+use ldm_ipc::{
+    AddRequest, Conflict, Connection, DownloadInfo, Request, Response, Settings, State, TimeOfDay, WhenDone, WEEKDAYS,
+};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -74,6 +76,34 @@ struct SettingsArgs {
     /// Abrir a janela "Novo download" ao copiar o link de um arquivo
     #[arg(long)]
     watch_clipboard: Option<bool>,
+    /// Ícone na bandeja (o ldm-gui continua rodando ao fechar a janela)
+    #[arg(long)]
+    tray: Option<bool>,
+}
+
+#[derive(clap::Args)]
+struct ScheduleArgs {
+    /// Liga o agendador: a fila só roda no horário
+    #[arg(long, conflicts_with = "off")]
+    on: bool,
+    /// Desliga o agendador: a fila roda sempre
+    #[arg(long)]
+    off: bool,
+    /// Horário de início, HH:MM
+    #[arg(long, value_parser = parse_time)]
+    start: Option<TimeOfDay>,
+    /// Horário de parada, HH:MM, ou "nenhum" (vai até terminar a fila)
+    #[arg(long, value_parser = parse_stop)]
+    stop: Option<Stop>,
+    /// Dias: "todos" ou uma lista como "seg,ter,qua,qui,sex"
+    #[arg(long, value_parser = parse_days)]
+    days: Option<Vec<u8>>,
+    /// Ao terminar a fila: nada, suspender ou desligar
+    #[arg(long, value_parser = parse_when_done)]
+    when_done: Option<WhenDone>,
+    /// Cancela a suspensão ou o desligamento planejado
+    #[arg(long, conflicts_with_all = ["on", "off", "start", "stop", "days", "when_done"])]
+    cancel: bool,
 }
 
 #[derive(Subcommand)]
@@ -139,6 +169,8 @@ enum Command {
     },
     /// Mostra ou altera as configurações do daemon
     Settings(SettingsArgs),
+    /// Mostra ou altera o agendador (horário da fila e o que fazer ao terminar)
+    Schedule(ScheduleArgs),
     /// Encerra o daemon (pausa os downloads em andamento)
     Stop,
 }
@@ -167,6 +199,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Watch => watch().await,
         Command::InstallHosts { chrome_ids, uninstall } => hosts::install(&chrome_ids, uninstall),
         Command::Settings(args) => settings(args).await,
+        Command::Schedule(args) => schedule(args).await,
         Command::Stop => match ldm_ipc::call(&Request::Shutdown).await {
             Ok(_) => Ok(()),
             Err(_) => {
@@ -333,18 +366,17 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         show_progress,
         speed_limit,
         watch_clipboard,
+        tray,
     } = args;
-    ldm_ipc::ensure_daemon().await?;
-    let Response::Settings { settings: mut current } = ldm_ipc::call(&Request::GetSettings).await? else {
-        bail!("resposta inesperada do daemon");
-    };
+    let mut current = get_settings().await?;
     let changed = dir.is_some()
         || category_folders.is_some()
         || max_parallel.is_some()
         || connections.is_some()
         || show_progress.is_some()
         || speed_limit.is_some()
-        || watch_clipboard.is_some();
+        || watch_clipboard.is_some()
+        || tray.is_some();
     if let Some(dir) = dir {
         current.download_dir = if dir.as_os_str() == "padrao" { None } else { Some(std::path::absolute(&dir)?) };
     }
@@ -354,10 +386,11 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
     current.show_progress = show_progress.unwrap_or(current.show_progress);
     current.speed_limit = speed_limit.map(|kb| kb * 1024).unwrap_or(current.speed_limit);
     current.watch_clipboard = watch_clipboard.unwrap_or(current.watch_clipboard);
+    current.tray = tray.unwrap_or(current.tray);
     if changed {
         ldm_ipc::call(&Request::SetSettings { settings: current.clone() }).await?;
     }
-    let dir = current.download_dir.map(|d| d.display().to_string()).unwrap_or_else(|| "(Downloads do sistema)".into());
+    let dir = current.download_dir.as_ref().map(|d| d.display().to_string()).unwrap_or_else(|| "(Downloads do sistema)".into());
     println!("pasta de downloads:      {dir}");
     println!("subpastas por tipo:      {}", if current.category_folders { "sim" } else { "não" });
     println!("downloads ao mesmo tempo: {}", current.max_parallel);
@@ -368,7 +401,91 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         limit => println!("limite de velocidade:    {}/s", bytes(limit)),
     }
     println!("capturar links copiados: {}", if current.watch_clipboard { "sim" } else { "não" });
+    println!("ícone na bandeja:        {}", if current.tray { "sim" } else { "não" });
+    println!("agendador:               {}", schedule_summary(&current));
     Ok(())
+}
+
+async fn get_settings() -> anyhow::Result<Settings> {
+    ldm_ipc::ensure_daemon().await?;
+    match ldm_ipc::call(&Request::GetSettings).await? {
+        Response::Settings { settings } => Ok(settings),
+        _ => bail!("resposta inesperada do daemon"),
+    }
+}
+
+fn schedule_summary(settings: &Settings) -> String {
+    match settings.schedule.enabled {
+        true => settings.schedule.describe(),
+        false => "desligado (a fila roda sempre)".into(),
+    }
+}
+
+async fn schedule(args: ScheduleArgs) -> anyhow::Result<()> {
+    if args.cancel {
+        ldm_ipc::ensure_daemon().await?;
+        ldm_ipc::call(&Request::CancelPower).await?;
+        println!("cancelado");
+        return Ok(());
+    }
+    let mut settings = get_settings().await?;
+    let before = settings.clone();
+    let schedule = &mut settings.schedule;
+    if args.on || args.off {
+        schedule.enabled = args.on;
+    }
+    schedule.start = args.start.unwrap_or(schedule.start);
+    schedule.stop = args.stop.map_or(schedule.stop, |Stop(stop)| stop);
+    if let Some(days) = args.days {
+        schedule.days = days;
+    }
+    schedule.when_done = args.when_done.unwrap_or(schedule.when_done);
+    if settings != before {
+        ldm_ipc::call(&Request::SetSettings { settings: settings.clone() }).await?;
+    }
+    println!("agendador:        {}", schedule_summary(&settings));
+    println!("ao terminar:      {}", settings.schedule.when_done.label().to_lowercase());
+    Ok(())
+}
+
+fn parse_time(value: &str) -> Result<TimeOfDay, String> {
+    TimeOfDay::parse(value).ok_or_else(|| "use HH:MM, como 02:00 ou 23:30".into())
+}
+
+/// `--stop`: a time, or none (the queue runs until it is empty).
+#[derive(Debug, Clone, PartialEq)]
+struct Stop(Option<TimeOfDay>);
+
+fn parse_stop(value: &str) -> Result<Stop, String> {
+    match value {
+        "nenhum" | "none" | "" => Ok(Stop(None)),
+        value => parse_time(value).map(|time| Stop(Some(time))),
+    }
+}
+
+fn parse_days(value: &str) -> Result<Vec<u8>, String> {
+    if matches!(value, "todos" | "all") {
+        return Ok((0..7).collect());
+    }
+    let mut days = value
+        .split(',')
+        .map(|day| {
+            let day = day.trim().to_lowercase().replace("sab", "sáb");
+            WEEKDAYS.iter().position(|w| *w == day).map(|i| i as u8).ok_or_else(|| format!("dia desconhecido: {day}"))
+        })
+        .collect::<Result<Vec<u8>, String>>()?;
+    days.sort_unstable();
+    days.dedup();
+    Ok(days)
+}
+
+fn parse_when_done(value: &str) -> Result<WhenDone, String> {
+    match value {
+        "nada" | "nothing" => Ok(WhenDone::Nothing),
+        "suspender" | "suspend" => Ok(WhenDone::Suspend),
+        "desligar" | "poweroff" => Ok(WhenDone::Poweroff),
+        _ => Err("use nada, suspender ou desligar".into()),
+    }
 }
 
 fn state_label(state: State) -> &'static str {
@@ -429,4 +546,21 @@ async fn watch() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schedule_arguments() {
+        assert_eq!(parse_days("seg, qua,SEX").unwrap(), vec![1, 3, 5]);
+        assert_eq!(parse_days("sab,dom").unwrap(), vec![0, 6]);
+        assert_eq!(parse_days("todos").unwrap().len(), 7);
+        assert!(parse_days("segunda").is_err());
+        assert_eq!(parse_stop("nenhum").unwrap(), Stop(None));
+        assert_eq!(parse_stop("06:00").unwrap(), Stop(TimeOfDay::new(6, 0)));
+        assert!(parse_time("6h").is_err());
+        assert_eq!(parse_when_done("desligar").unwrap(), WhenDone::Poweroff);
+    }
 }

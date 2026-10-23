@@ -114,7 +114,27 @@ xdotool windowfocus --sync "$main" key ctrl+comma
 prefs="$(find_window "^Preferências$")"
 sleep 1
 shot 5-preferencias
+xdotool windowfocus --sync "$prefs" key ctrl+Page_Down
+sleep 1
+shot 5b-agendador
 xdotool windowfocus --sync "$prefs" key Escape || true
+
+echo "== background mode (session autostart): no window, but it answers the browser"
+pkill -f "$BIN/ldm-gui" || true
+for _ in $(seq 1 25); do pgrep -f "$BIN/ldm-gui" >/dev/null || break; sleep 0.2; done
+"$BIN/ldm-gui" --background &
+sleep 3
+if xdotool search --name "^LDM$" >/dev/null 2>&1; then echo "main window opened"; exit 1; fi
+host "{\"type\":\"download\",\"url\":\"$BASE/files/6291456.bin\",\"kind\":\"direct\"}"
+win="$(find_window "^Novo download$")"
+if pgrep -f "ldm-gui --pending" >/dev/null; then echo "a --pending GUI was launched"; exit 1; fi
+sleep 1
+shot 6-segundo-plano
+xdotool windowfocus --sync "$win" key Escape
+sleep 4.5
+pgrep -f "ldm-gui --background" >/dev/null; echo "still running after the window closed"
+grep -i "bandeja" "${XDG_STATE_HOME:-$HOME/.local/state}/ldm/ldm-gui.log" 2>/dev/null || true
+
 "$BIN/ldm" list
 ls -R "$HOME/Downloads"
 echo "GUI SMOKE OK"

@@ -61,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(socket = %socket.display(), "ldmd {} pronto", ldm_ipc::VERSION);
 
     tokio::spawn(manager.clone().autosave(shutdown.clone()));
+    tokio::spawn(scheduler(manager.clone(), gui.clone(), shutdown.clone()));
     clipboard::spawn(manager.clone(), gui.clone());
     manager.schedule();
 
@@ -87,7 +88,25 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn write(writer: &mut tokio::net::unix::OwnedWriteHalf, response: &Response) -> std::io::Result<()> {
+/// Checks the scheduler's clock. A planned suspend/power off must be seen by
+/// someone who can cancel it: without a GUI connected, one is launched.
+async fn scheduler(manager: Arc<Manager>, gui: Arc<Gui>, shutdown: CancellationToken) {
+    let mut ticker = tokio::time::interval(manager::tick_interval());
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => return,
+            _ = ticker.tick() => {
+                let planned = manager.power_plan().is_some();
+                manager.scheduler_tick(ldm_ipc::LocalTime::now());
+                if !planned && manager.power_plan().is_some() {
+                    gui.show_window();
+                }
+            }
+        }
+    }
+}
+
+async fn write(writer:&mut tokio::net::unix::OwnedWriteHalf, response: &Response) -> std::io::Result<()> {
     let mut line = serde_json::to_vec(response)?;
     line.push(b'\n');
     writer.write_all(&line).await
@@ -130,6 +149,7 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: UnixStream, 
             },
             Request::GetSettings => Response::Settings { settings: manager.settings() },
             Request::SetSettings { settings } => result(manager.set_settings(settings)),
+            Request::CancelPower => result(manager.cancel_power()),
             Request::Shutdown => {
                 shutdown.cancel();
                 Response::Ok
@@ -138,6 +158,13 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: UnixStream, 
                 let _confirmer = confirmer.then(|| gui.attach());
                 // Subscribe before taking the snapshot so no update is lost.
                 let mut updates = manager.subscribe();
+                // A planned power off first: `ldm-gui --pending` quits after the
+                // list arrives unless a window (this countdown) is already open.
+                if let Some(plan) = manager.power_plan() {
+                    if write(&mut writer, &Response::Power { plan: Some(plan) }).await.is_err() {
+                        return;
+                    }
+                }
                 if write(&mut writer, &Response::Downloads { items: manager.list() }).await.is_err() {
                     return;
                 }

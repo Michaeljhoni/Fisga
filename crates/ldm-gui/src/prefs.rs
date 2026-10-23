@@ -1,7 +1,9 @@
-//! "Preferências": download folder, one subfolder per category, downloads at
-//! the same time, connections per file, the progress window, the speed limit
-//! and the clipboard monitor. The settings live in the daemon
-//! (`~/.config/ldm/settings.json`).
+//! "Preferências". Geral: download folder, one subfolder per category,
+//! downloads at the same time, connections per file, the progress window, the
+//! speed limit, the clipboard monitor, the tray icon and session autostart.
+//! Agendador: when the queue runs and what to do when it is done. The settings
+//! live in the daemon (`~/.config/ldm/settings.json`); autostart is a file in
+//! `~/.config/autostart`.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -9,10 +11,10 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{gio, glib, pango};
-use ldm_ipc::{Category, Request, Settings};
+use ldm_ipc::{Category, Request, Schedule, Settings, TimeOfDay, WhenDone, WEEKDAYS};
 
-use crate::ipc;
 use crate::window::show_error;
+use crate::{autostart, ipc};
 
 fn row(grid: &gtk::Grid, index: i32, caption: &str, widget: &impl IsA<gtk::Widget>, hint: Option<&str>) {
     let label = gtk::Label::builder().label(caption).xalign(0.0).hexpand(true).wrap(true).build();
@@ -35,6 +37,92 @@ fn folder_text(dir: &Option<PathBuf>) -> String {
         Some(dir) => dir.display().to_string(),
         None => "Downloads do sistema".into(),
     }
+}
+
+fn time_entry(time: Option<TimeOfDay>) -> gtk::Entry {
+    let text = time.map(|t| t.to_string()).unwrap_or_default();
+    gtk::Entry::builder().text(text).placeholder_text("HH:MM").width_chars(6).max_width_chars(6).build()
+}
+
+fn parse_time(entry: &gtk::Entry, what: &str) -> Result<TimeOfDay, String> {
+    TimeOfDay::parse(&entry.text()).ok_or_else(|| format!("{what}: use HH:MM, como 02:00 ou 23:30."))
+}
+
+/// The "Agendador" tab and a function that reads it back.
+fn schedule_page(schedule: &Schedule) -> (gtk::Grid, Box<dyn Fn() -> Result<Schedule, String>>) {
+    let enabled = gtk::Switch::builder().active(schedule.enabled).build();
+    let start = time_entry(Some(schedule.start));
+    let has_stop = gtk::CheckButton::builder().active(schedule.stop.is_some()).build();
+    let stop = time_entry(schedule.stop);
+    stop.set_sensitive(schedule.stop.is_some());
+    let s = stop.clone();
+    has_stop.connect_toggled(move |check| s.set_sensitive(check.is_active()));
+    let stop_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    stop_box.append(&has_stop);
+    stop_box.append(&stop);
+
+    let days_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    days_box.add_css_class("linked");
+    let days: Vec<gtk::ToggleButton> = WEEKDAYS
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let mut label = name.to_string();
+            label[..1].make_ascii_uppercase();
+            let button = gtk::ToggleButton::builder().label(label).active(schedule.days.contains(&(i as u8))).build();
+            days_box.append(&button);
+            button
+        })
+        .collect();
+
+    let labels: Vec<&str> = WhenDone::ALL.iter().map(|w| w.label()).collect();
+    let when_done = gtk::DropDown::from_strings(&labels);
+    when_done.set_selected(WhenDone::ALL.iter().position(|w| *w == schedule.when_done).unwrap_or(0) as u32);
+
+    let grid = gtk::Grid::builder().column_spacing(18).row_spacing(14).build();
+    row(
+        &grid,
+        0,
+        "Usar o agendador",
+        &enabled,
+        Some("Os downloads da fila só rodam no horário abaixo. \u{201c}Baixar agora\u{201d} e retomar um download à mão continuam valendo na hora."),
+    );
+    row(&grid, 1, "Começar às", &start, None);
+    row(
+        &grid,
+        2,
+        "Parar às",
+        &stop_box,
+        Some("No horário de parada, os downloads voltam para a fila. Sem horário, a fila vai até terminar."),
+    );
+    row(&grid, 3, "Dias", &days_box, None);
+    row(
+        &grid,
+        4,
+        "Ao terminar a fila",
+        &when_done,
+        Some("Antes de suspender ou desligar, uma janela conta 60 segundos e deixa cancelar."),
+    );
+    let details = [start.upcast_ref::<gtk::Widget>(), stop_box.upcast_ref(), days_box.upcast_ref(), when_done.upcast_ref()]
+        .map(|w| w.clone());
+    let sync = move |on: bool| details.iter().for_each(|w| w.set_sensitive(on));
+    sync(schedule.enabled);
+    enabled.connect_active_notify(move |switch| sync(switch.is_active()));
+
+    let read = move || {
+        let start = parse_time(&start, "Começar às")?;
+        let stop = match has_stop.is_active() {
+            true => Some(parse_time(&stop, "Parar às")?),
+            false => None,
+        };
+        let days: Vec<u8> = days.iter().enumerate().filter(|(_, b)| b.is_active()).map(|(i, _)| i as u8).collect();
+        if enabled.is_active() && days.is_empty() {
+            return Err("Escolha pelo menos um dia para o agendador.".into());
+        }
+        let when_done = WhenDone::ALL.get(when_done.selected() as usize).copied().unwrap_or_default();
+        Ok(Schedule { enabled: enabled.is_active(), start, stop, days, when_done })
+    };
+    (grid, Box::new(read))
 }
 
 pub fn show(parent: &gtk::Window, settings: Settings) {
@@ -69,6 +157,9 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
     let limit = gtk::SpinButton::with_range(0.0, 1_000_000.0, 64.0);
     limit.set_value((settings.speed_limit / 1024) as f64);
     let clipboard = gtk::Switch::builder().active(settings.watch_clipboard).build();
+    let tray = gtk::Switch::builder().active(settings.tray).build();
+    let autostart_was = autostart::is_enabled();
+    let session = gtk::Switch::builder().active(autostart_was).build();
 
     let subfolders: Vec<&str> = Category::ALL.iter().filter_map(|c| c.folder()).collect();
     let subfolders_hint = format!("Subpastas: {}. Os demais ficam na pasta de downloads.", subfolders.join(", "));
@@ -95,6 +186,24 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
              download\u{201d}. No Wayland, precisa do wl-clipboard.",
         ),
     );
+    row(
+        &grid,
+        7,
+        "Ícone na bandeja",
+        &tray,
+        Some("Fechar a janela deixa o LDM na bandeja, pronto para os downloads do navegador. Precisa de uma bandeja (waybar, noctalia, KDE...)."),
+    );
+    row(&grid, 8, "Iniciar com a sessão", &session, Some("Abre o LDM na bandeja, sem janela, ao entrar no sistema."));
+
+    let (schedule_grid, read_schedule) = schedule_page(&settings.schedule);
+    let notebook = gtk::Notebook::new();
+    for (page, title) in [(&grid, "Geral"), (&schedule_grid, "Agendador")] {
+        page.set_margin_top(14);
+        page.set_margin_bottom(6);
+        page.set_margin_start(6);
+        page.set_margin_end(6);
+        notebook.append_page(page, Some(&gtk::Label::new(Some(title))));
+    }
 
     let cancel = gtk::Button::with_label("Cancelar");
     let save = gtk::Button::with_label("Salvar");
@@ -110,7 +219,7 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
         .margin_start(18)
         .margin_end(18)
         .build();
-    content.append(&grid);
+    content.append(&notebook);
     content.append(&buttons);
     window.set_child(Some(&content));
     window.set_default_widget(Some(&save));
@@ -142,6 +251,14 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
 
     let w = window.clone();
     save.connect_clicked(move |button| {
+        let schedule = match read_schedule() {
+            Ok(schedule) => schedule,
+            Err(message) => {
+                notebook.set_current_page(Some(1));
+                show_error(Some(&w), "Confira o agendador", &message);
+                return;
+            }
+        };
         let new = Settings {
             download_dir: dir.borrow().clone(),
             category_folders: folders.is_active(),
@@ -150,7 +267,15 @@ pub fn show(parent: &gtk::Window, settings: Settings) {
             show_progress: progress.is_active(),
             speed_limit: limit.value() as u64 * 1024,
             watch_clipboard: clipboard.is_active(),
+            tray: tray.is_active(),
+            schedule,
         };
+        if session.is_active() != autostart_was {
+            if let Err(e) = autostart::set_enabled(session.is_active()) {
+                show_error(Some(&w), "Não foi possível mudar o início com a sessão", &e.to_string());
+                return;
+            }
+        }
         button.set_sensitive(false);
         let (w, button) = (w.clone(), button.clone());
         glib::spawn_future_local(async move {

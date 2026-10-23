@@ -21,6 +21,23 @@ pub fn bytes(n: u64) -> String {
     }
 }
 
+/// What is going on, for the tray: "2 baixando · 1,5 MB/s · 3 na fila".
+pub fn activity(infos: &[DownloadInfo]) -> String {
+    let running: Vec<&DownloadInfo> = infos.iter().filter(|i| i.state == State::Running).collect();
+    let queued = infos.iter().filter(|i| i.state == State::Queued).count();
+    let mut parts = match running.len() {
+        0 => vec!["Nenhum download em andamento".to_string()],
+        n => {
+            let speed: f64 = running.iter().map(|i| i.speed).sum();
+            vec![format!("{n} baixando"), format!("{}/s", bytes(speed as u64))]
+        }
+    };
+    if queued > 0 {
+        parts.push(format!("{queued} na fila"));
+    }
+    parts.join(" · ")
+}
+
 pub fn size(info: &DownloadInfo) -> String {
     match info.total {
         Some(total) => bytes(total),
@@ -225,6 +242,19 @@ mod tests {
         assert_eq!(downloaded(&info(State::Running, 512, Some(2048), 0.0)), "512 B de 2,0 KB");
         assert_eq!(downloaded(&info(State::Running, 1536, None, 0.0)), "1,5 KB");
         assert_eq!(downloaded(&info(State::Completed, 0, Some(2048), 0.0)), "2,0 KB");
+    }
+
+    #[test]
+    fn tray_activity() {
+        assert_eq!(activity(&[]), "Nenhum download em andamento");
+        let list = [
+            info(State::Running, 0, None, 1024.0),
+            info(State::Running, 0, None, 512.0),
+            info(State::Queued, 0, None, 0.0),
+            info(State::Completed, 0, None, 0.0),
+        ];
+        assert_eq!(activity(&list), "2 baixando · 1,5 KB/s · 1 na fila");
+        assert_eq!(activity(&list[2..]), "Nenhum download em andamento · 1 na fila");
     }
 
     #[test]

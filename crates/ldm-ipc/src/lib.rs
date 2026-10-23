@@ -266,6 +266,11 @@ pub struct Settings {
     /// A copied link to a file (video, music, program, archive...) opens the
     /// "Novo download" window, like IDM's clipboard monitor.
     pub watch_clipboard: bool,
+    /// Icon in the system tray (StatusNotifierItem); closing the main window
+    /// keeps `ldm-gui` running there.
+    pub tray: bool,
+    /// When the queue runs (IDM's scheduler).
+    pub schedule: Schedule,
 }
 
 impl Default for Settings {
@@ -278,6 +283,8 @@ impl Default for Settings {
             show_progress: true,
             speed_limit: 0,
             watch_clipboard: true,
+            tray: true,
+            schedule: Schedule::default(),
         }
     }
 }
@@ -287,8 +294,184 @@ impl Settings {
     pub fn sanitized(mut self) -> Self {
         self.max_parallel = self.max_parallel.clamp(1, 20);
         self.connections = self.connections.clamp(1, 32);
+        self.schedule.days.retain(|day| *day < 7);
+        self.schedule.days.sort_unstable();
+        self.schedule.days.dedup();
         self
     }
+}
+
+/// A time of day, written as "HH:MM" in JSON.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct TimeOfDay(u16);
+
+impl TimeOfDay {
+    pub fn new(hour: u16, minute: u16) -> Option<Self> {
+        (hour < 24 && minute < 60).then_some(Self(hour * 60 + minute))
+    }
+
+    /// "2:00", "02:00", "23:59".
+    pub fn parse(text: &str) -> Option<Self> {
+        let (hour, minute) = text.trim().split_once(':')?;
+        if minute.len() != 2 || hour.is_empty() || hour.len() > 2 {
+            return None;
+        }
+        Self::new(hour.parse().ok()?, minute.parse().ok()?)
+    }
+
+    /// Minutes since midnight.
+    pub fn minutes(self) -> u16 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for TimeOfDay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:02}:{:02}", self.0 / 60, self.0 % 60)
+    }
+}
+
+impl TryFrom<String> for TimeOfDay {
+    type Error = String;
+    fn try_from(text: String) -> Result<Self, String> {
+        Self::parse(&text).ok_or_else(|| format!("horário inválido: {text} (use HH:MM)"))
+    }
+}
+
+impl From<TimeOfDay> for String {
+    fn from(time: TimeOfDay) -> String {
+        time.to_string()
+    }
+}
+
+/// What to do when a scheduled queue finishes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WhenDone {
+    #[default]
+    Nothing,
+    Suspend,
+    Poweroff,
+}
+
+impl WhenDone {
+    pub const ALL: [WhenDone; 3] = [WhenDone::Nothing, WhenDone::Suspend, WhenDone::Poweroff];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            WhenDone::Nothing => "Não fazer nada",
+            WhenDone::Suspend => "Suspender o computador",
+            WhenDone::Poweroff => "Desligar o computador",
+        }
+    }
+}
+
+/// Short weekday names, indexed like `Schedule::days` (0 = Sunday).
+pub const WEEKDAYS: [&str; 7] = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+
+/// IDM's scheduler: the queue starts at `start` on the chosen days and runs
+/// until `stop` (running downloads go back to the queue) or, without `stop`,
+/// until it is empty. Outside that window queued downloads wait; "Baixar
+/// agora" and resuming a download by hand still start right away.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Schedule {
+    pub enabled: bool,
+    pub start: TimeOfDay,
+    pub stop: Option<TimeOfDay>,
+    /// Days the queue starts on: 0 = Sunday ... 6 = Saturday.
+    pub days: Vec<u8>,
+    pub when_done: WhenDone,
+}
+
+impl Default for Schedule {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            start: TimeOfDay(2 * 60),
+            stop: None,
+            days: (0..7).collect(),
+            when_done: WhenDone::Nothing,
+        }
+    }
+}
+
+impl Schedule {
+    /// The window that contains `now`, identified by the local day it started
+    /// on (a window that crosses midnight belongs to the day before).
+    pub fn window_at(&self, now: LocalTime) -> Option<i64> {
+        const DAY: u16 = 24 * 60;
+        let start = self.start.minutes();
+        let length = match self.stop {
+            Some(stop) => match (stop.minutes() + DAY - start) % DAY {
+                0 => DAY,
+                length => length,
+            },
+            // Until the queue is empty, at most until the next start.
+            None => DAY,
+        };
+        let (day, weekday, since_start) = if now.minutes >= start {
+            (now.day, now.weekday, now.minutes - start)
+        } else {
+            (now.day - 1, (now.weekday + 6) % 7, now.minutes + DAY - start)
+        };
+        (self.days.contains(&weekday) && since_start < length).then_some(day)
+    }
+
+    /// "todos os dias, das 02:00 às 08:00", "seg, qua, sex, às 23:00 até terminar a fila".
+    pub fn describe(&self) -> String {
+        let days = match self.days.len() {
+            7 => "todos os dias".to_string(),
+            0 => "nenhum dia".to_string(),
+            _ => self.days.iter().map(|d| WEEKDAYS[*d as usize % 7]).collect::<Vec<_>>().join(", "),
+        };
+        match self.stop {
+            Some(stop) => format!("{days}, das {} às {stop}", self.start),
+            None => format!("{days}, às {} até terminar a fila", self.start),
+        }
+    }
+}
+
+/// Local wall-clock time, as the scheduler sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalTime {
+    /// Days since 1970-01-01 in local time: tells days apart.
+    pub day: i64,
+    /// 0 = Sunday ... 6 = Saturday.
+    pub weekday: u8,
+    /// Minutes since midnight.
+    pub minutes: u16,
+}
+
+impl LocalTime {
+    pub fn now() -> Self {
+        // SAFETY: time and localtime_r only write to the values we pass.
+        let (time, tm) = unsafe {
+            let time = libc::time(std::ptr::null_mut());
+            let mut tm: libc::tm = std::mem::zeroed();
+            libc::localtime_r(&time, &mut tm);
+            (time, tm)
+        };
+        // time_t and c_long are i32 on some 32-bit targets.
+        #[allow(clippy::unnecessary_cast)]
+        let local = time as i64 + tm.tm_gmtoff as i64;
+        Self {
+            day: local.div_euclid(86_400),
+            weekday: tm.tm_wday as u8,
+            minutes: (tm.tm_hour * 60 + tm.tm_min) as u16,
+        }
+    }
+}
+
+/// A scheduled queue finished and the computer will be suspended or turned
+/// off at `at`, unless someone cancels (`Request::CancelPower`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PowerPlan {
+    pub action: WhenDone,
+    /// Unix seconds.
+    pub at: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -377,6 +560,8 @@ pub enum Request {
     GetSettings,
     /// Replaces the settings; subscribers receive `Response::Settings`.
     SetSettings { settings: Settings },
+    /// Calls off the suspend/power off planned after a scheduled queue.
+    CancelPower,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -388,6 +573,9 @@ pub enum Response {
     Update { item: DownloadInfo },
     Removed { id: u64 },
     Settings { settings: Settings },
+    /// The planned suspend/power off changed (`None`: nothing planned). Sent to
+    /// subscribers, and right after subscribing while one is planned.
+    Power { plan: Option<PowerPlan> },
     Ok,
     Error { message: String },
 }
@@ -586,6 +774,64 @@ mod tests {
         assert_eq!(settings.sanitized().max_parallel, 20);
         let request: Request = serde_json::from_str(r#"{"type":"set_settings","settings":{"connections":4}}"#).unwrap();
         assert!(matches!(request, Request::SetSettings { settings } if settings.connections == 4));
+    }
+
+    #[test]
+    fn times_of_day() {
+        assert_eq!(TimeOfDay::parse("2:05").map(TimeOfDay::minutes), Some(125));
+        assert_eq!(TimeOfDay::parse(" 23:59 ").map(|t| t.to_string()).as_deref(), Some("23:59"));
+        for bad in ["24:00", "12:60", "1200", "12:5", ":30", "aa:bb", "123:00"] {
+            assert_eq!(TimeOfDay::parse(bad), None, "{bad}");
+        }
+        let schedule: Schedule = serde_json::from_str(r#"{"enabled":true,"start":"23:00","stop":"06:30"}"#).unwrap();
+        assert_eq!(schedule.stop, TimeOfDay::new(6, 30));
+        assert_eq!(schedule.days.len(), 7, "every day by default");
+        assert!(serde_json::to_string(&schedule).unwrap().contains(r#""start":"23:00""#));
+        assert!(serde_json::from_str::<Schedule>(r#"{"start":"25:00"}"#).is_err());
+        // settings.json written before the scheduler existed still loads.
+        let settings: Settings = serde_json::from_str(r#"{"connections":4}"#).unwrap();
+        assert!(!settings.schedule.enabled && settings.tray);
+        let request: Request = serde_json::from_str(r#"{"type":"cancel_power"}"#).unwrap();
+        assert!(matches!(request, Request::CancelPower));
+    }
+
+    fn at(day: i64, weekday: u8, hour: u16, minute: u16) -> LocalTime {
+        LocalTime { day, weekday, minutes: hour * 60 + minute }
+    }
+
+    #[test]
+    fn schedule_windows() {
+        let time = |text| TimeOfDay::parse(text).unwrap();
+        // Weekdays only, 09:00 to 17:00. Day 10 is a Monday (weekday 1).
+        let office = Schedule { enabled: true, start: time("09:00"), stop: Some(time("17:00")), days: (1..6).collect(), ..Default::default() };
+        assert_eq!(office.window_at(at(10, 1, 8, 59)), None);
+        assert_eq!(office.window_at(at(10, 1, 9, 0)), Some(10));
+        assert_eq!(office.window_at(at(10, 1, 16, 59)), Some(10));
+        assert_eq!(office.window_at(at(10, 1, 17, 0)), None);
+        assert_eq!(office.window_at(at(9, 0, 12, 0)), None, "not on Sunday");
+        assert_eq!(office.describe(), "seg, ter, qua, qui, sex, das 09:00 às 17:00");
+
+        // Across midnight: Friday 23:00 to Saturday 06:00 belongs to Friday.
+        let night = Schedule { start: time("23:00"), stop: Some(time("06:00")), days: vec![5], ..office.clone() };
+        assert_eq!(night.window_at(at(14, 5, 23, 30)), Some(14));
+        assert_eq!(night.window_at(at(15, 6, 5, 59)), Some(14));
+        assert_eq!(night.window_at(at(15, 6, 6, 0)), None);
+        assert_eq!(night.window_at(at(15, 6, 23, 30)), None, "Saturday is not a start day");
+
+        // Without a stop time the window lasts until the next start.
+        let open_ended = Schedule { start: time("02:00"), stop: None, days: (0..7).collect(), ..office };
+        assert_eq!(open_ended.window_at(at(20, 3, 1, 59)), Some(19));
+        assert_eq!(open_ended.window_at(at(20, 3, 2, 0)), Some(20));
+        assert_eq!(open_ended.describe(), "todos os dias, às 02:00 até terminar a fila");
+        let now = LocalTime::now();
+        assert!(now.weekday < 7 && now.minutes < 24 * 60);
+    }
+
+    #[test]
+    fn sanitized_days() {
+        let mut settings = Settings::default();
+        settings.schedule.days = vec![6, 1, 9, 1];
+        assert_eq!(settings.sanitized().schedule.days, vec![1, 6]);
     }
 
     #[test]

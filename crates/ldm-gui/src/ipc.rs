@@ -2,10 +2,11 @@
 //! tokio runtime in another thread; results come back as futures (awaited with
 //! `glib::spawn_future_local`) and as a stream of `Event`s.
 
+use std::future::Future;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use ldm_ipc::{Connection, DownloadInfo, Request, Response, Settings};
+use ldm_ipc::{Connection, DownloadInfo, PowerPlan, Request, Response, Settings};
 use tokio::sync::mpsc;
 
 pub enum Event {
@@ -14,6 +15,8 @@ pub enum Event {
     Update(DownloadInfo),
     Removed(u64),
     Settings(Settings),
+    /// A suspend/power off was planned (or called off: `None`).
+    Power(Option<PowerPlan>),
     Disconnected(String),
 }
 
@@ -31,7 +34,13 @@ fn runtime() -> &'static tokio::runtime::Runtime {
 
 /// One request to the daemon.
 pub async fn call(request: Request) -> anyhow::Result<Response> {
-    runtime().spawn(async move { ldm_ipc::call(&request).await }).await?
+    background(async move { ldm_ipc::call(&request).await }).await?
+}
+
+/// Runs a future on the tokio runtime (socket I/O, the tray's D-Bus service)
+/// and gives back its result.
+pub async fn background<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> anyhow::Result<T> {
+    Ok(runtime().spawn(future).await?)
 }
 
 /// Subscribes as the confirmer (the client that shows "Novo download"),
@@ -63,6 +72,7 @@ async fn session(tx: &mpsc::UnboundedSender<Event>) -> anyhow::Result<()> {
             Response::Update { item } => Event::Update(item),
             Response::Removed { id } => Event::Removed(id),
             Response::Settings { settings } => Event::Settings(settings),
+            Response::Power { plan } => Event::Power(plan),
             _ => continue,
         };
         if tx.send(event).is_err() {

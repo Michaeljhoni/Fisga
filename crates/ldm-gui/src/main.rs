@@ -5,17 +5,22 @@
 //! - `ldm-gui --pending`  shows only the "Novo download" windows for downloads
 //!   waiting for confirmation, and quits when they are answered. `ldmd` starts
 //!   it this way when the browser sends a download and no GUI is open.
+//! - `ldm-gui --background` runs without a window, in the tray (session
+//!   autostart); the browser's downloads are confirmed from there.
 //!
 //! The app id is fixed (`io.ldm.Ldm`), so a second launch is forwarded to the
 //! running instance through D-Bus, and compositors can match its windows.
 
 mod app;
+mod autostart;
 mod confirm;
 mod format;
 mod ipc;
 mod item;
+mod power;
 mod prefs;
 mod progress;
+mod tray;
 mod window;
 
 use gtk::prelude::*;
@@ -58,8 +63,11 @@ fn main() -> glib::ExitCode {
     application.connect_startup(move |_| s.start());
     let s = state.clone();
     application.connect_command_line(move |_, command_line| {
-        let pending_only = command_line.arguments().iter().skip(1).any(|arg| arg == "--pending");
-        if !pending_only {
+        let arguments = command_line.arguments();
+        let has = |flag: &str| arguments.iter().skip(1).any(|arg| arg == flag);
+        if has("--background") {
+            s.run_in_background();
+        } else if !has("--pending") {
             s.show_main_window();
         }
         glib::ExitCode::SUCCESS

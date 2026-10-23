@@ -8,12 +8,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context};
 use ldm_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
-use ldm_ipc::{AddRequest, Category, Conflict, DownloadInfo, Response, Settings, SourceKind, State};
+use ldm_ipc::{
+    AddRequest, Category, Conflict, DownloadInfo, LocalTime, PowerPlan, Response, Settings, SourceKind, State,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::{notify, ytdlp};
+
+mod scheduler;
+
+pub use scheduler::tick_interval;
 
 /// The user's answer in the "Novo download" window.
 #[derive(Debug, Default)]
@@ -42,6 +48,17 @@ struct Job {
     /// The folder follows the category (no folder was chosen by the user), so it
     /// changes while the name of a pending download is still being found out.
     auto_dir: bool,
+    /// Started by the queue (not by "Baixar agora", nor resumed by hand outside
+    /// the scheduled window): the scheduler's stop time puts it back in the queue.
+    from_queue: bool,
+    /// Paused by the scheduler: goes back to `Queued` instead of `Paused`.
+    requeue: bool,
+}
+
+impl Job {
+    fn new(info: DownloadInfo, request: AddRequest, auto_dir: bool) -> Self {
+        Self { info, request, cancel: None, forced: false, auto_dir, from_queue: false, requeue: false }
+    }
 }
 
 struct Inner {
@@ -72,6 +89,14 @@ pub struct Manager {
     settings_path: PathBuf,
     /// Speed limit shared by every direct download.
     limiter: Arc<ldm_core::RateLimiter>,
+    /// Never locked while `inner` is held.
+    scheduler: Mutex<scheduler::State>,
+    scheduler_path: PathBuf,
+    power: Mutex<Option<PowerPlan>>,
+    /// Time to cancel a planned suspend/power off (`$LDM_POWER_DELAY`, seconds).
+    power_delay: Duration,
+    /// `$LDM_POWER_CMD` replaces `systemctl` (tests); it gets "suspend" or "poweroff".
+    power_command: Option<String>,
 }
 
 /// Where a download of `category` goes when the user did not pick a folder.
@@ -134,10 +159,13 @@ impl Manager {
                 if info.category == Category::Other {
                     info.category = Category::detect(&info.name, info.kind);
                 }
-                inner.jobs.insert(info.id, Job { info, request, cancel: None, forced: false, auto_dir: false });
+                inner.jobs.insert(info.id, Job::new(info, request, false));
             }
         }
         let settings = load_settings(&settings_path);
+        let power_delay = std::env::var("LDM_POWER_DELAY").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
+        let scheduler_path = scheduler::saved_path(&store);
+        let saved = scheduler::load_saved(&scheduler_path);
         Ok(Arc::new(Self {
             inner: Mutex::new(inner),
             updates: broadcast::channel(256).0,
@@ -145,8 +173,13 @@ impl Manager {
             store,
             dirty: AtomicBool::new(false),
             limiter: Arc::new(ldm_core::RateLimiter::new(settings.speed_limit)),
+            scheduler: Mutex::new(scheduler::State::new(&settings.schedule, LocalTime::now(), saved)),
+            scheduler_path,
             settings: Mutex::new(settings),
             settings_path,
+            power: Mutex::new(None),
+            power_delay: Duration::from_secs(power_delay),
+            power_command: std::env::var("LDM_POWER_CMD").ok().filter(|c| !c.is_empty()),
         }))
     }
 
@@ -162,11 +195,13 @@ impl Manager {
             }
         }
         write_json(&self.settings_path, &settings, 0o644)?;
+        let schedule_changed = self.settings().schedule != settings.schedule;
         *self.settings.lock().unwrap() = settings.clone();
         self.limiter.set_rate(settings.speed_limit);
         tracing::info!(?settings, "configurações alteradas");
         let _ = self.updates.send(Response::Settings { settings });
         self.refresh_pending_dirs();
+        self.scheduler_check(LocalTime::now(), schedule_changed);
         self.schedule();
         Ok(())
     }
@@ -235,7 +270,7 @@ impl Manager {
                 formats: Vec::new(),
             };
             let _ = self.updates.send(Response::Update { item: info.clone() });
-            inner.jobs.insert(id, Job { info, request, cancel: None, forced: false, auto_dir: auto });
+            inner.jobs.insert(id, Job::new(info, request, auto));
             id
         };
         tracing::info!(id, "download adicionado");
@@ -383,6 +418,8 @@ impl Manager {
         match job.info.state {
             // The job task notices the cancellation and reports Paused.
             State::Running => {
+                // Paused by the user: stays paused, even at the scheduler's stop time.
+                job.requeue = false;
                 if let Some(cancel) = &job.cancel {
                     cancel.cancel();
                 }
@@ -398,12 +435,16 @@ impl Manager {
     }
 
     pub fn resume(self: &Arc<Self>, id: u64) -> anyhow::Result<()> {
+        // Outside the scheduled window the queue waits, but a download resumed
+        // by hand starts now, like "Baixar agora".
+        let forced = !self.queue_open();
         {
             let mut inner = self.inner.lock().unwrap();
             let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
             if matches!(job.info.state, State::Paused | State::Failed) {
                 job.info.state = State::Queued;
                 job.info.error = None;
+                job.forced = forced;
                 let _ = self.updates.send(Response::Update { item: job.info.clone() });
             }
         }
@@ -435,9 +476,10 @@ impl Manager {
     }
 
     /// Starts queued downloads while there is a free slot ("Baixar agora" ones
-    /// start regardless).
+    /// start regardless). Outside the scheduled window only those start.
     pub fn schedule(self: &Arc<Self>) {
         let max_parallel = self.settings().max_parallel;
+        let open = self.queue_open();
         let mut inner = self.inner.lock().unwrap();
         let running = inner.jobs.values().filter(|j| j.info.state == State::Running).count();
         // Forced first, then by id.
@@ -449,11 +491,15 @@ impl Manager {
             .collect();
         queued.sort();
         let forced = queued.iter().filter(|(not_forced, _)| !not_forced).count();
-        let to_start = forced + max_parallel.saturating_sub(running + forced);
+        let to_start = match open {
+            true => forced + max_parallel.saturating_sub(running + forced),
+            false => forced,
+        };
         for (_, id) in queued.into_iter().take(to_start) {
             let job = inner.jobs.get_mut(&id).expect("id from map");
             let cancel = CancellationToken::new();
             job.cancel = Some(cancel.clone());
+            job.from_queue = !job.forced;
             job.forced = false;
             job.info.state = State::Running;
             job.info.error = None;
@@ -554,6 +600,24 @@ impl Manager {
 
     fn finish(self: &Arc<Self>, id: u64, result: JobResult) {
         let mut message = None;
+        let (requeue, from_queue) = self
+            .inner
+            .lock()
+            .unwrap()
+            .jobs
+            .get_mut(&id)
+            .map(|job| {
+                let from_queue = job.from_queue;
+                // A paused download the queue started still belongs to it (see `queue_busy`).
+                if !matches!(result, JobResult::Paused) {
+                    job.from_queue = false;
+                }
+                (std::mem::take(&mut job.requeue), from_queue)
+            })
+            .unwrap_or_default();
+        if from_queue && matches!(result, JobResult::Completed(_)) {
+            self.scheduler.lock().unwrap().completed = true;
+        }
         self.update(id, |info| {
             info.speed = 0.0;
             info.connections = 0;
@@ -569,6 +633,7 @@ impl Manager {
                     }
                     message = Some(("Download concluído".to_string(), info.name.clone()));
                 }
+                JobResult::Paused if requeue => info.state = State::Queued,
                 JobResult::Paused => info.state = State::Paused,
                 JobResult::Failed(error) => {
                     info.state = State::Failed;
@@ -674,7 +739,7 @@ mod tests {
     // Nothing listens on port 9 (discard), so jobs that do start fail fast.
     const URL: &str = "http://127.0.0.1:9/file.iso";
 
-    fn manager() -> Arc<Manager> {
+    pub(super) fn manager() -> Arc<Manager> {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let dir = std::env::temp_dir().join(format!("ldmd-test-{}-{nanos}", std::process::id()));
         let manager = Manager::load(dir.join("downloads.json"), dir.join("settings.json")).unwrap();

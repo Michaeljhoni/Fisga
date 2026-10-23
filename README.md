@@ -15,7 +15,7 @@ sites como YouTube).
 |---|---|---|
 | `crates/ldm-core` | — | Motor: várias conexões por arquivo, divisão dinâmica de segmentos, retomada |
 | `crates/ldm-daemon` | `ldmd` | Serviço em segundo plano: lista, fila (3 simultâneos), notificações, yt-dlp |
-| `crates/ldm-gui` | `ldm-gui` | Interface GTK4: janela "Novo download" e lista de downloads (só cliente do `ldmd`) |
+| `crates/ldm-gui` | `ldm-gui` | Interface GTK4: janela "Novo download", lista de downloads e ícone na bandeja (só cliente do `ldmd`) |
 | `crates/ldm-cli` | `ldm` | Linha de comando (`add`, `get`, `list`, `confirm`, `pause`, `resume`, `rm`, `watch`, `install-hosts`) |
 | `crates/ldm-native-host` | `ldm-native-host` | Ponte entre a extensão (Native Messaging) e o `ldmd` |
 | `crates/ldm-ipc` | — | Mensagens JSON pelo socket `$XDG_RUNTIME_DIR/ldm/ldmd.sock` |
@@ -84,11 +84,30 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
 - **Progresso** (a janela de status do IDM): abre depois de "Baixar agora", com barra, quanto já
   baixou, velocidade, tempo restante, se dá para retomar, a pasta e **Pausar/Retomar**. Ao terminar
   vira **Download concluído**, com **Abrir** e **Abrir pasta**. Pode ser desligada nas Preferências.
-- **Preferências**: pasta de downloads, subpastas por tipo de arquivo, downloads ao mesmo tempo,
+- **Preferências** (aba *Geral*): pasta de downloads, subpastas por tipo de arquivo, downloads ao mesmo tempo,
   conexões por arquivo, a janela de progresso, capturar links copiados e o **limite de velocidade** (KB/s para todos os
   downloads juntos; muda na hora, até nos que estão baixando, e aparece na barra de status). Ficam
   no daemon, em `~/.config/ldm/settings.json`. Vídeos de sites (yt-dlp) recebem o limite por
-  processo (`--limit-rate`).
+  processo (`--limit-rate`). Também ali: **ícone na bandeja** e **iniciar com a sessão** (veja abaixo).
+- **Bandeja**: com a opção ligada (padrão), o LDM mostra um ícone na bandeja do sistema
+  (StatusNotifierItem: waybar, noctalia, KDE, GNOME com a extensão AppIndicator). Fechar a janela
+  principal deixa o LDM ali, pronto para confirmar os downloads do navegador. Clique no ícone para
+  abrir a janela; o menu tem o resumo (quantos baixando, velocidade, fila), *Adicionar URL…*,
+  *Retomar todos*, *Pausar todos* e *Sair* (só fecha a interface; os downloads continuam no `ldmd`).
+  Sem bandeja disponível, fechar a janela fecha o LDM, como antes. No waybar, ative o módulo `tray`.
+- **Iniciar com a sessão**: cria `~/.config/autostart/io.ldm.Ldm.desktop`, que roda
+  `ldm-gui --background` ao entrar: sem janela, só o ícone (que aparece quando a bandeja subir). O
+  GNOME e o KDE leem essa pasta; no niri, Sway e Hyprland ela vale quando a sessão é iniciada pelo
+  systemd (o `niri-session`, por exemplo). Se não funcionar, adicione ao `~/.config/niri/config.kdl`:
+  `spawn-at-startup "ldm-gui" "--background"`.
+- **Agendador** (aba *Agendador*, como o *Scheduler* do IDM): a fila só roda das HH:MM às HH:MM nos
+  dias escolhidos. Fora desse horário os downloads ficam *na fila*; *Baixar agora* e retomar um
+  download à mão começam na hora mesmo assim. No horário de parada, os downloads da fila voltam
+  para ela e continuam na próxima vez. Sem horário de parada, a fila vai até acabar. **Ao terminar
+  a fila**: não fazer nada, suspender ou desligar o computador (`systemctl suspend`/`poweroff`), com
+  uma janela que conta 60 segundos e deixa cancelar (ou `ldm schedule --cancel`). Isso só acontece
+  quando a fila começou no horário (ou o agendador foi configurado dentro dele) e pelo menos um
+  download terminou; ligar o computador no meio do horário nunca o desliga sozinho.
 
 ### Categorias e pastas
 
@@ -143,6 +162,12 @@ ldm settings                                     # configurações (pasta, subpa
 ldm settings --category-folders false --max-parallel 5
 ldm settings --speed-limit 2048                  # 2 MB/s para tudo (0 = sem limite)
 ldm settings --watch-clipboard false             # não abrir a janela para links copiados
+ldm settings --tray false                        # sem ícone na bandeja
+ldm schedule --on --start 02:00 --stop 08:00     # a fila só roda de madrugada
+ldm schedule --days seg,ter,qua,qui,sex --when-done desligar
+ldm schedule --stop nenhum                       # vai até terminar a fila
+ldm schedule --cancel                            # cancela o desligamento que está contando
+ldm schedule --off
 ```
 
 ## Desenvolvimento
@@ -200,6 +225,7 @@ Hyprland, `windowrulev2 = float, class:^(io\.ldm\.Ldm)$, title:negative:^LDM$`.
 - [x] Janela de progresso e de download concluído, categorias por tipo de arquivo (barra lateral e
       subpastas), Preferências
 - [x] Limite de velocidade global (muda na hora)
-- [ ] Ícone na bandeja, agendador
+- [x] Ícone na bandeja, iniciar com a sessão, agendador (suspender/desligar ao terminar)
+- [ ] Várias filas
 - [ ] HLS/DASH nativo (hoje via yt-dlp), FTP
 - [ ] Pacotes (AUR, Flatpak, .deb/.rpm)

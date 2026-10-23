@@ -13,6 +13,8 @@ export LDM_GUI=true
 # Stand-in for `wl-paste --watch`: each line appended to this file is a copied text.
 export LDM_CLIPBOARD_CMD="tail -n 0 -F '$SANDBOX/clipboard'"
 touch "$SANDBOX/clipboard"
+# Scheduler: check the clock often, and record "suspend"/"poweroff" instead of running systemctl.
+export LDM_SCHEDULER_TICK_MS=500 LDM_POWER_DELAY=1 LDM_POWER_CMD="echo >> '$SANDBOX/power'"
 mkdir -p "$HOME/Downloads" "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME"
 # .bin files belong to the "Programas" category, saved in its own subfolder.
 DL="$HOME/Downloads/Programas"
@@ -138,6 +140,21 @@ echo "$BASE/files/2097152.bin" >> "$SANDBOX/clipboard"
 sleep 1
 test "$(last_id)" -eq "$id"; echo "turned off: ignored"
 "$BIN/ldm" settings --watch-clipboard true >/dev/null
+
+step "scheduler: outside its hours the queue waits; inside, it runs, then suspends"
+"$BIN/ldm" schedule --on --start "$(date -d '+2 hours' +%H:%M)" --stop "$(date -d '+3 hours' +%H:%M)" --when-done suspender
+"$BIN/ldm" settings | grep "agendador:"
+"$BIN/ldm" add "$BASE/files/5242880.bin" >/dev/null
+id="$(last_id)"
+sleep 2
+test "$(state_of "$id")" = na; echo "#$id waits in the queue"
+if "$BIN/ldm" schedule --cancel 2>/dev/null; then echo "cancelled a plan that does not exist"; exit 1; fi
+# Now inside the window: the queue starts, finishes, and the computer would be suspended.
+"$BIN/ldm" schedule --start "$(date -d '-1 minute' +%H:%M)" --stop "$(date -d '+30 minutes' +%H:%M)"
+wait_state "$id" concluído 60
+for _ in $(seq 1 40); do [ -s "$SANDBOX/power" ] && break; sleep 0.5; done
+test "$(cat "$SANDBOX/power")" = suspend; echo "queue done: suspend requested"
+"$BIN/ldm" schedule --off | grep "desligado"
 
 step "native host: invalid message"
 host '{"type":"nope"}'

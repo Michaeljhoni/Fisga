@@ -12,6 +12,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 gtk = { package = "gtk4", version = "0.10", features = ["v4_10"] }
+# Tray icon (StatusNotifierItem over D-Bus), on the tokio runtime of ipc.rs.
+ksni = "0.3"
 ldm-ipc.workspace = true
 libc.workspace = true
 tokio.workspace = true

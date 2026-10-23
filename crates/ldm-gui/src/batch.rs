@@ -145,6 +145,7 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>) {
     content.append(&buttons);
     window.set_child(Some(&content));
     window.set_default_widget(Some(&add));
+    GtkWindowExt::set_focus(&window, Some(&template));
 
     // The preview follows every change.
     let refresh = {
@@ -159,6 +160,8 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>) {
                     add.set_sensitive(true);
                 }
                 Err(message) => {
+                    let mut chars = message.chars();
+                    let message: String = chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default();
                     summary.set_label(&message);
                     summary.add_css_class("dim-label");
                     add.set_sensitive(false);

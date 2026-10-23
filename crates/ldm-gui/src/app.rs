@@ -93,6 +93,7 @@ impl App {
         gtk::Window::set_default_icon_name("folder-download");
         self.app.set_accels_for_action("win.add", &["<Control>n"]);
         self.app.set_accels_for_action("win.batch", &["<Control><Shift>n"]);
+        self.app.set_accels_for_action("win.find", &["<Control>f"]);
         self.app.set_accels_for_action("win.remove", &["Delete"]);
         self.app.set_accels_for_action("win.preferences", &["<Control>comma"]);
         self.app.set_accels_for_action("win.copy-url", &["<Control>c"]);
@@ -206,6 +207,7 @@ impl App {
                 if let Some(window) = self.window.borrow().as_ref() {
                     window.speed_limit.set(settings.speed_limit);
                     window.set_queues(settings.all_queues());
+                    window.set_hidden_columns(&settings.hidden_columns);
                 }
                 let queues = settings.all_queues();
                 let dialogs: Vec<Rc<ConfirmDialog>> = self.dialogs.borrow().values().cloned().collect();

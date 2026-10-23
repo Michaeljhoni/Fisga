@@ -281,6 +281,8 @@ pub struct Settings {
     /// (or an open window) never ends up in a newer queue that took the id.
     pub last_queue_id: u64,
     pub proxy: ProxySettings,
+    /// Columns of the main window's list the user hid ("size", "added"...).
+    pub hidden_columns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -470,6 +472,7 @@ impl Default for Settings {
             queues: Vec::new(),
             last_queue_id: MAIN_QUEUE,
             proxy: ProxySettings::default(),
+            hidden_columns: vec!["added".into()],
         }
     }
 }

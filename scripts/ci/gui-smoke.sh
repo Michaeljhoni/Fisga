@@ -107,6 +107,13 @@ sleep 1
 xdotool windowfocus --sync "$main"
 sleep 1
 shot 4-janela-principal
+# Search: Ctrl+F, type, and only the matching row is left.
+xdotool windowfocus --sync "$main" key ctrl+f
+xdotool type --delay 30 "foto"
+sleep 1
+shot 4c-busca
+xdotool key ctrl+a BackSpace Escape
+sleep 0.5
 # Right click on the first row: its menu (Abrir, Abrir pasta, Retomar, Pausar...).
 xdotool mousemove --window "$main" 520 96 click 3
 sleep 1

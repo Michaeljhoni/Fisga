@@ -64,6 +64,13 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
   *Preferências* (Ctrl+,) e *Sobre*. Clique duplo: confirma um download
   pendente, abre um concluído ou mostra o progresso dos demais. **Clique direito** num download:
   menu com *Abrir*, *Abrir pasta*, *Retomar*, *Pausar*, *Copiar endereço* e *Remover…*.
+- **Busca e colunas**: a caixa de busca no topo (Ctrl+F) filtra a lista pelo nome ou pelo
+  endereço (sem diferenciar maiúsculas nem acentos; várias palavras = todas precisam aparecer),
+  junto com a categoria ou fila escolhida à esquerda. Em ☰ → *Colunas*, mostre ou esconda
+  Tamanho, Progresso, Velocidade, Restante, Estado e *Adicionado em* (data e hora).
+- **Exportar e importar a lista**: ☰ → *Exportar lista…* grava os endereços mostrados (a vista e a
+  busca atuais), um por linha, num `.txt`; *Importar lista…* abre um arquivo desses na janela de
+  lote, para escolher a fila e a pasta.
 - **Novo download**: aparece para cada download vindo do navegador, com endereço, nome (editável),
   pasta (botão "Alterar…") e tamanho. **Baixar agora** começa na hora, mesmo com a fila cheia;
   **Adicionar à fila** espera uma vaga; **Cancelar**, Esc ou fechar a janela descarta. Enter = Baixar
@@ -195,6 +202,7 @@ ldm limit 7 512                                  # só o download 7: no máximo 
 ldm batch 'https://site/aula_*.mp4' --from 01 --to 20   # em lote: aula_01.mp4 ... aula_20.mp4
 ldm batch --file links.txt -Q 1 --paused         # uma lista de links ("-" = entrada padrão)
 ldm batch 'https://site/parte-*.rar' --from a --to f --dry-run   # só mostra os endereços
+ldm export --unfinished > pendentes.txt          # os endereços da lista (importe com ldm batch --file)
 ldm settings --watch-clipboard false             # não abrir a janela para links copiados
 ldm settings --tray false                        # sem ícone na bandeja
 ldm schedule --on --start 02:00 --stop 08:00     # a fila só roda de madrugada

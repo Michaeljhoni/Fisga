@@ -282,6 +282,10 @@ printf '%s\n' "veja: $BASE/files/1638401.bin" "texto solto" "<$BASE/files/163840
   | "$BIN/ldm" batch --file - --paused -o "$SANDBOX/lote" | grep "2 downloads adicionados"
 last="$(last_id)"
 test "$(state_of "$last")" = pausado; test "$(state_of $((last - 1)))" = pausado; echo "the list's 2 links, paused"
+"$BIN/ldm" export --unfinished | grep -c "1638401.bin\|1638402.bin" | grep -qx 2; echo "export lists the unfinished ones"
+"$BIN/ldm" export > "$SANDBOX/exportado.txt"
+test "$("$BIN/ldm" batch --file "$SANDBOX/exportado.txt" --dry-run | wc -l)" -eq "$(sort -u "$SANDBOX/exportado.txt" | wc -l)"
+echo "the exported list reads back as a batch"
 "$BIN/ldm" rm "$last"; "$BIN/ldm" rm $((last - 1))
 
 step "list"

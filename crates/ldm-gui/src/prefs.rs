@@ -580,6 +580,7 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
             queues: Vec::new(),
             last_queue_id: settings.last_queue_id,
             proxy,
+            hidden_columns: settings.hidden_columns.clone(),
         };
         for queue in queues {
             new.set_queue(queue);

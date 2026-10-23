@@ -86,6 +86,35 @@ pub fn category_icon(category: Category) -> &'static str {
     }
 }
 
+/// When it was added, in local time: "23/10/2026 14:05".
+pub fn added(info: &DownloadInfo) -> String {
+    gtk::glib::DateTime::from_unix_local(info.created_at as i64)
+        .and_then(|date| date.format("%d/%m/%Y %H:%M"))
+        .map(|text| text.to_string())
+        .unwrap_or_default()
+}
+
+/// The search box: every word typed must be in the name or the address
+/// (case and accents ignored).
+pub fn matches_search(info: &DownloadInfo, query: &str) -> bool {
+    let fold = |text: &str| -> String {
+        text.to_lowercase()
+            .chars()
+            .map(|c| match c {
+                'á' | 'à' | 'â' | 'ã' | 'ä' => 'a',
+                'é' | 'è' | 'ê' | 'ë' => 'e',
+                'í' | 'ì' | 'î' | 'ï' => 'i',
+                'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o',
+                'ú' | 'ù' | 'û' | 'ü' => 'u',
+                'ç' => 'c',
+                other => other,
+            })
+            .collect()
+    };
+    let haystack = fold(&format!("{} {}", info.name, info.url));
+    fold(query).split_whitespace().all(|word| haystack.contains(word))
+}
+
 pub fn speed(info: &DownloadInfo) -> String {
     if info.state == State::Running && info.speed >= 1.0 {
         format!("{}/s", bytes(info.speed as u64))
@@ -268,6 +297,23 @@ mod tests {
         ];
         assert_eq!(activity(&list), "2 baixando · 1,5 KB/s · 1 na fila");
         assert_eq!(activity(&list[2..]), "Nenhum download em andamento · 1 na fila");
+    }
+
+    #[test]
+    fn search_and_date() {
+        let mut video = info(State::Running, 0, None, 0.0);
+        video.name = "Aula de Programação 01.mp4".into();
+        video.url = "https://cursos.exemplo.com/a1".into();
+        assert!(matches_search(&video, ""));
+        assert!(matches_search(&video, "programacao"));
+        assert!(matches_search(&video, "AULA  01"));
+        assert!(matches_search(&video, "exemplo aula"), "words can match the address");
+        assert!(!matches_search(&video, "aula 02"));
+        // The day depends on the time zone; the shape does not.
+        video.created_at = 86_400 * 365;
+        let date = added(&video);
+        assert_eq!(date.len(), "01/01/1971 00:00".len(), "{date}");
+        assert_eq!(date.matches('/').count(), 2, "{date}");
     }
 
     #[test]

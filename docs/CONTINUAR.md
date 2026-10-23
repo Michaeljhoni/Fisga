@@ -261,7 +261,11 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
 - HLS/DASH sem yt-dlp, e FTP.
 
 ### Pacote 4: acabamento
-- Busca na lista, colunas configuráveis, exportar e importar a lista.
+- ~~Busca na lista, colunas configuráveis, exportar e importar a lista~~ (feito):
+  `SearchEntry` no lugar do título (`format::matches_search`; enquanto ela tem foco, os atalhos
+  Delete e Ctrl+C da janela ficam desligados), `window::COLUMNS` com ações `win.column-<id>` e
+  `Settings.hidden_columns`, coluna "Adicionado em" (`format::added`). Exportar = os endereços
+  da vista atual num `.txt`; importar abre esse texto na janela de lote. CLI: `ldm export`.
 - Som ao concluir, mover ou abrir o arquivo automaticamente ao concluir.
 - Verificação com ClamAV ao terminar.
 - **Grabber**: baixar arquivos de um site com filtros.

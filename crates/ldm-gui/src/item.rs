@@ -30,6 +30,8 @@ mod imp {
         remaining: RefCell<String>,
         #[property(get, set)]
         status: RefCell<String>,
+        #[property(get, set)]
+        added: RefCell<String>,
         pub info: RefCell<Option<DownloadInfo>>,
     }
 
@@ -62,6 +64,9 @@ impl DownloadItem {
         self.set_speed(format::speed(&info));
         self.set_remaining(format::remaining(&info));
         self.set_status(format::status(&info));
+        if self.added().is_empty() {
+            self.set_added(format::added(&info));
+        }
         self.imp().info.replace(Some(info));
     }
 

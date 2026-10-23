@@ -89,6 +89,8 @@ pub struct MainWindow {
     popover: gtk::PopoverMenu,
     status: gtk::Label,
     actions: Actions,
+    columns: Vec<Column>,
+    search: gtk::SearchEntry,
     /// From the settings, for the status bar.
     pub speed_limit: Cell<u64>,
     queues: RefCell<Vec<Queue>>,
@@ -223,10 +225,37 @@ fn sidebar_row(view: View, queues: &[Queue]) -> (gtk::ListBoxRow, gtk::Label) {
     (row, count)
 }
 
+/// The list's columns besides "Nome" (always there): the id kept in
+/// `Settings::hidden_columns`, and the title.
+pub const COLUMNS: [(&str, &str); 6] = [
+    ("size", "Tamanho"),
+    ("progress", "Progresso"),
+    ("speed", "Velocidade"),
+    ("remaining", "Restante"),
+    ("status", "Estado"),
+    ("added", "Adicionado em"),
+];
+
+struct Column {
+    id: &'static str,
+    column: gtk::ColumnViewColumn,
+    /// "win.column-<id>": a check mark in ☰ → Colunas.
+    action: gio::SimpleAction,
+}
+
 fn main_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     let section = gio::Menu::new();
     section.append(Some("Adicionar em lote…"), Some("win.batch"));
+    section.append(Some("Importar lista…"), Some("win.import"));
+    section.append(Some("Exportar lista…"), Some("win.export"));
+    menu.append_section(None, &section);
+    let columns = gio::Menu::new();
+    for (id, title) in COLUMNS {
+        columns.append(Some(title), Some(&format!("win.column-{id}")));
+    }
+    let section = gio::Menu::new();
+    section.append_submenu(Some("Colunas"), &columns);
     menu.append_section(None, &section);
     let section = gio::Menu::new();
     section.append(Some("Retomar todos"), Some("win.resume-all"));
@@ -274,6 +303,9 @@ impl MainWindow {
         header.pack_end(
             &gtk::Button::builder().label("Abrir").tooltip_text("Abrir o arquivo").action_name("win.open-file").build(),
         );
+        // The window title stays "LDM" (compositor rules); the search sits in its place.
+        let search = gtk::SearchEntry::builder().placeholder_text("Buscar (Ctrl+F)").width_chars(28).build();
+        header.set_title_widget(Some(&search));
         window.set_titlebar(Some(&header));
 
         // Sidebar: views, categories and queues (filled by `set_queues`).
@@ -305,12 +337,31 @@ impl MainWindow {
             .width_request(210)
             .build();
 
-        let view_now = current.clone();
+        let (view_now, query): (_, Rc<RefCell<String>>) = (current.clone(), Rc::default());
+        let q = query.clone();
         let filter = gtk::CustomFilter::new(move |object| {
-            object
-                .downcast_ref::<DownloadItem>()
-                .is_some_and(|item| item.with_info(|info| view_now.get().matches(info)))
+            object.downcast_ref::<DownloadItem>().is_some_and(|item| {
+                item.with_info(|info| view_now.get().matches(info) && format::matches_search(info, &q.borrow()))
+            })
         });
+        let f = filter.clone();
+        search.connect_search_changed(move |search| {
+            query.replace(search.text().to_string());
+            f.changed(gtk::FilterChange::Different);
+        });
+        // While typing a search, Delete and Ctrl+C edit the text, not the downloads.
+        let focus = gtk::EventControllerFocus::new();
+        let application = app.app.clone();
+        let a = application.clone();
+        focus.connect_enter(move |_| {
+            a.set_accels_for_action("win.remove", &[]);
+            a.set_accels_for_action("win.copy-url", &[]);
+        });
+        focus.connect_leave(move |_| {
+            application.set_accels_for_action("win.remove", &["Delete"]);
+            application.set_accels_for_action("win.copy-url", &["<Control>c"]);
+        });
+        search.add_controller(focus);
         let filtered = gtk::FilterListModel::new(Some(app.store.clone()), Some(filter.clone()));
         // In queue order (the order of arrival, unless moved up or down).
         let sorter = gtk::CustomSorter::new(|a, b| {
@@ -345,11 +396,17 @@ impl MainWindow {
             popover.popup();
         });
         view.append_column(&text_column("Nome", "name", true, 0.0, &menu));
-        view.append_column(&text_column("Tamanho", "size", false, 1.0, &menu));
-        view.append_column(&progress_column(&menu));
-        view.append_column(&text_column("Velocidade", "speed", false, 1.0, &menu));
-        view.append_column(&text_column("Restante", "remaining", false, 1.0, &menu));
-        view.append_column(&text_column("Estado", "status", false, 0.0, &menu));
+        let mut columns = Vec::new();
+        for (id, title) in COLUMNS {
+            let column = match id {
+                "progress" => progress_column(&menu),
+                "size" | "speed" | "remaining" => text_column(title, id, false, 1.0, &menu),
+                _ => text_column(title, id, false, 0.0, &menu),
+            };
+            view.append_column(&column);
+            let action = gio::SimpleAction::new_stateful(&format!("column-{id}"), None, &true.to_variant());
+            columns.push(Column { id, column, action });
+        }
         let list_scroll = gtk::ScrolledWindow::builder().child(&view).vexpand(true).hexpand(true).build();
 
         let paned = gtk::Paned::builder()
@@ -426,12 +483,32 @@ impl MainWindow {
             popover,
             status,
             actions,
+            columns,
+            search,
             speed_limit: Cell::new(app.settings().speed_limit),
             queues: RefCell::default(),
         };
         this.connect(app, &view);
         this.set_queues(queues);
+        this.set_hidden_columns(&app.settings().hidden_columns);
         this
+    }
+
+    /// Shows the columns the settings do not hide, and ticks them in ☰ → Colunas.
+    pub fn set_hidden_columns(&self, hidden: &[String]) {
+        for column in &self.columns {
+            let visible = !hidden.iter().any(|id| id == column.id);
+            column.column.set_visible(visible);
+            column.action.set_state(&visible.to_variant());
+        }
+    }
+
+    /// The download addresses the list shows now (view and search), in order.
+    fn shown_urls(selection: &gtk::SingleSelection) -> Vec<String> {
+        (0..selection.n_items())
+            .filter_map(|i| selection.item(i).and_downcast::<DownloadItem>())
+            .map(|item| item.with_info(|info| info.url.clone()))
+            .collect()
     }
 
     /// The queues changed (settings): their sidebar entries, the row menu and
@@ -481,12 +558,80 @@ impl MainWindow {
         };
         let parent = window.clone();
         simple("add", Box::new(move || add_url_dialog(&parent)));
+        let search = self.search.clone();
+        simple(
+            "find",
+            Box::new(move || {
+                search.grab_focus();
+            }),
+        );
+
+        // ☰ → Colunas: shown or hidden, kept in the settings.
+        for column in &self.columns {
+            let (a, id) = (app.clone(), column.id);
+            column.action.connect_activate(move |action, _| {
+                let visible = !action.state().and_then(|s| s.get::<bool>()).unwrap_or(true);
+                let Some(app) = a.upgrade() else { return };
+                let mut settings = app.settings();
+                settings.hidden_columns.retain(|hidden| hidden != id);
+                if !visible {
+                    settings.hidden_columns.push(id.to_string());
+                }
+                // The window follows when the daemon sends the new settings back.
+                send(Request::SetSettings { settings }, None);
+            });
+            window.add_action(&column.action);
+        }
+
+        // "Exportar lista": the addresses shown (view and search), one per line,
+        // which "Importar lista" (or "ldm batch --file") reads back.
+        let (parent, s) = (window.clone(), selection.clone());
+        simple(
+            "export",
+            Box::new(move || {
+                let urls = Self::shown_urls(&s);
+                let parent = parent.clone();
+                glib::spawn_future_local(async move {
+                    if urls.is_empty() {
+                        show_error(Some(parent.upcast_ref()), "Nada para exportar", "A lista mostrada está vazia.");
+                        return;
+                    }
+                    let dialog = gtk::FileDialog::builder().title("Exportar lista").initial_name("downloads.txt").modal(true).build();
+                    let Ok(file) = dialog.save_future(Some(&parent)).await else { return };
+                    let Some(path) = file.path() else { return };
+                    if let Err(e) = std::fs::write(&path, urls.join("\n") + "\n") {
+                        show_error(Some(parent.upcast_ref()), "Não foi possível exportar", &e.to_string());
+                    }
+                });
+            }),
+        );
+        let (parent, a) = (window.clone(), app.clone());
+        simple(
+            "import",
+            Box::new(move || {
+                let (parent, a) = (parent.clone(), a.clone());
+                glib::spawn_future_local(async move {
+                    let dialog = gtk::FileDialog::builder().title("Importar lista").modal(true).build();
+                    let Ok(file) = dialog.open_future(Some(&parent)).await else { return };
+                    let Some(path) = file.path() else { return };
+                    match std::fs::read_to_string(&path) {
+                        // The batch window shows what was found and where it goes.
+                        Ok(text) => {
+                            if let Some(app) = a.upgrade() {
+                                crate::batch::show(&parent, app.settings().all_queues(), Some(text));
+                            }
+                        }
+                        Err(e) => show_error(Some(parent.upcast_ref()), "Não foi possível ler o arquivo", &e.to_string()),
+                    }
+                });
+            }),
+        );
         let (parent, a) = (window.clone(), app.clone());
         simple(
             "batch",
             Box::new(move || {
                 if let Some(app) = a.upgrade() {
-                    crate::batch::show(&parent, app.settings().all_queues());
+                    crate::batch::show(&parent, app.settings().all_queues(), None);
                 }
             }),
         );

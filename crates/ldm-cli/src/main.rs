@@ -166,6 +166,15 @@ enum Command {
     },
     /// Limite de velocidade de um download, em KB/s (0 = só o limite geral)
     Limit { id: u64, kb_per_second: u64 },
+    /// Escreve os endereços da lista, um por linha (importe com "ldm batch --file")
+    Export {
+        /// Só os que ainda não terminaram
+        #[arg(long)]
+        unfinished: bool,
+        /// Só os desta fila (número em "ldm queue")
+        #[arg(short = 'Q', long)]
+        queue_id: Option<u64>,
+    },
     /// Vários downloads de uma vez (o "download em lote" do IDM), direto na fila
     Batch {
         /// Endereço com um * no lugar do número ou da letra, ex.: https://site/aula_*.mp4
@@ -346,6 +355,18 @@ async fn main() -> anyhow::Result<()> {
                 }
                 _ => println!("1 download adicionado"),
             }
+            Ok(())
+        }
+        Command::Export { unfinished, queue_id } => {
+            let Response::Downloads { mut items } = ldm_ipc::call(&Request::List).await? else {
+                bail!("resposta inesperada do daemon");
+            };
+            items.sort_by_key(|item| (item.order, item.id));
+            items
+                .iter()
+                .filter(|item| !unfinished || item.state != State::Completed)
+                .filter(|item| queue_id.map_or(true, |queue| item.queue == queue))
+                .for_each(|item| println!("{}", item.url));
             Ok(())
         }
         Command::Limit { id, kb_per_second } => {

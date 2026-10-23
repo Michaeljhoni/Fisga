@@ -302,8 +302,14 @@ enum Command {
         #[arg(long = "chrome-id")]
         chrome_ids: Vec<String>,
         /// Remove os registros em vez de criar
-        #[arg(long)]
+        #[arg(long, conflicts_with = "system")]
         uninstall: bool,
+        /// Para pacotes: grava os registros do sistema (todos os usuários) dentro desta pasta ($pkgdir)
+        #[arg(long, requires = "host_path")]
+        system: Option<PathBuf>,
+        /// Para pacotes: onde o ldm-native-host fica depois de instalado (ex.: /usr/bin/ldm-native-host)
+        #[arg(long, requires = "system")]
+        host_path: Option<PathBuf>,
     },
     /// Mostra ou altera as configurações do daemon
     Settings(SettingsArgs),
@@ -418,7 +424,10 @@ async fn main() -> anyhow::Result<()> {
         Command::Resume { id } => simple(Request::Resume { id }).await,
         Command::Rm { id, delete_file } => simple(Request::Remove { id, delete_file }).await,
         Command::Watch => watch().await,
-        Command::InstallHosts { chrome_ids, uninstall } => hosts::install(&chrome_ids, uninstall),
+        Command::InstallHosts { chrome_ids, uninstall, system, host_path } => match (system, host_path) {
+            (Some(root), Some(host)) => hosts::install_system(&root, &host, &chrome_ids),
+            _ => hosts::install(&chrome_ids, uninstall),
+        },
         Command::Settings(args) => settings(args).await,
         Command::Schedule(args) => schedule(args).await,
         Command::Stop => match ldm_ipc::call(&Request::Shutdown).await {

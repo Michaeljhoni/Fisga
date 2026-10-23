@@ -272,7 +272,13 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   `$LDM_FILE`... no ambiente (nunca no texto), e o som. Nos testes, `LDM_CLAMSCAN_CMD` e
   `LDM_SOUND_CMD` trocam o ClamAV e o tocador.
 - **Grabber**: baixar arquivos de um site com filtros.
-- Pacotes: AUR (prioridade, pois o dono usa Arch), Flatpak, .deb e .rpm.
+- ~~Pacote para o Arch~~ (feito): `packaging/arch/PKGBUILD` (`ldm-git`), fonte em `$LDM_GIT`
+  (o checkout local enquanto o repositório é privado). `ldm install-hosts --system $pkgdir
+  --host-path /usr/bin/ldm-native-host` grava os manifestos do sistema. O job `arch-package`
+  do CI roda o `makepkg` num container `archlinux`, instala o pacote e confere os arquivos.
+  Para publicar no AUR: tornar o repositório público, gerar o `.SRCINFO`
+  (`makepkg --printsrcinfo`) e escolher uma licença (hoje `custom`, sem arquivo LICENSE).
+- Flatpak, .deb e .rpm.
 
 A análise do IDM que originou o roadmap está em `docs/ANALISE-IDM.md`, com o catálogo de
 funcionalidades e a arquitetura. O README tem o uso, a regra do niri e a seção de problemas.

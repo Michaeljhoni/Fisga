@@ -1,5 +1,7 @@
 //! Registers the native messaging host (`ldm-native-host`) in every browser found
-//! in the user's home. Manifests are per-user, so no root is needed.
+//! in the user's home. Manifests are per-user, so no root is needed. Packages
+//! (the PKGBUILD) use `install_system` instead: system-wide manifests for every
+//! user, written under the package's staging folder.
 
 use std::path::{Path, PathBuf};
 
@@ -25,6 +27,50 @@ const CHROMIUM_FAMILY: &[&str] = &[
 /// Profile roots (under `~`) of Firefox-based browsers.
 const FIREFOX_FAMILY: &[&str] = &[".mozilla", ".librewolf", ".waterfox", ".floorp", ".zen"];
 
+/// System-wide manifest folders of Chromium-based browsers.
+const CHROMIUM_SYSTEM: &[&str] = &[
+    "etc/chromium/native-messaging-hosts",
+    "etc/opt/chrome/native-messaging-hosts",
+    "etc/opt/brave.com/brave/native-messaging-hosts",
+    "etc/opt/edge/native-messaging-hosts",
+    "etc/opt/vivaldi/native-messaging-hosts",
+];
+
+/// System-wide manifest folders of Firefox-based browsers.
+const FIREFOX_SYSTEM: &[&str] = &["usr/lib/mozilla/native-messaging-hosts", "usr/lib/librewolf/native-messaging-hosts"];
+
+fn manifests(host: &Path, extra_chrome_ids: &[String]) -> (serde_json::Value, serde_json::Value) {
+    let mut origins = vec![format!("chrome-extension://{CHROME_EXTENSION_ID}/")];
+    origins.extend(extra_chrome_ids.iter().map(|id| format!("chrome-extension://{id}/")));
+    let chrome = json!({
+        "name": NATIVE_HOST_NAME,
+        "description": "LDM - integração com o navegador",
+        "path": host,
+        "type": "stdio",
+        "allowed_origins": origins,
+    });
+    let firefox = json!({
+        "name": NATIVE_HOST_NAME,
+        "description": "LDM - integração com o navegador",
+        "path": host,
+        "type": "stdio",
+        "allowed_extensions": [FIREFOX_EXTENSION_ID],
+    });
+    (chrome, firefox)
+}
+
+/// For packages: the system-wide manifests under `root` (the package's
+/// staging folder, `$pkgdir`), pointing to `host` as installed (`/usr/bin/...`).
+pub fn install_system(root: &Path, host: &Path, extra_chrome_ids: &[String]) -> anyhow::Result<()> {
+    anyhow::ensure!(host.is_absolute(), "--host-path precisa ser um caminho absoluto: {}", host.display());
+    let (chrome, firefox) = manifests(host, extra_chrome_ids);
+    let targets = CHROMIUM_SYSTEM.iter().map(|dir| (dir, &chrome)).chain(FIREFOX_SYSTEM.iter().map(|dir| (dir, &firefox)));
+    for (dir, manifest) in targets {
+        println!("instalado {}", write_manifest(&root.join(dir), manifest)?.display());
+    }
+    Ok(())
+}
+
 fn write_manifest(dir: &Path, manifest: &serde_json::Value) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(dir).with_context(|| format!("criar {}", dir.display()))?;
     let path = dir.join(format!("{NATIVE_HOST_NAME}.json"));
@@ -41,22 +87,7 @@ pub fn install(extra_chrome_ids: &[String], uninstall: bool) -> anyhow::Result<(
         .canonicalize()
         .with_context(|| format!("ldm-native-host não encontrado ({}); instale-o junto com o ldm", host.display()))?;
 
-    let mut origins = vec![format!("chrome-extension://{CHROME_EXTENSION_ID}/")];
-    origins.extend(extra_chrome_ids.iter().map(|id| format!("chrome-extension://{id}/")));
-    let chrome_manifest = json!({
-        "name": NATIVE_HOST_NAME,
-        "description": "LDM - integração com o navegador",
-        "path": host,
-        "type": "stdio",
-        "allowed_origins": origins,
-    });
-    let firefox_manifest = json!({
-        "name": NATIVE_HOST_NAME,
-        "description": "LDM - integração com o navegador",
-        "path": host,
-        "type": "stdio",
-        "allowed_extensions": [FIREFOX_EXTENSION_ID],
-    });
+    let (chrome_manifest, firefox_manifest) = manifests(&host, extra_chrome_ids);
 
     let mut targets: Vec<(PathBuf, &serde_json::Value)> = Vec::new();
     for browser in CHROMIUM_FAMILY {
@@ -87,4 +118,28 @@ pub fn install(extra_chrome_ids: &[String], uninstall: bool) -> anyhow::Result<(
         println!("Recarregue a extensão no navegador para ela encontrar o app.");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_manifests_for_packages() {
+        let root = std::env::temp_dir().join(format!("ldm-hosts-{}", std::process::id()));
+        install_system(&root, Path::new("/usr/bin/ldm-native-host"), &[]).unwrap();
+        let chromium: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(root.join("etc/chromium/native-messaging-hosts/io.ldm.native.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(chromium["path"], "/usr/bin/ldm-native-host");
+        assert_eq!(chromium["allowed_origins"][0], format!("chrome-extension://{CHROME_EXTENSION_ID}/"));
+        let firefox: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(root.join("usr/lib/mozilla/native-messaging-hosts/io.ldm.native.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(firefox["allowed_extensions"][0], FIREFOX_EXTENSION_ID);
+        assert!(install_system(&root, Path::new("relativo/ldm-native-host"), &[]).is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

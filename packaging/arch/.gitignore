@@ -1,0 +1,6 @@
+# makepkg output
+/ldm/
+/src/
+/pkg/
+*.pkg.tar.*
+*.log

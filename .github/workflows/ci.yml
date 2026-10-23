@@ -46,3 +46,34 @@ jobs:
           name: gui-screenshots
           path: target/gui-shots
           if-no-files-found: ignore
+
+  # The Arch package (packaging/arch/PKGBUILD), built as the owner would: makepkg
+  # from this checkout, then installed and checked.
+  arch-package:
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    timeout-minutes: 40
+    steps:
+      - name: Tools
+        run: pacman -Syu --noconfirm --needed base-devel git rust gtk4
+
+      - uses: actions/checkout@v4
+
+      - name: makepkg
+        run: |
+          useradd -m builder
+          chown -R builder "$PWD"
+          su builder -c "git config --global --add safe.directory '$PWD' && cd packaging/arch && LDM_GIT='git+file://$PWD' makepkg --noconfirm --nocheck"
+
+      - name: Install and check the package
+        run: |
+          pkg="$(ls packaging/arch/ldm-git-*.pkg.tar.zst)"
+          pacman -Qlp "$pkg"
+          pacman -U --noconfirm "$pkg"
+          ldm --version
+          test -x /usr/bin/ldmd && test -x /usr/bin/ldm-gui && test -x /usr/bin/ldm-native-host
+          grep -q '"path": "/usr/bin/ldm-native-host"' /usr/lib/mozilla/native-messaging-hosts/io.ldm.native.json
+          grep -q '"path": "/usr/bin/ldm-native-host"' /etc/chromium/native-messaging-hosts/io.ldm.native.json
+          test -f /usr/share/ldm/extension/chrome/manifest.json && test -f /usr/share/ldm/extension/firefox/manifest.json
+          grep -q '^Exec=ldm-gui' /usr/share/applications/io.ldm.Ldm.desktop
+          echo "PACKAGE OK"

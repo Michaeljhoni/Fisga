@@ -1,0 +1,64 @@
+# Maintainer: Michaeljhoni <desenvolvimento@gbonline.com.br>
+#
+# Builds LDM from git. While the repository is private, build from your own
+# checkout:   cd packaging/arch && LDM_GIT="git+file://$(realpath ../..)" makepkg -si
+# (makepkg clones what is committed, not uncommitted changes.)
+
+pkgname=ldm-git
+pkgver=r0
+pkgrel=1
+pkgdesc='Gerenciador de downloads para Linux inspirado no IDM: várias conexões, filas, agendador e extensão para o navegador'
+arch=('x86_64' 'aarch64')
+url='https://github.com/Michaeljhoni/ldm'
+license=('custom')
+depends=('gtk4' 'gcc-libs' 'glibc')
+makedepends=('cargo' 'git')
+optdepends=(
+  'yt-dlp: vídeos de sites (YouTube e outros)'
+  'ffmpeg: juntar áudio e vídeo dos sites'
+  'libnotify: notificações'
+  'wl-clipboard: capturar links copiados no Wayland'
+  'clamav: verificar os downloads com antivírus'
+  'libcanberra: som ao concluir'
+)
+provides=('ldm')
+conflicts=('ldm')
+source=("ldm::${LDM_GIT:-git+https://github.com/Michaeljhoni/ldm.git}")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd ldm
+  printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd ldm
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd ldm
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  cargo build --frozen --release --workspace --bins
+  bash extension/build.sh
+}
+
+check() {
+  cd ldm
+  export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
+  cargo test --frozen --release --workspace
+}
+
+package() {
+  cd ldm
+  install -Dm755 target/release/ldm target/release/ldmd target/release/ldm-native-host target/release/ldm-gui \
+    -t "$pkgdir/usr/bin"
+  install -Dm644 crates/ldm-gui/data/io.ldm.Ldm.desktop -t "$pkgdir/usr/share/applications"
+  # The browser host for every user (Firefox, Chromium, Chrome, Brave, Edge, Vivaldi, LibreWolf).
+  target/release/ldm install-hosts --system "$pkgdir" --host-path /usr/bin/ldm-native-host
+  # The extension, to load unpacked: chrome://extensions or about:debugging.
+  install -d "$pkgdir/usr/share/ldm"
+  cp -r extension/dist "$pkgdir/usr/share/ldm/extension"
+  install -Dm644 README.md docs/CONTINUAR.md -t "$pkgdir/usr/share/doc/ldm"
+}

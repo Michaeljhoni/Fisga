@@ -52,6 +52,24 @@ encontrados e gera a extensão em `extension/dist/`. Depois carregue a extensão
 
 Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativo sem configuração extra.
 
+### Arch Linux: pacote (`pacman`)
+
+`packaging/arch/PKGBUILD` gera o pacote `ldm-git`, que instala tudo em `/usr`: os programas, o
+atalho no menu, o host nativo já registrado para todos os usuários (Firefox, Chromium, Chrome,
+Brave, Edge, Vivaldi, LibreWolf) e a extensão em `/usr/share/ldm/extension`. Enquanto o
+repositório for privado, construa a partir do seu checkout (o `makepkg` usa o que está
+commitado):
+
+```bash
+cd packaging/arch
+LDM_GIT="git+file://$(realpath ../..)" makepkg -si
+```
+
+Para atualizar: `git pull` e o mesmo comando. Quem usava o `scripts/install-dev.sh` pode tirar a
+instalação antiga: `ldm install-hosts --uninstall` e `rm ~/.local/bin/{ldm,ldmd,ldm-native-host,ldm-gui}
+~/.local/share/applications/io.ldm.Ldm.desktop`. Na extensão, carregue `/usr/share/ldm/extension/chrome`
+(ou `firefox/manifest.json`).
+
 ## Interface gráfica (`ldm-gui`)
 
 - **Janela principal** (`ldm-gui`, ou "LDM" no menu de aplicativos): à esquerda, como no IDM,
@@ -293,4 +311,5 @@ Hyprland, `windowrulev2 = float, class:^(io\.ldm\.Ldm)$, title:negative:^LDM$`.
 - [x] Ícone na bandeja, iniciar com a sessão, agendador (suspender/desligar ao terminar)
 - [x] Várias filas, cada uma com limite e agendador, e ordem dentro da fila
 - [ ] HLS/DASH nativo (hoje via yt-dlp), FTP
-- [ ] Pacotes (AUR, Flatpak, .deb/.rpm)
+- [x] Pacote para o Arch (`packaging/arch/PKGBUILD`, pronto para o AUR quando o repositório for público)
+- [ ] Flatpak, .deb/.rpm

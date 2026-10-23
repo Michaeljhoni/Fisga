@@ -44,8 +44,8 @@ pub struct DownloadOptions {
     pub idle_timeout: Duration,
     /// Delay between opening each additional connection.
     pub connection_stagger: Duration,
-    /// Shared speed limit (all connections, possibly all downloads).
-    pub limiter: Option<Arc<crate::RateLimiter>>,
+    /// Speed limits, all respected: the global one (every download) and this download's own.
+    pub limiters: Vec<Arc<crate::RateLimiter>>,
 }
 
 impl Default for DownloadOptions {
@@ -56,7 +56,7 @@ impl Default for DownloadOptions {
             max_retries: 8,
             idle_timeout: Duration::from_secs(30),
             connection_stagger: Duration::from_millis(150),
-            limiter: None,
+            limiters: Vec::new(),
         }
     }
 }
@@ -234,7 +234,7 @@ async fn single_stream(
             Ok(Some(Ok(chunk))) => {
                 file.write_all(&chunk).await?;
                 downloaded += chunk.len() as u64;
-                if let Some(limiter) = &opts.limiter {
+                for limiter in &opts.limiters {
                     limiter.consume(chunk.len()).await;
                 }
             }
@@ -297,7 +297,7 @@ struct Ctx {
     min_split: u64,
     max_retries: u32,
     idle_timeout: Duration,
-    limiter: Option<Arc<crate::RateLimiter>>,
+    limiters: Vec<Arc<crate::RateLimiter>>,
     cancel: CancellationToken,
 }
 
@@ -448,7 +448,7 @@ impl Ctx {
                 }
             };
 
-            if let Some(limiter) = &self.limiter {
+            for limiter in &self.limiters {
                 limiter.consume(chunk.len()).await;
             }
 
@@ -564,7 +564,7 @@ async fn segmented_download(
         min_split: opts.min_split_size.max(MIN_SPLIT_FLOOR),
         max_retries: opts.max_retries,
         idle_timeout: opts.idle_timeout,
-        limiter: opts.limiter.clone(),
+        limiters: opts.limiters.clone(),
         cancel: cancel.clone(),
     });
 
@@ -659,7 +659,7 @@ mod tests {
             min_split: MIN_SPLIT_FLOOR,
             max_retries: 0,
             idle_timeout: Duration::from_secs(1),
-            limiter: None,
+            limiters: Vec::new(),
             cancel: CancellationToken::new(),
         }
     }

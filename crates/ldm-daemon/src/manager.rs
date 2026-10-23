@@ -58,11 +58,14 @@ struct Job {
     from_queue: bool,
     /// Paused by the scheduler: goes back to `Queued` instead of `Paused`.
     requeue: bool,
+    /// This download's own speed limit (`info.speed_limit`), changed live.
+    limiter: Arc<ldm_core::RateLimiter>,
 }
 
 impl Job {
     fn new(info: DownloadInfo, request: AddRequest, auto_dir: bool) -> Self {
-        Self { info, request, cancel: None, forced: false, auto_dir, from_queue: false, requeue: false }
+        let limiter = Arc::new(ldm_core::RateLimiter::new(info.speed_limit));
+        Self { info, request, cancel: None, forced: false, auto_dir, from_queue: false, requeue: false, limiter }
     }
 }
 
@@ -408,6 +411,7 @@ impl Manager {
                 order,
                 page: request.page_url.clone().or(request.referrer.clone()),
                 awaiting_url: false,
+                speed_limit: 0,
             };
             let _ = self.updates.send(Response::Update { item: info.clone() });
             inner.jobs.insert(id, Job::new(info, request, auto));
@@ -674,6 +678,27 @@ impl Manager {
         self.dirty.store(true, Ordering::Relaxed);
     }
 
+    /// A download's own speed limit (bytes per second, 0 = none). Direct
+    /// downloads follow it at once; a site video (yt-dlp) on its next start.
+    pub fn set_speed_limit(&self, id: u64, limit: u64) -> anyhow::Result<()> {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
+            job.info.speed_limit = limit;
+            job.limiter.set_rate(limit);
+            let _ = self.updates.send(Response::Update { item: job.info.clone() });
+        }
+        tracing::info!(id, limit, "limite de velocidade do download");
+        self.save();
+        Ok(())
+    }
+
+    /// The limit yt-dlp gets for this download: the tighter of the global one and its own.
+    pub fn speed_limit_for(&self, id: u64) -> u64 {
+        let own = self.inner.lock().unwrap().jobs.get(&id).map_or(0, |j| j.info.speed_limit);
+        ldm_ipc::combined_limit(self.settings().speed_limit, own)
+    }
+
     /// Applies a change to a download and broadcasts it.
     pub fn update(&self, id: u64, change: impl FnOnce(&mut DownloadInfo)) {
         let mut inner = self.inner.lock().unwrap();
@@ -685,14 +710,14 @@ impl Manager {
     }
 
     async fn run_job(self: Arc<Self>, id: u64, cancel: CancellationToken) {
-        let Some((request, path)) = ({
+        let Some((request, path, limiter)) = ({
             let inner = self.inner.lock().unwrap();
-            inner.jobs.get(&id).map(|j| (j.request.clone(), j.info.path.clone()))
+            inner.jobs.get(&id).map(|j| (j.request.clone(), j.info.path.clone(), j.limiter.clone()))
         }) else {
             return;
         };
         let result = match request.kind {
-            SourceKind::Direct => self.run_direct(id, &request, path, cancel.clone()).await,
+            SourceKind::Direct => self.run_direct(id, &request, path, limiter, cancel.clone()).await,
             SourceKind::Stream | SourceKind::Page => ytdlp::run(&self, id, &request, cancel.clone()).await,
         };
         self.finish(id, result);
@@ -703,6 +728,7 @@ impl Manager {
         id: u64,
         request: &AddRequest,
         path: Option<PathBuf>,
+        limiter: Arc<ldm_core::RateLimiter>,
         cancel: CancellationToken,
     ) -> JobResult {
         let spec = RequestSpec { url: request.url.clone(), headers: self.headers(request) };
@@ -716,7 +742,8 @@ impl Manager {
         };
         let opts = DownloadOptions {
             connections: request.connections.unwrap_or(settings.connections).clamp(1, 32),
-            limiter: Some(self.limiter.clone()),
+            // Both apply: the global limit for all downloads and this one's own.
+            limiters: vec![self.limiter.clone(), limiter],
             ..Default::default()
         };
         let (events_tx, mut events) = mpsc::unbounded_channel();
@@ -1112,6 +1139,22 @@ mod tests {
         assert_eq!(manager.limiter.rate(), 512 * 1024);
         let reloaded = Manager::load(manager.store.clone(), manager.settings_path.clone()).unwrap();
         assert_eq!(reloaded.limiter.rate(), 512 * 1024);
+    }
+
+    #[tokio::test]
+    async fn a_download_has_its_own_speed_limit() {
+        let manager = manager();
+        let id = add_to(&manager, MAIN_QUEUE, false);
+        manager.set_speed_limit(id, 256 * 1024).unwrap();
+        assert_eq!(manager.inner.lock().unwrap().jobs[&id].limiter.rate(), 256 * 1024);
+        assert_eq!(manager.speed_limit_for(id), 256 * 1024);
+        // The tighter of the global limit and its own.
+        manager.set_settings(Settings { speed_limit: 128 * 1024, ..manager.settings() }).unwrap();
+        assert_eq!(manager.speed_limit_for(id), 128 * 1024);
+        assert!(manager.set_speed_limit(999, 1).is_err());
+        // Kept across a restart.
+        let reloaded = Manager::load(manager.store.clone(), manager.settings_path.clone()).unwrap();
+        assert_eq!(reloaded.inner.lock().unwrap().jobs[&id].limiter.rate(), 256 * 1024);
     }
 
     #[tokio::test]

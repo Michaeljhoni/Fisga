@@ -774,6 +774,22 @@ pub struct DownloadInfo {
     /// by the browser replaces this one's link (`Request::AwaitUrl`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub awaiting_url: bool,
+    /// This download's own speed limit, bytes per second; 0 = only the global one.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub speed_limit: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+/// The limit a download gets from the global one and its own (0 = none):
+/// the tighter one.
+pub fn combined_limit(global: u64, own: u64) -> u64 {
+    match (global, own) {
+        (0, limit) | (limit, 0) => limit,
+        (global, own) => global.min(own),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -827,6 +843,9 @@ pub enum Request {
     /// Waits for (or stops waiting for) the browser to send the same file
     /// again, and takes its link.
     AwaitUrl { id: u64, waiting: bool },
+    /// A download's own speed limit in bytes per second (0 = none), on top of
+    /// the global one. Applies at once to direct downloads.
+    SetSpeedLimit { id: u64, limit: u64 },
     Shutdown,
     GetSettings,
     /// Replaces the settings; subscribers receive `Response::Settings`.
@@ -1202,8 +1221,14 @@ mod tests {
         assert!(info.formats.is_empty());
         assert_eq!((info.queue, info.order), (MAIN_QUEUE, 0));
         assert!(!info.awaiting_url && info.page.is_none());
+        assert_eq!(info.speed_limit, 0);
+        assert_eq!(combined_limit(0, 0), 0);
+        assert_eq!(combined_limit(1000, 0), 1000);
+        assert_eq!(combined_limit(0, 500), 500);
+        assert_eq!(combined_limit(1000, 500), 500);
+        assert_eq!(combined_limit(300, 500), 300);
         let json = serde_json::to_string(&info).unwrap();
-        assert!(!json.contains("awaitingUrl") && !json.contains("page"), "{json}");
+        assert!(!json.contains("awaitingUrl") && !json.contains("page") && !json.contains("speedLimit"), "{json}");
         let request: Request =
             serde_json::from_str(r#"{"type":"refresh_url","id":2,"url":"https://e.com/novo"}"#).unwrap();
         assert!(matches!(request, Request::RefreshUrl { id: 2, .. }));

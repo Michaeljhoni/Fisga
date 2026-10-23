@@ -164,6 +164,8 @@ enum Command {
         #[arg(short = 'Q', long)]
         queue_id: Option<u64>,
     },
+    /// Limite de velocidade de um download, em KB/s (0 = só o limite geral)
+    Limit { id: u64, kb_per_second: u64 },
     /// Atualiza o endereço de um download cujo link expirou (continua de onde parou)
     Refresh {
         id: u64,
@@ -279,6 +281,14 @@ async fn main() -> anyhow::Result<()> {
                 queue: queue_id,
             };
             simple(request).await
+        }
+        Command::Limit { id, kb_per_second } => {
+            simple(Request::SetSpeedLimit { id, limit: kb_per_second * 1024 }).await?;
+            match kb_per_second {
+                0 => println!("download #{id}: sem limite próprio"),
+                kb => println!("download #{id}: no máximo {}/s", bytes(kb * 1024)),
+            }
+            Ok(())
         }
         Command::Refresh { id, url, capture, cancel } => match url {
             Some(url) => {
@@ -742,6 +752,9 @@ fn row(item: &DownloadInfo) -> String {
     };
     let speed = if item.state == State::Running { format!("{}/s", bytes(item.speed as u64)) } else { String::new() };
     let mut line = format!("{:>4}  {:<10} {:<20} {:>11}  {}", item.id, state_label(item.state), progress, speed, item.name);
+    if item.speed_limit > 0 {
+        line.push_str(&format!("  (máx. {}/s)", bytes(item.speed_limit)));
+    }
     if let Some(error) = &item.error {
         line.push_str(&format!("\n      └ {error}"));
     }

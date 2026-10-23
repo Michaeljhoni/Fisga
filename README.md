@@ -82,7 +82,9 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
   "Capturar links copiados" ou com `ldm settings --watch-clipboard false`. Se a janela não puder
   abrir, o link copiado é descartado (não vira download sozinho).
 - **Progresso** (a janela de status do IDM): abre depois de "Baixar agora", com barra, quanto já
-  baixou, velocidade, tempo restante, se dá para retomar, a pasta e **Pausar/Retomar**. Ao terminar
+  baixou, velocidade, tempo restante, se dá para retomar, a pasta, **Pausar/Retomar** e o **limite
+  de velocidade deste download** ("No máximo ... KB/s", que vale na hora e se soma ao limite geral:
+  o menor vence; também pelo clique direito → *Limitar velocidade…*). Ao terminar
   vira **Download concluído**, com **Abrir** e **Abrir pasta**. Pode ser desligada nas Preferências.
 - **Preferências** (aba *Geral*): pasta de downloads, subpastas por tipo de arquivo,
   conexões por arquivo, a janela de progresso, capturar links copiados e o **limite de velocidade** (KB/s para todos os
@@ -184,6 +186,7 @@ ldm watch                                        # mudanças em tempo real
 ldm settings                                     # configurações (pasta, subpastas, fila, conexões)
 ldm settings --category-folders false --max-parallel 5
 ldm settings --speed-limit 2048                  # 2 MB/s para tudo (0 = sem limite)
+ldm limit 7 512                                  # só o download 7: no máximo 512 KB/s (0 = tira)
 ldm settings --watch-clipboard false             # não abrir a janela para links copiados
 ldm settings --tray false                        # sem ícone na bandeja
 ldm schedule --on --start 02:00 --stop 08:00     # a fila só roda de madrugada

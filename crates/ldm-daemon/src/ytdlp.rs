@@ -66,7 +66,7 @@ pub async fn run(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel: 
     // Per yt-dlp process: with several site videos at once the total is higher.
     let settings = manager.settings();
     apply_proxy(&mut command, &settings.proxy);
-    let limit = settings.speed_limit;
+    let limit = manager.speed_limit_for(id);
     if limit > 0 {
         command.args(["--limit-rate", &limit.to_string()]);
     }

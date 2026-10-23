@@ -26,6 +26,12 @@ pub struct ProgressWindow {
     pause: gtk::Button,
     open: gtk::Button,
     open_folder: gtk::Button,
+    /// This download's own speed limit (IDM's "Speed Limiter" in the same window).
+    limit_on: gtk::CheckButton,
+    limit: gtk::SpinButton,
+    limit_row: gtk::Box,
+    /// Set while the widgets follow the daemon, so they do not send it back.
+    syncing: std::cell::Cell<bool>,
     info: RefCell<DownloadInfo>,
     on_closed: RefCell<Option<Box<dyn Fn()>>>,
 }
@@ -96,6 +102,17 @@ impl ProgressWindow {
             grid.attach(&caption(text), 0, row as i32, 1, 1);
             grid.attach(label, 1, row as i32, 1, 1);
         }
+        let limit_on = gtk::CheckButton::with_label("No máximo");
+        let limit = gtk::SpinButton::with_range(1.0, 1_000_000.0, 64.0);
+        limit.set_value(512.0);
+        let limit_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        limit_row.append(&limit_on);
+        limit_row.append(&limit);
+        limit_row.append(&gtk::Label::new(Some("KB/s")));
+        let limit_caption = caption("Limite");
+        grid.attach(&limit_caption, 0, 6, 1, 1);
+        grid.attach(&limit_row, 1, 6, 1, 1);
+        limit_row.bind_property("visible", &limit_caption, "visible").sync_create().build();
 
         let error = gtk::Label::builder().xalign(0.0).wrap(true).visible(false).selectable(true).build();
         error.add_css_class("error");
@@ -143,10 +160,35 @@ impl ProgressWindow {
             pause: pause.clone(),
             open: open.clone(),
             open_folder: folder_button.clone(),
+            limit_on,
+            limit,
+            limit_row,
+            syncing: std::cell::Cell::new(false),
             info: RefCell::new(info.clone()),
             on_closed: RefCell::default(),
         });
         this.update(info);
+
+        // The limit applies at once: on ticking the box or changing the number.
+        let send_limit = {
+            let w = Rc::downgrade(&this);
+            move || {
+                let Some(this) = w.upgrade() else { return };
+                if this.syncing.get() {
+                    return;
+                }
+                let limit = match this.limit_on.is_active() {
+                    true => this.limit.value() as u64 * 1024,
+                    false => 0,
+                };
+                this.limit.set_sensitive(this.limit_on.is_active());
+                let id = this.info.borrow().id;
+                send(Request::SetSpeedLimit { id, limit }, Some(this.window.clone()));
+            }
+        };
+        let s = send_limit.clone();
+        this.limit_on.connect_toggled(move |_| s());
+        this.limit.connect_value_changed(move |_| send_limit());
 
         let w = Rc::downgrade(&this);
         pause.connect_clicked(move |_| {
@@ -241,6 +283,15 @@ impl ProgressWindow {
         self.error.set_visible(failed && info.error.is_some());
 
         let done = info.state == State::Completed;
+        // The limit follows the daemon, unless the user is typing a new one.
+        self.limit_row.set_visible(!done);
+        self.syncing.set(true);
+        self.limit_on.set_active(info.speed_limit > 0);
+        self.limit.set_sensitive(info.speed_limit > 0);
+        if info.speed_limit > 0 && !self.limit.has_focus() {
+            self.limit.set_value((info.speed_limit / 1024).max(1) as f64);
+        }
+        self.syncing.set(false);
         self.open.set_visible(done);
         self.open_folder.set_visible(done || info.path.is_some());
         self.pause.set_visible(!done && info.state != State::Pending);

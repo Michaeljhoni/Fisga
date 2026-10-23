@@ -252,6 +252,23 @@ echo "4 MiB took ${elapsed}s"
 awk -v t="$elapsed" 'BEGIN { exit !(t >= 3.0) }'; echo "limit respected"
 "$BIN/ldm" settings --speed-limit 0 >/dev/null
 
+step "speed limit of one download (2 MiB/s), on top of the global one"
+"$BIN/ldm" add "$BASE/files/16252928.bin" >/dev/null; id="$(last_id)"
+"$BIN/ldm" pause "$id"; wait_state "$id" pausado 20
+"$BIN/ldm" limit "$id" 2048 | grep "no máximo"
+"$BIN/ldm" list | grep "máx. 2.00 MiB/s"
+done_before=$("$BIN/ldm" list | awk -v id="$id" '$1 == id { print $3 }')
+echo "already downloaded before the limit: ${done_before}%"
+start=$(date +%s.%N)
+"$BIN/ldm" resume "$id"
+wait_state "$id" concluído 60
+elapsed=$(echo "$(date +%s.%N) $start" | awk '{ printf "%.1f", $1 - $2 }')
+echo "the rest of 15.5 MiB took ${elapsed}s"
+# Over 10 MiB were left: at 2 MiB/s that takes 5 s or more.
+awk -v t="$elapsed" 'BEGIN { exit !(t >= 3.0) }'; echo "own limit respected"
+test "$(stat -c %s "$HOME/Downloads/16252928.bin")" -eq 16252928
+"$BIN/ldm" limit "$id" 0 | grep "sem limite"
+
 step "list"
 "$BIN/ldm" list
 echo; echo "E2E OK"

@@ -127,10 +127,15 @@ pub fn status(info: &DownloadInfo) -> String {
     if info.awaiting_url {
         return "Aguardando novo endereço".into();
     }
-    match (&info.error, info.state) {
-        (Some(error), State::Failed) => format!("Erro: {error}"),
+    let status: String = match (&info.error, info.state) {
+        (Some(error), State::Failed) => return format!("Erro: {error}"),
         (_, State::Running) if info.connections > 1 => format!("Baixando ({} conexões)", info.connections),
         (_, state) => state_label(state).into(),
+    };
+    match info.speed_limit {
+        0 => status,
+        _ if info.state == State::Completed => status,
+        limit => format!("{status} · máx. {}/s", bytes(limit)),
     }
 }
 
@@ -196,6 +201,7 @@ mod tests {
             order: 1,
             page: None,
             awaiting_url: false,
+            speed_limit: 0,
         }
     }
 
@@ -278,6 +284,9 @@ mod tests {
         assert_eq!(status(&failed), "Erro: HTTP 404");
         failed.awaiting_url = true;
         assert_eq!(status(&failed), "Aguardando novo endereço");
+        let mut limited = info(State::Paused, 0, None, 0.0);
+        limited.speed_limit = 512 * 1024;
+        assert_eq!(status(&limited), "Pausado · máx. 512,0 KB/s");
     }
 
     #[test]

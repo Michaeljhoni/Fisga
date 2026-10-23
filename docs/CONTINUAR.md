@@ -248,8 +248,12 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
 
 ### Pacote 3: rede e casos especiais
 - ~~Atualizar o endereço~~ (feito e testado no Arch).
-- ~~Proxy HTTP/SOCKS e login por site~~ (feito; falta o dono testar com um proxy de verdade).
-- **Limite de velocidade por download** (hoje só existe o global).
+- ~~Proxy HTTP/SOCKS e login por site~~ (feito e testado no Arch).
+- ~~Limite de velocidade por download~~ (feito): `DownloadInfo.speed_limit`,
+  `Request::SetSpeedLimit`, um `RateLimiter` por `Job`. O motor recebe uma lista de
+  limitadores (`DownloadOptions::limiters`: o global e o do download) e respeita todos; o
+  yt-dlp recebe o menor (`combined_limit`) e só no próximo início. Na GUI, fica na janela de
+  progresso ("No máximo ... KB/s"); "Limitar velocidade…" no clique direito abre essa janela.
 - **Download em lote**: uma lista de URLs, ou um padrão `arquivo_*.zip` com intervalo.
 - HLS/DASH sem yt-dlp, e FTP.
 

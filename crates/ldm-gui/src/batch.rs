@@ -48,8 +48,8 @@ fn caption(text: &str) -> gtk::Label {
     label
 }
 
-/// `list`: links to start with (an imported file); otherwise the clipboard's.
-pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, list: Option<String>) {
+/// `initial`: links to start with (an imported file); otherwise the clipboard's.
+pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, initial: Option<String>) {
     let window = gtk::Window::builder()
         .title("Adicionar em lote")
         .transient_for(parent)
@@ -187,7 +187,7 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, list: Option<St
     refresh();
 
     // An imported list, or links in the clipboard: the list tab, filled.
-    if let Some(text) = list {
+    if let Some(text) = initial {
         buffer.set_text(&text);
         notebook.set_current_page(Some(1));
     }

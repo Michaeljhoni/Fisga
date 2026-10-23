@@ -206,6 +206,11 @@ impl App {
                     window.speed_limit.set(settings.speed_limit);
                     window.set_queues(settings.all_queues());
                 }
+                let queues = settings.all_queues();
+                let dialogs: Vec<Rc<ConfirmDialog>> = self.dialogs.borrow().values().cloned().collect();
+                for dialog in dialogs {
+                    dialog.set_queues(&queues);
+                }
                 if !settings.tray && matches!(*self.tray.borrow(), TrayState::Failed) {
                     self.tray.replace(TrayState::Off);
                 }

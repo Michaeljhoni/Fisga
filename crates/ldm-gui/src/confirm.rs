@@ -34,7 +34,9 @@ pub struct ConfirmDialog {
     quality_caption: gtk::Label,
     /// The queue, with the ids of its entries; hidden with only the main queue.
     queue: gtk::DropDown,
-    queue_ids: Vec<u64>,
+    queue_caption: gtk::Label,
+    queue_ids: RefCell<Vec<u64>>,
+    initial_queue: u64,
     /// "Já existe": shown when the destination file is already there.
     exists_caption: gtk::Label,
     exists_box: gtk::Box,
@@ -132,20 +134,15 @@ impl ConfirmDialog {
         let exists_caption = caption("Já existe");
         exists_caption.set_visible(false);
         exists_caption.set_valign(gtk::Align::Start);
-        let names: Vec<&str> = queues.iter().map(|q| q.name.as_str()).collect();
-        let queue_choice = gtk::DropDown::from_strings(&names);
-        queue_choice.set_halign(gtk::Align::Start);
-        queue_choice.set_selected(queues.iter().position(|q| q.id == info.queue).unwrap_or(0) as u32);
+        let queue_choice = gtk::DropDown::builder().halign(gtk::Align::Start).build();
         let queue_caption = caption("Fila");
-        queue_choice.set_visible(queues.len() > 1);
-        queue_caption.set_visible(queues.len() > 1);
 
         let grid = gtk::Grid::builder().column_spacing(12).row_spacing(10).build();
         for (row, (label, widget)) in [
             (caption("Endereço"), url.upcast_ref::<gtk::Widget>()),
             (caption("Salvar como"), name.upcast_ref()),
             (caption("Pasta"), dir_row.upcast_ref()),
-            (queue_caption, queue_choice.upcast_ref()),
+            (queue_caption.clone(), queue_choice.upcast_ref()),
             (quality_caption.clone(), quality.upcast_ref()),
             (caption("Tamanho"), size.upcast_ref()),
             (exists_caption.clone(), exists_box.upcast_ref()),
@@ -195,7 +192,9 @@ impl ConfirmDialog {
             quality,
             quality_caption,
             queue: queue_choice,
-            queue_ids: queues.iter().map(|q| q.id).collect(),
+            queue_caption,
+            queue_ids: RefCell::default(),
+            initial_queue: info.queue,
             exists_caption,
             exists_box,
             exists_label,
@@ -214,6 +213,7 @@ impl ConfirmDialog {
             on_closed: RefCell::default(),
             on_answered: RefCell::default(),
         });
+        dialog.set_queues(&queues);
         dialog.show_dir();
         dialog.update(info);
         // Start in the name field (the selectable URL label would grab focus and look selected).
@@ -314,6 +314,22 @@ impl ConfirmDialog {
         for button in &self.answers {
             button.set_sensitive(blocked.is_none());
         }
+    }
+
+    /// The queues changed (or arrived after the window opened, in `--pending`
+    /// mode): keeps the one the user chose when it still exists, else the
+    /// download's own queue.
+    pub fn set_queues(&self, queues: &[Queue]) {
+        let shown = self.queue_ids.borrow().get(self.queue.selected() as usize).copied();
+        // A hidden field offered no choice.
+        let chosen = shown.filter(|_| self.queue.is_visible()).unwrap_or(self.initial_queue);
+        let names: Vec<&str> = queues.iter().map(|q| q.name.as_str()).collect();
+        self.queue.set_model(Some(&gtk::StringList::new(&names)));
+        let at = queues.iter().position(|q| q.id == chosen).or_else(|| queues.iter().position(|q| q.id == self.initial_queue));
+        self.queue.set_selected(at.unwrap_or(0) as u32);
+        self.queue_ids.replace(queues.iter().map(|q| q.id).collect());
+        self.queue.set_visible(queues.len() > 1);
+        self.queue_caption.set_visible(queues.len() > 1);
     }
 
     /// The download stopped being pending elsewhere, or was removed.
@@ -471,7 +487,8 @@ impl ConfirmDialog {
         // The first quality is the best one, which yt-dlp picks by itself.
         let format = self.selected_format().filter(|_| self.quality.selected() > 0).map(|f| f.key);
         let conflict = self.conflict();
-        let queue = self.queue_ids.get(self.queue.selected() as usize).copied().filter(|_| self.queue.is_visible());
+        let queue =
+            self.queue_ids.borrow().get(self.queue.selected() as usize).copied().filter(|_| self.queue.is_visible());
         let request = Request::Confirm { id: self.id, now, file_name, output_dir, format, conflict, queue };
         self.set_busy(true);
         self.error.set_visible(false);

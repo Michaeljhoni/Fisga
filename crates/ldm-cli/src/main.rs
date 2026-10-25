@@ -121,8 +121,8 @@ struct ScheduleArgs {
     #[arg(long, value_parser = parse_stop)]
     stop: Option<Stop>,
     /// Dias: "todos" ou uma lista como "seg,ter,qua,qui,sex"
-    #[arg(long, value_parser = parse_days)]
-    days: Option<Vec<u8>>,
+    #[arg(long, value_parser = |text: &str| parse_days(text).map(Days))]
+    days: Option<Days>,
     /// Ao terminar a fila: nada, suspender ou desligar
     #[arg(long, value_parser = parse_when_done)]
     when_done: Option<WhenDone>,
@@ -191,8 +191,8 @@ enum Command {
         #[arg(short, long, default_value_t = 1)]
         depth: u8,
         /// Só estes tipos: video, musica, imagem, documento, compactado, programa, outro
-        #[arg(short = 't', long = "type", value_parser = parse_categories)]
-        types: Option<Vec<Category>>,
+        #[arg(short = 't', long = "type", value_parser = |text: &str| parse_categories(text).map(Categories))]
+        types: Option<Categories>,
         /// Só nomes assim, com * e ? (ex.: "*.pdf aula_??.mp4")
         #[arg(short, long, default_value = "")]
         pattern: String,
@@ -367,7 +367,7 @@ async fn main() -> anyhow::Result<()> {
             let Response::Grabbed { links, pages } = ldm_ipc::call(&Request::Grab { url, depth }).await? else {
                 bail!("resposta inesperada do daemon");
             };
-            let types = types.unwrap_or_default();
+            let types = types.map(|Categories(types)| types).unwrap_or_default();
             let found: Vec<_> = links.iter().filter(|link| ldm_ipc::grab_filter(link, &types, &pattern)).collect();
             eprintln!("{} arquivo(s) em {pages} página(s); {} com os filtros", links.len(), found.len());
             if !add {
@@ -809,7 +809,7 @@ async fn schedule(args: ScheduleArgs) -> anyhow::Result<()> {
     }
     schedule.start = args.start.unwrap_or(schedule.start);
     schedule.stop = args.stop.map_or(schedule.stop, |Stop(stop)| stop);
-    if let Some(days) = args.days {
+    if let Some(Days(days)) = args.days {
         schedule.days = days;
     }
     schedule.when_done = args.when_done.unwrap_or(schedule.when_done);
@@ -867,6 +867,15 @@ async fn queues(command: QueueCommand) -> anyhow::Result<()> {
 fn parse_time(value: &str) -> Result<TimeOfDay, String> {
     TimeOfDay::parse(value).ok_or_else(|| "use HH:MM, como 02:00 ou 23:30".into())
 }
+
+/// `--days seg,qua,sex`: one argument holding a list (clap reads an
+/// `Option<Vec<T>>` field as a repeated argument instead).
+#[derive(Debug, Clone)]
+struct Days(Vec<u8>);
+
+/// `--type video,documento`, for the same reason.
+#[derive(Debug, Clone)]
+struct Categories(Vec<Category>);
 
 /// `--stop`: a time, or none (the queue runs until it is empty).
 #[derive(Debug, Clone, PartialEq)]

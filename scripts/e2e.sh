@@ -157,7 +157,8 @@ if "$BIN/ldm" schedule --cancel 2>/dev/null; then echo "cancelled a plan that do
 wait_state "$id" concluído 60
 for _ in $(seq 1 40); do [ -s "$SANDBOX/power" ] && break; sleep 0.5; done
 test "$(cat "$SANDBOX/power")" = suspend; echo "queue done: suspend requested"
-"$BIN/ldm" schedule --off | grep "desligado"
+"$BIN/ldm" schedule --days seg,qua,sex | grep "seg, qua, sex"
+"$BIN/ldm" schedule --days todos --off | grep "desligado"
 
 step "queues: one at a time in a second queue, its order, and removing it"
 "$BIN/ldm" settings --speed-limit 4096 >/dev/null   # 4 MiB/s: slow enough to watch the queue

@@ -54,7 +54,8 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>) {
         .default_height(620)
         .build();
 
-    let url = gtk::Entry::builder().placeholder_text("https://site.com/pasta/").hexpand(true).build();
+    // Enter = "Procurar" (the default widget).
+    let url = gtk::Entry::builder().placeholder_text("https://site.com/pasta/").hexpand(true).activates_default(true).build();
     let depth = gtk::SpinButton::with_range(0.0, ldm_ipc::MAX_GRAB_DEPTH as f64, 1.0);
     depth.set_value(1.0);
     depth.set_tooltip_text(Some("Quantos níveis de páginas seguir: 0 = só esta página"));

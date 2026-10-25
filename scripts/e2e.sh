@@ -291,6 +291,16 @@ test "$("$BIN/ldm" batch --file "$SANDBOX/exportado.txt" --dry-run | wc -l)" -eq
 echo "the exported list reads back as a batch"
 "$BIN/ldm" rm "$last"; "$BIN/ldm" rm $((last - 1))
 
+step "grabber: the files of a page and of the pages below it"
+test "$("$BIN/ldm" grab "$BASE/site/" --depth 0 | wc -l)" -eq 2; echo "depth 0: the page's 2 files"
+"$BIN/ldm" grab "$BASE/site/" --depth 1 --pattern '*.bin' > "$SANDBOX/grab.txt"
+test "$(wc -l < "$SANDBOX/grab.txt")" -eq 2; grep -q 1507328.bin "$SANDBOX/grab.txt"; echo "depth 1: the subfolder's file too, the repeated one once"
+"$BIN/ldm" grab "$BASE/site/" --type documento | grep -q "apostila.pdf"; echo "type filter"
+"$BIN/ldm" grab "$BASE/site/" --depth 1 --pattern '*.bin' --add -o "$SANDBOX/site" | grep "2 downloads adicionados"
+last="$(last_id)"
+wait_state "$last" concluído 60; wait_state $((last - 1)) concluído 60
+test "$(stat -c %s "$SANDBOX/site/1507328.bin")" -eq 1507328; echo "grabbed files downloaded"
+
 step "on complete: antivirus, the user's command, the sound"
 "$BIN/ldm" settings --antivirus true --on-complete "printf '%s\n' \"\$LDM_FILE\" >> '$SANDBOX/feito'" | grep "antivírus:  sim"
 rm -f "$SANDBOX/som"

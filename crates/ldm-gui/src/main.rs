@@ -16,6 +16,7 @@ mod autostart;
 mod batch;
 mod confirm;
 mod format;
+mod grabber;
 mod ipc;
 mod item;
 mod power;

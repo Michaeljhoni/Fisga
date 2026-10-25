@@ -247,6 +247,7 @@ fn main_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     let section = gio::Menu::new();
     section.append(Some("Adicionar em lote…"), Some("win.batch"));
+    section.append(Some("Baixar de um site…"), Some("win.grab"));
     section.append(Some("Importar lista…"), Some("win.import"));
     section.append(Some("Exportar lista…"), Some("win.export"));
     menu.append_section(None, &section);
@@ -632,6 +633,15 @@ impl MainWindow {
             Box::new(move || {
                 if let Some(app) = a.upgrade() {
                     crate::batch::show(&parent, app.settings().all_queues(), None);
+                }
+            }),
+        );
+        let (parent, a) = (window.clone(), app.clone());
+        simple(
+            "grab",
+            Box::new(move || {
+                if let Some(app) = a.upgrade() {
+                    crate::grabber::show(&parent, app.settings().all_queues());
                 }
             }),
         );

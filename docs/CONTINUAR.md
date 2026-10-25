@@ -271,7 +271,12 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   = `info.error` num download concluído, e para aí), o comando do usuário em `sh -c` com
   `$LDM_FILE`... no ambiente (nunca no texto), e o som. Nos testes, `LDM_CLAMSCAN_CMD` e
   `LDM_SOUND_CMD` trocam o ClamAV e o tocador.
-- **Grabber**: baixar arquivos de um site com filtros.
+- ~~Grabber~~ (feito, `manager/grab.rs`): `Request::Grab { url, depth }` lê a página e, até
+  `depth` (máximo `MAX_GRAB_DEPTH` = 3), as páginas do mesmo host abaixo da pasta inicial;
+  `extract_links` pega `href`/`src` sem parser de HTML; limites de 100 páginas, 5 MB e 15 s por
+  página. Os filtros (`grab_filter`, `glob_matches`) ficam no `ldm-ipc`, usados pela GUI
+  (`grabber.rs`) e pela CLI (`ldm grab`); adicionar é um `AddBatch`. Ainda sem filtro por
+  tamanho (precisaria de uma sondagem por arquivo).
 - ~~Pacote para o Arch~~ (feito): `packaging/arch/PKGBUILD` (`ldm-git`), fonte em `$LDM_GIT`
   (o checkout local enquanto o repositório é privado). `ldm install-hosts --system $pkgdir
   --host-path /usr/bin/ldm-native-host` grava os manifestos do sistema. O job `arch-package`

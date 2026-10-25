@@ -10,6 +10,19 @@
 /// `teste:senha` in base64.
 const CREDENTIALS: &str = "Basic dGVzdGU6c2VuaGE=";
 
+/// A tiny site for the grabber: `/site/` links to its parent, a file, a PDF
+/// and a subfolder; `/site/docs/` to another file and the first one again.
+fn site_page(path: &str) -> Option<&'static str> {
+    match path {
+        "/site/" => Some(
+            r#"<html><body><a href="../">Pai</a> <a href="../files/1441792.bin">um</a>
+               <a href="docs/">docs</a> <a href="apostila.pdf">apostila</a></body></html>"#,
+        ),
+        "/site/docs/" => Some(r#"<a href="../../files/1507328.bin">dois</a> <a href="/files/1441792.bin">de novo</a>"#),
+        _ => None,
+    }
+}
+
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -60,6 +73,12 @@ async fn handle(mut socket: TcpStream, delay: Duration) -> std::io::Result<()> {
         if private && header("authorization").as_deref() != Some(CREDENTIALS) {
             let refusal = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"ldm\"\r\nContent-Length: 0\r\n\r\n";
             socket.write_all(refusal.as_bytes()).await?;
+            continue;
+        }
+        if let Some(page) = site_page(path) {
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\r\n", page.len());
+            socket.write_all(head.as_bytes()).await?;
+            socket.write_all(page.as_bytes()).await?;
             continue;
         }
         let size = path

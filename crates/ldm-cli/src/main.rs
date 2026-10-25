@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use ldm_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
 use ldm_ipc::{
-    AddRequest, Conflict, Connection, Direction, DownloadInfo, ProxyMode, ProxySettings, Queue, Request, Response,
+    AddRequest, Category, Conflict, Connection, Direction, DownloadInfo, ProxyMode, ProxySettings, Queue, Request, Response,
     Settings, SiteLogin, State, TimeOfDay, WhenDone, MAIN_QUEUE, WEEKDAYS,
 };
 use tokio::sync::mpsc;
@@ -184,6 +184,31 @@ enum Command {
         #[arg(short = 'Q', long)]
         queue_id: Option<u64>,
     },
+    /// Procura os arquivos de um site (o "Grabber" do IDM): lista, ou adiciona com --add
+    Grab {
+        url: String,
+        /// Quantos níveis de páginas seguir (0 = só esta página; máximo 3)
+        #[arg(short, long, default_value_t = 1)]
+        depth: u8,
+        /// Só estes tipos: video, musica, imagem, documento, compactado, programa, outro
+        #[arg(short = 't', long = "type", value_parser = parse_categories)]
+        types: Option<Vec<Category>>,
+        /// Só nomes assim, com * e ? (ex.: "*.pdf aula_??.mp4")
+        #[arg(short, long, default_value = "")]
+        pattern: String,
+        /// Adiciona os encontrados à fila em vez de só listar
+        #[arg(long)]
+        add: bool,
+        /// Pasta de destino (com --add)
+        #[arg(short = 'o', long, requires = "add")]
+        dir: Option<PathBuf>,
+        /// Fila (com --add)
+        #[arg(short = 'Q', long, requires = "add")]
+        queue_id: Option<u64>,
+        /// Adiciona pausados (com --add)
+        #[arg(long, requires = "add")]
+        paused: bool,
+    },
     /// Vários downloads de uma vez (o "download em lote" do IDM), direto na fila
     Batch {
         /// Endereço com um * no lugar do número ou da letra, ex.: https://site/aula_*.mp4
@@ -335,6 +360,32 @@ async fn main() -> anyhow::Result<()> {
                 queue: queue_id,
             };
             simple(request).await
+        }
+        Command::Grab { url, depth, types, pattern, add, dir, queue_id, paused } => {
+            ldm_ipc::ensure_daemon().await?;
+            eprintln!("procurando em {url} (profundidade {depth})…");
+            let Response::Grabbed { links, pages } = ldm_ipc::call(&Request::Grab { url, depth }).await? else {
+                bail!("resposta inesperada do daemon");
+            };
+            let types = types.unwrap_or_default();
+            let found: Vec<_> = links.iter().filter(|link| ldm_ipc::grab_filter(link, &types, &pattern)).collect();
+            eprintln!("{} arquivo(s) em {pages} página(s); {} com os filtros", links.len(), found.len());
+            if !add {
+                found.iter().for_each(|link| println!("{}", link.url));
+                return Ok(());
+            }
+            if found.is_empty() {
+                bail!("nada para adicionar");
+            }
+            let urls = found.iter().map(|link| link.url.clone()).collect();
+            let output_dir = dir.map(|d| std::path::absolute(&d).unwrap_or(d));
+            let Response::AddedBatch { ids } =
+                ldm_ipc::call(&Request::AddBatch { urls, output_dir, queue: queue_id, start: !paused }).await?
+            else {
+                bail!("resposta inesperada do daemon");
+            };
+            println!("{} downloads adicionados", ids.len());
+            Ok(())
         }
         Command::Batch { template, from, to, width, file, dir, queue_id, paused, dry_run } => {
             let urls = match (template, file) {
@@ -844,6 +895,27 @@ fn parse_days(value: &str) -> Result<Vec<u8>, String> {
     Ok(days)
 }
 
+/// "video,documento" → [Video, Document] (with or without accents, singular or plural).
+fn parse_categories(value: &str) -> Result<Vec<Category>, String> {
+    value
+        .split(',')
+        .map(|word| {
+            let word = word.trim().to_lowercase();
+            let word = word.trim_end_matches('s');
+            match word {
+                "video" | "vídeo" => Ok(Category::Video),
+                "musica" | "música" | "audio" | "áudio" => Ok(Category::Music),
+                "imagem" | "image" | "imagen" | "foto" => Ok(Category::Image),
+                "documento" | "doc" => Ok(Category::Document),
+                "compactado" | "arquivo" => Ok(Category::Compressed),
+                "programa" => Ok(Category::Program),
+                "outro" => Ok(Category::Other),
+                other => Err(format!("tipo desconhecido: {other} (use video, musica, imagem, documento, compactado, programa ou outro)")),
+            }
+        })
+        .collect()
+}
+
 fn parse_when_done(value: &str) -> Result<WhenDone, String> {
     match value {
         "nada" | "nothing" => Ok(WhenDone::Nothing),
@@ -941,5 +1013,8 @@ mod tests {
         assert_eq!(parse_stop("06:00").unwrap(), Stop(TimeOfDay::new(6, 0)));
         assert!(parse_time("6h").is_err());
         assert_eq!(parse_when_done("desligar").unwrap(), WhenDone::Poweroff);
+        assert_eq!(parse_categories("Vídeos, documento").unwrap(), [Category::Video, Category::Document]);
+        assert_eq!(parse_categories("musicas,imagens").unwrap(), [Category::Music, Category::Image]);
+        assert!(parse_categories("planilha").is_err());
     }
 }

@@ -140,6 +140,17 @@ xdotool windowfocus --sync "$batch" type --delay 20 "$BASE/files/aula_*.bin"
 sleep 1
 shot 5d-lote
 xdotool windowfocus --sync "$batch" key Escape
+sleep 0.5
+
+echo "== grabber window"
+xdotool windowfocus --sync "$main" key ctrl+shift+g
+grabber="$(find_window "^Baixar de um site")"
+xdotool windowfocus --sync "$grabber" key ctrl+a
+xdotool type --delay 20 "$BASE/site/"
+xdotool key Return
+sleep 2
+shot 5e-grabber
+xdotool windowfocus --sync "$grabber" key Escape
 
 echo "== background mode (session autostart): no window, but it answers the browser"
 pkill -f "$BIN/ldm-gui" || true

@@ -868,6 +868,52 @@ pub fn parse_url_list(text: &str) -> Vec<String> {
     urls
 }
 
+/// A file the grabber found on a site (IDM's "Site Grabber").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrabbedLink {
+    pub url: String,
+    /// The file name, from the address.
+    pub name: String,
+    pub category: Category,
+}
+
+/// The deepest the grabber follows links (0 = only the page given).
+pub const MAX_GRAB_DEPTH: u8 = 3;
+
+/// `*` (any text) and `?` (one character), ignoring case: `*.pdf`, `aula_??.mp4`.
+pub fn glob_matches(pattern: &str, name: &str) -> bool {
+    let pattern: Vec<char> = pattern.to_lowercase().chars().collect();
+    let name: Vec<char> = name.to_lowercase().chars().collect();
+    // Classic wildcard matching with one backtrack point.
+    let (mut p, mut n, mut star, mut mark) = (0, 0, None, 0);
+    while n < name.len() {
+        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == name[n]) {
+            p += 1;
+            n += 1;
+        } else if p < pattern.len() && pattern[p] == '*' {
+            star = Some(p);
+            mark = n;
+            p += 1;
+        } else if let Some(at) = star {
+            p = at + 1;
+            mark += 1;
+            n = mark;
+        } else {
+            return false;
+        }
+    }
+    pattern[p..].iter().all(|c| *c == '*')
+}
+
+/// The grabber's filters: the categories wanted (none = all) and name
+/// patterns (any of them; none = all), separated by spaces, commas or `;`.
+pub fn grab_filter(link: &GrabbedLink, categories: &[Category], patterns: &str) -> bool {
+    let patterns: Vec<&str> = patterns.split([' ', ',', ';']).filter(|p| !p.is_empty()).collect();
+    (categories.is_empty() || categories.contains(&link.category))
+        && (patterns.is_empty() || patterns.iter().any(|pattern| glob_matches(pattern, &link.name)))
+}
+
 /// The limit a download gets from the global one and its own (0 = none):
 /// the tighter one.
 pub fn combined_limit(global: u64, own: u64) -> u64 {
@@ -931,6 +977,10 @@ pub enum Request {
     /// A download's own speed limit in bytes per second (0 = none), on top of
     /// the global one. Applies at once to direct downloads.
     SetSpeedLimit { id: u64, limit: u64 },
+    /// IDM's site grabber: the files linked from `url` and, up to `depth`
+    /// levels, from its pages below it on the same site. Answered with
+    /// `Response::Grabbed`; adding them is an `AddBatch`.
+    Grab { url: String, depth: u8 },
     /// IDM's batch download: many addresses at once, straight to a queue
     /// (no "Novo download" window for each). Answered with `Response::AddedBatch`.
     AddBatch {
@@ -961,6 +1011,8 @@ pub enum Response {
     Pong { version: String },
     Added { id: u64 },
     AddedBatch { ids: Vec<u64> },
+    /// The grabber's findings, and how many pages it read.
+    Grabbed { links: Vec<GrabbedLink>, pages: usize },
     Downloads { items: Vec<DownloadInfo> },
     Update { item: DownloadInfo },
     Removed { id: u64 },
@@ -1316,6 +1368,25 @@ mod tests {
         ] {
             assert!(expand_batch(template, from, to, 0).is_err(), "{template} {from}..{to}");
         }
+    }
+
+    #[test]
+    fn grabber_filters() {
+        assert!(glob_matches("*.pdf", "Apostila.PDF"));
+        assert!(glob_matches("aula_??.mp4", "aula_07.mp4"));
+        assert!(!glob_matches("aula_??.mp4", "aula_7.mp4"));
+        assert!(glob_matches("*parte*", "livro-parte-2.zip"));
+        assert!(glob_matches("*", "qualquer"));
+        assert!(!glob_matches("*.zip", "a.zip.part"));
+        let link = |name: &str, category| GrabbedLink { url: format!("https://e.com/{name}"), name: name.into(), category };
+        let pdf = link("apostila.pdf", Category::Document);
+        let iso = link("debian.iso", Category::Program);
+        assert!(grab_filter(&pdf, &[], ""));
+        assert!(grab_filter(&pdf, &[Category::Document], ""));
+        assert!(!grab_filter(&iso, &[Category::Document], ""));
+        assert!(grab_filter(&iso, &[], "*.pdf, *.iso"));
+        assert!(!grab_filter(&iso, &[], "*.pdf"));
+        assert!(!grab_filter(&pdf, &[Category::Program], "*.pdf"), "both filters apply");
     }
 
     #[test]

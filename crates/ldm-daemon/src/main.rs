@@ -145,6 +145,10 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: UnixStream, 
             Request::RefreshUrl { id, url } => result(manager.refresh_url(id, url).await),
             Request::AwaitUrl { id, waiting } => result(manager.await_url(id, waiting)),
             Request::SetSpeedLimit { id, limit } => result(manager.set_speed_limit(id, limit)),
+            Request::Grab { url, depth } => match manager.grab(&url, depth).await {
+                Ok((links, pages)) => Response::Grabbed { links, pages },
+                Err(e) => Response::Error { message: format!("{e:#}") },
+            },
             Request::AddBatch { urls, output_dir, queue, start } => match manager.add_batch(urls, output_dir, queue, start) {
                 Ok(ids) => Response::AddedBatch { ids },
                 Err(e) => Response::Error { message: format!("{e:#}") },

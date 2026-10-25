@@ -137,6 +137,11 @@ instalação antiga: `ldm install-hosts --uninstall` e `rm ~/.local/bin/{ldm,ldm
   `f`), ou uma lista de links colada (se a área de transferência tiver vários links, a lista já
   vem preenchida). Mostra quantos endereços e o primeiro e o último antes de adicionar. Vão
   direto para a fila escolhida (ou pausados), sem a janela *Novo download* para cada um.
+- **Baixar de um site** (o *Site Grabber* do IDM; ☰ → *Baixar de um site…* ou Ctrl+Shift+G): dê o
+  endereço de uma página e quantos níveis seguir (0 = só ela). O LDM lê a página e as páginas
+  abaixo dela no mesmo site (não sobe para a pasta de cima) e lista os arquivos que elas apontam.
+  Filtre por tipo (Vídeos, Documentos...) e por nome (`*.pdf aula_??.mp4`), marque o que quiser e
+  mande para uma fila. Usa o proxy e os logins por site. Lê até 100 páginas por busca.
 - **Atualizar endereço** (o *Refresh download address* do IDM): no clique direito de um download
   cujo link expirou (comum em sites de arquivos e links assinados), *Atualizar endereço…*. Cole um
   novo link do mesmo arquivo, ou clique em *Capturar do navegador*: a página abre, você clica no
@@ -229,6 +234,8 @@ ldm batch 'https://site/aula_*.mp4' --from 01 --to 20   # em lote: aula_01.mp4 .
 ldm batch --file links.txt -Q 1 --paused         # uma lista de links ("-" = entrada padrão)
 ldm batch 'https://site/parte-*.rar' --from a --to f --dry-run   # só mostra os endereços
 ldm export --unfinished > pendentes.txt          # os endereços da lista (importe com ldm batch --file)
+ldm grab https://site/pub/ --depth 1 --type documento         # lista os PDFs, DOCs... do site
+ldm grab https://site/aulas/ --pattern 'aula_*.mp4' --add -Q 1  # e manda para a fila 1
 ldm settings --antivirus true --sound false      # ao concluir: ClamAV sim, som não
 ldm settings --on-complete 'mv "$LDM_FILE" ~/Concluídos/'   # comando ao concluir ("" = nenhum)
 ldm settings --watch-clipboard false             # não abrir a janela para links copiados

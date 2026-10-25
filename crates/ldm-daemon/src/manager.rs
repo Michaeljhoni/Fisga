@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{notify, ytdlp};
 
 mod complete;
+mod grab;
 mod network;
 mod refresh;
 mod scheduler;

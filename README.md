@@ -29,7 +29,7 @@ navegador ──Native Messaging──▶ ldm-native-host ──Unix socket─�
 
 ## Instalar (qualquer distro)
 
-Requisitos: Rust e GTK4 ≥ 4.10 com os cabeçalhos (Arch: `sudo pacman -S rust gtk4`; Debian 13/Ubuntu
+Requisitos: Rust e GTK4 ≥ 4.12 com os cabeçalhos (Arch: `sudo pacman -S rust gtk4`; Debian 13/Ubuntu
 24.04: `libgtk-4-dev` + [rustup](https://rustup.rs); Fedora: `gtk4-devel`).
 Opcionais: `yt-dlp` e `ffmpeg` (vídeos de sites), `libnotify` (notificações), `wl-clipboard`
 (capturar links copiados no Wayland).

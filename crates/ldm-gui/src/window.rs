@@ -101,6 +101,9 @@ pub struct MainWindow {
     /// The sorter's direction, from the settings.
     newest_first: Rc<Cell<bool>>,
     as_list: gtk::ToggleButton,
+    /// The two views of the downloads.
+    grid: gtk::GridView,
+    list: gtk::ColumnView,
     order: gtk::Button,
     order_icon: gtk::Image,
     order_label: gtk::Label,
@@ -638,6 +641,8 @@ impl MainWindow {
             sorter,
             newest_first,
             as_list,
+            grid: cards.grid.clone(),
+            list: view.clone(),
             order,
             order_icon,
             order_label,
@@ -665,6 +670,19 @@ impl MainWindow {
         this
     }
 
+    /// Shows the first download in the cards and/or in the list.
+    fn scroll_to_top(&self, grid: bool, list: bool) {
+        if self.selection.n_items() == 0 {
+            return;
+        }
+        if grid {
+            self.grid.scroll_to(0, gtk::ListScrollFlags::NONE, None);
+        }
+        if list {
+            self.list.scroll_to(0, None::<&gtk::ColumnViewColumn>, gtk::ListScrollFlags::NONE, None);
+        }
+    }
+
     /// Cards or list, and which end of the line is on top, as the settings say.
     pub fn set_view(&self, list_view: bool, newest_first: bool) {
         if self.as_list.is_active() != list_view {
@@ -673,6 +691,7 @@ impl MainWindow {
         if self.newest_first.get() != newest_first {
             self.newest_first.set(newest_first);
             self.sorter.changed(gtk::SorterChange::Inverted);
+            self.scroll_to_top(true, true);
         }
         let (icon, label, tooltip) = match newest_first {
             true => ("pan-up-symbolic", "Recentes", "Mais recentes no topo (clique para inverter)"),
@@ -960,8 +979,15 @@ impl MainWindow {
     /// filter and the counts must be recomputed.
     pub fn refresh(&self, structural: bool) {
         if structural {
+            // A view follows the download it shows on top when others arrive or
+            // move: the first to arrive ends up last (newest on top), and the
+            // view with it. One showing the top stays there; read before the
+            // views lay out the change.
+            let at_top = |view: &gtk::Scrollable| view.vadjustment().is_none_or(|a| a.value() < 1.0);
+            let (grid_top, list_top) = (at_top(self.grid.upcast_ref()), at_top(self.list.upcast_ref()));
             self.filter.changed(gtk::FilterChange::Different);
             self.sorter.changed(gtk::SorterChange::Different);
+            self.scroll_to_top(grid_top, list_top);
             let items: Vec<DownloadItem> = self.store.iter::<DownloadItem>().flatten().collect();
             for (view, label) in self.counts.borrow().iter().chain(&self.chip_counts) {
                 let n = items.iter().filter(|item| item.with_info(|info| view.matches(info))).count();

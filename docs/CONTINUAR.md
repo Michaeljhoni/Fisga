@@ -305,6 +305,10 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   configurações (`Settings::list_view`, `newest_first`), com um botão de ordem ao lado do de lista.
   A ordem é a da fila invertida, então *Mover para cima/baixo* troca a direção quando os mais
   recentes estão no topo (para cima na tela continua sendo para cima).
+- Cuidado: `GridView`/`ColumnView` seguem o item que mostram no topo quando a lista muda. Com os
+  mais recentes no topo, o primeiro a chegar vai para o fim, e a vista ia junto (abria rolada até o
+  fim, e inverter a ordem também levava ao fim). `refresh` lê se a vista estava no topo antes da
+  mudança e volta para o topo com `scroll_to` (GTK 4.12, por isso a feature `v4_12`).
 
 ### Motor: estabilidade e banda (de `docs/ANALISE-IDM-DOWNLOAD.md`)
 - ~~Feito~~ (`ldm-core/src/engine.rs`, `lib.rs`, `control.rs`):

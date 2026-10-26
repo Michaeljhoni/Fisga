@@ -121,16 +121,14 @@ sleep 0.5
 xdotool mousemove --window "$main" 520 96 click 3
 sleep 1
 shot 4b-menu-do-download
-# Its third item: "Conferir soma (SHA-256)…".
-xdotool key Down Down Down Return
-if verify="$(find_window "^Conferir soma$")"; then
-  sleep 1
-  shot 4d-conferir-soma
-  xdotool windowfocus --sync "$verify" key Escape
-else
-  echo "warning: the Conferir soma window did not open from the menu"
-  xdotool key Escape
-fi
+# Its third item, "Conferir soma (SHA-256)…" (the menu opens at the click), then
+# "Conferir" with no checksum: the window shows the file's SHA-256.
+xdotool mousemove 620 177 click 1
+verify="$(find_window "^Conferir soma$")"
+xdotool windowfocus --sync "$verify" key Return
+sleep 3
+shot 4d-conferir-soma
+xdotool windowfocus --sync "$verify" key Escape
 sleep 0.5
 xdotool windowfocus --sync "$main" key ctrl+comma
 prefs="$(find_window "^Preferências$")"

@@ -617,6 +617,8 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
             last_queue_id: settings.last_queue_id,
             proxy,
             hidden_columns: settings.hidden_columns.clone(),
+            list_view: settings.list_view,
+            newest_first: settings.newest_first,
             on_complete,
         };
         for queue in queues {

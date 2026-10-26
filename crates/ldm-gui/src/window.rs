@@ -98,6 +98,10 @@ pub struct MainWindow {
     selection: gtk::SingleSelection,
     filter: gtk::CustomFilter,
     sorter: gtk::CustomSorter,
+    /// The sorter's direction, from the settings.
+    newest_first: Rc<Cell<bool>>,
+    as_list: gtk::ToggleButton,
+    order: gtk::Button,
     store: gio::ListStore,
     sidebar: gtk::ListBox,
     /// The sidebar entries, in order (queues change with the settings).
@@ -329,6 +333,9 @@ impl MainWindow {
         header.pack_end(&menu);
         let as_list = gtk::ToggleButton::builder().icon_name("view-list-symbolic").tooltip_text("Ver como lista").build();
         header.pack_end(&as_list);
+        // Newest or oldest on top; the icon and tooltip follow `set_view`.
+        let order = gtk::Button::new();
+        header.pack_end(&order);
         header.pack_end(&header_button("folder-symbolic", "Abrir pasta", "win.open-folder"));
         header.pack_end(
             &gtk::Button::builder().label("Abrir").tooltip_text("Abrir o arquivo").action_name("win.open-file").build(),
@@ -399,12 +406,17 @@ impl MainWindow {
         });
         search.add_controller(focus);
         let filtered = gtk::FilterListModel::new(Some(app.store.clone()), Some(filter.clone()));
-        // In queue order (the order of arrival, unless moved up or down).
-        let sorter = gtk::CustomSorter::new(|a, b| {
+        // In queue order (the order of arrival, unless moved up or down),
+        // the newest on top unless the settings say otherwise.
+        let newest_first = Rc::new(Cell::new(app.settings().newest_first));
+        let n = newest_first.clone();
+        let sorter = gtk::CustomSorter::new(move |a, b| {
             let key = |object: &glib::Object| {
                 object.downcast_ref::<DownloadItem>().map(|item| item.with_info(|info| (info.order, info.id)))
             };
-            key(a).cmp(&key(b)).into()
+            let order = key(a).cmp(&key(b));
+            let order = if n.get() { order.reverse() } else { order };
+            order.into()
         });
         let sorted = gtk::SortListModel::new(Some(filtered), Some(sorter.clone()));
         let selection = gtk::SingleSelection::new(Some(sorted));
@@ -457,8 +469,24 @@ impl MainWindow {
             .build();
         stack.add_named(&cards.root, Some("cards"));
         stack.add_named(&list_scroll, Some("list"));
-        let st = stack.clone();
-        as_list.connect_toggled(move |button| st.set_visible_child_name(if button.is_active() { "list" } else { "cards" }));
+        // Both choices are kept in the settings; the window follows when the daemon sends them back.
+        let (st, a) = (stack.clone(), Rc::downgrade(app));
+        as_list.connect_toggled(move |button| {
+            st.set_visible_child_name(if button.is_active() { "list" } else { "cards" });
+            let Some(app) = a.upgrade().filter(|app| app.has_settings()) else { return };
+            let mut settings = app.settings();
+            if settings.list_view != button.is_active() {
+                settings.list_view = button.is_active();
+                send(Request::SetSettings { settings }, None);
+            }
+        });
+        let a = Rc::downgrade(app);
+        order.connect_clicked(move |_| {
+            let Some(app) = a.upgrade().filter(|app| app.has_settings()) else { return };
+            let mut settings = app.settings();
+            settings.newest_first = !settings.newest_first;
+            send(Request::SetSettings { settings }, None);
+        });
 
         // The add button floats over the downloads, bottom right.
         let fab_box = gtk::Box::builder().spacing(8).build();
@@ -600,6 +628,9 @@ impl MainWindow {
             selection,
             filter: filter.clone(),
             sorter,
+            newest_first,
+            as_list,
+            order,
             store: app.store.clone(),
             sidebar,
             views,
@@ -619,7 +650,26 @@ impl MainWindow {
         this.connect(app, &view);
         this.set_queues(queues);
         this.set_hidden_columns(&app.settings().hidden_columns);
+        let settings = app.settings();
+        this.set_view(settings.list_view, settings.newest_first);
         this
+    }
+
+    /// Cards or list, and which end of the line is on top, as the settings say.
+    pub fn set_view(&self, list_view: bool, newest_first: bool) {
+        if self.as_list.is_active() != list_view {
+            self.as_list.set_active(list_view);
+        }
+        if self.newest_first.get() != newest_first {
+            self.newest_first.set(newest_first);
+            self.sorter.changed(gtk::SorterChange::Inverted);
+        }
+        let (icon, tooltip) = match newest_first {
+            true => ("view-sort-descending-symbolic", "Mais recentes no topo (clique para inverter)"),
+            false => ("view-sort-ascending-symbolic", "Mais antigos no topo (clique para inverter)"),
+        };
+        self.order.set_icon_name(icon);
+        self.order.set_tooltip_text(Some(tooltip));
     }
 
     /// Shows the columns the settings do not hide, and ticks them in ☰ → Colunas.
@@ -828,9 +878,11 @@ impl MainWindow {
                 send(Request::Pause { id: info.id }, None);
             }
         });
-        for (action, direction) in [(&self.actions.move_up, Direction::Up), (&self.actions.move_down, Direction::Down)] {
-            let s = selection.clone();
+        for (action, up) in [(&self.actions.move_up, true), (&self.actions.move_down, false)] {
+            let (s, n) = (selection.clone(), self.newest_first.clone());
             action.connect_activate(move |_, _| {
+                // Up on screen: earlier in the queue, unless the newest (the end of the line) are on top.
+                let direction = if up != n.get() { Direction::Up } else { Direction::Down };
                 if let Some(info) = Self::selected(&s) {
                     send(Request::Reorder { id: info.id, direction }, None);
                 }

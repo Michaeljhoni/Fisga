@@ -133,6 +133,12 @@ impl App {
         self.settings.borrow().clone()
     }
 
+    /// The daemon sent its settings: a change made to them can be sent back
+    /// (before, it would overwrite the user's with the defaults).
+    pub fn has_settings(&self) -> bool {
+        self.settings_loaded.get()
+    }
+
     /// `ldm-gui --background` (session autostart): no window, only the tray.
     pub fn run_in_background(self: &Rc<Self>) {
         self.background.set(true);
@@ -219,8 +225,13 @@ impl App {
                 if !settings.tray && matches!(*self.tray.borrow(), TrayState::Failed) {
                     self.tray.replace(TrayState::Off);
                 }
+                let (list_view, newest_first) = (settings.list_view, settings.newest_first);
                 *self.settings.borrow_mut() = settings;
                 self.settings_loaded.set(true);
+                // After storing them: the cards/list toggle compares with the stored settings.
+                if let Some(window) = self.window.borrow().as_ref() {
+                    window.set_view(list_view, newest_first);
+                }
                 self.sync_tray();
             }
             Event::Power(plan) => self.sync_power(plan),

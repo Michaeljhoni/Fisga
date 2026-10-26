@@ -301,7 +301,10 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   arquivo vem do daemon (`DownloadInfo.map`, `ldm_ipc::file_map` sobre os segmentos do motor); sem
   ele (yt-dlp), `format::file_map` enche da esquerda pelo progresso. Cuidado: o tema padrão dá
   margem a todo `box` dentro de `gridview > child` (vista de ícones); o CSS zera isso nos cartões.
-- Ainda não: lembrar a escolha cartões/lista nas configurações.
+- ~~Feito~~: cartões/lista e a ordem (mais recentes no topo, o padrão, ou mais antigos) ficam nas
+  configurações (`Settings::list_view`, `newest_first`), com um botão de ordem ao lado do de lista.
+  A ordem é a da fila invertida, então *Mover para cima/baixo* troca a direção quando os mais
+  recentes estão no topo (para cima na tela continua sendo para cima).
 
 ### Motor: estabilidade e banda (de `docs/ANALISE-IDM-DOWNLOAD.md`)
 - ~~Feito~~ (`ldm-core/src/engine.rs`, `lib.rs`, `control.rs`):

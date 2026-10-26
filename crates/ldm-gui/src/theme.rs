@@ -2,7 +2,7 @@
 //! numbers, and small CSS animations (the live dot, the cards fading in,
 //! the glow of the add button). Applied to every window of the app.
 
-use gtk::{gdk, prelude::*};
+use gtk::gdk;
 
 /// Cairo colors (RGB, 0–1) of the drawn parts: the speed graph and the cards.
 pub const ACCENT: (f64, f64, f64) = (0.961, 0.620, 0.043); // #f59e0b

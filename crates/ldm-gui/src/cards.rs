@@ -18,7 +18,6 @@ use crate::theme::{self, set_color};
 
 pub struct Cards {
     pub root: gtk::ScrolledWindow,
-    pub grid: gtk::GridView,
     /// The row menu, opened on a card.
     pub popover: gtk::PopoverMenu,
 }
@@ -338,5 +337,5 @@ pub fn new(selection: &gtk::SingleSelection, menu: &gio::Menu, on_activate: impl
         .vexpand(true)
         .hexpand(true)
         .build();
-    Cards { root, grid, popover }
+    Cards { root, popover }
 }

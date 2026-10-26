@@ -120,9 +120,7 @@ xdotool windowfocus --sync "$main" key ctrl+f
 xdotool type --delay 30 "foto"
 sleep 1
 shot 4c-busca
-xdotool key ctrl+a BackSpace Escape
-sleep 0.5
-# Right click on the first card: its menu (Abrir, Abrir pasta, Conferir soma...).
+# Right click on the first card, foto.png (the search left only it): its menu (Abrir, Abrir pasta, Conferir soma...).
 xdotool mousemove --window "$main" 380 300 click 3
 sleep 1
 shot 4b-menu-do-download
@@ -138,6 +136,8 @@ else
   echo "warning: Conferir soma did not open (menu position to calibrate)"
   xdotool key Escape
 fi
+xdotool windowfocus --sync "$main" key ctrl+f ctrl+a BackSpace Escape
+sleep 0.5
 sleep 0.5
 xdotool windowfocus --sync "$main" key ctrl+comma
 prefs="$(find_window "^Preferências$")"

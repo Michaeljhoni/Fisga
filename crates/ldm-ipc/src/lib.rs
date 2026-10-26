@@ -286,6 +286,10 @@ pub struct Settings {
     pub proxy: ProxySettings,
     /// Columns of the main window's list the user hid ("size", "added"...).
     pub hidden_columns: Vec<String>,
+    /// The main window shows the downloads as a list instead of cards.
+    pub list_view: bool,
+    /// The main window shows the newest downloads on top.
+    pub newest_first: bool,
     pub on_complete: OnComplete,
 }
 
@@ -497,6 +501,8 @@ impl Default for Settings {
             last_queue_id: MAIN_QUEUE,
             proxy: ProxySettings::default(),
             hidden_columns: vec!["added".into()],
+            list_view: false,
+            newest_first: true,
             on_complete: OnComplete::default(),
         }
     }
@@ -1470,6 +1476,8 @@ mod tests {
         let settings: Settings = serde_json::from_str(r#"{"maxParallel": 50}"#).unwrap();
         assert!(settings.category_folders);
         assert!(settings.watch_clipboard);
+        // A settings.json from before the window remembered its look: cards, newest on top.
+        assert!(!settings.list_view && settings.newest_first);
         assert_eq!(settings.sanitized().max_parallel, 20);
         let request: Request = serde_json::from_str(r#"{"type":"set_settings","settings":{"connections":4}}"#).unwrap();
         assert!(matches!(request, Request::SetSettings { settings } if settings.connections == 4));

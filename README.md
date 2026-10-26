@@ -76,8 +76,10 @@ Visual escuro com destaque âmbar. No topo, o **gráfico de velocidade ao vivo**
 com o total, quantos baixando, as conexões e o tempo para terminar). Abaixo, filtros rápidos
 (*Todos*, *Em andamento*, *Concluídos*, *Com erro*) e os downloads em **cartões**: um anel com o
 progresso, o tamanho e o **mapa do arquivo** (quanto de cada oitavo do arquivo já chegou, com um
-brilho subindo enquanto baixa). O botão de lista no topo troca os cartões pela lista com colunas, e
-o botão flutuante *Adicionar URL* fica no canto.
+brilho subindo enquanto baixa; vídeos de sites enchem da esquerda para a direita, porque o yt-dlp
+baixa em sequência). Os mais recentes ficam no topo; o botão de ordem no topo inverte, e o de lista
+troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O botão flutuante
+*Adicionar URL* fica no canto.
 
 - **Janela principal** (`ldm-gui`, ou "LDM" no menu de aplicativos): à esquerda, como no IDM,
   *Todos os downloads*, *Em andamento*, *Concluídos* e as **categorias** (Vídeos, Músicas, Imagens,

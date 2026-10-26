@@ -476,6 +476,7 @@ impl Manager {
                 awaiting_url: false,
                 checksum: request.checksum.clone(),
                 hash: None,
+                map: Vec::new(),
                 speed_limit: 0,
             };
             let _ = self.updates.send(Response::Update { item: info.clone() });
@@ -852,6 +853,9 @@ impl Manager {
                 info.total = p.total.or(info.total);
                 info.speed = p.speed;
                 info.connections = p.active_connections;
+                if let (Some(total), false) = (p.total, p.segments.is_empty()) {
+                    info.map = ldm_ipc::file_map(p.segments.iter().map(|s| (s.start, s.end, s.done)), total);
+                }
             }),
         }
     }

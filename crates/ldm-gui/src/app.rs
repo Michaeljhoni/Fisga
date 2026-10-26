@@ -91,6 +91,7 @@ impl App {
     /// Called once, on GApplication startup.
     pub fn start(self: &Rc<Self>) {
         gtk::Window::set_default_icon_name("folder-download");
+        crate::theme::load();
         self.app.set_accels_for_action("win.add", &["<Control>n"]);
         self.app.set_accels_for_action("win.batch", &["<Control><Shift>n"]);
         self.app.set_accels_for_action("win.find", &["<Control>f"]);

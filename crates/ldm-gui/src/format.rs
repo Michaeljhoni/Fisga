@@ -3,7 +3,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use ldm_ipc::{Category, DownloadInfo, Hashing, State};
+use ldm_ipc::{Category, DownloadInfo, Hashing, SourceKind, State, MAP_PARTS};
 
 /// Binary units with a decimal comma: "1,5 MB".
 pub fn bytes(n: u64) -> String {
@@ -70,6 +70,46 @@ pub fn downloaded(info: &DownloadInfo) -> String {
         Some(total) if info.state == State::Completed => bytes(total),
         Some(total) => format!("{} de {}", bytes(info.downloaded.min(total)), bytes(total)),
         None => bytes(info.downloaded),
+    }
+}
+
+/// A card's file map: how much of each stretch of the file is downloaded,
+/// 0–1. Without one from the daemon (a site video, a single stream), the
+/// progress fills it from the left.
+pub fn file_map(info: &DownloadInfo) -> [f64; MAP_PARTS] {
+    if info.state == State::Completed {
+        return [1.0; MAP_PARTS];
+    }
+    let mut map = [0.0; MAP_PARTS];
+    if info.map.len() == MAP_PARTS {
+        for (part, percent) in map.iter_mut().zip(&info.map) {
+            *part = f64::from(*percent) / 100.0;
+        }
+        return map;
+    }
+    let filled = fraction(info) * MAP_PARTS as f64;
+    for (i, part) in map.iter_mut().enumerate() {
+        *part = (filled - i as f64).clamp(0.0, 1.0);
+    }
+    map
+}
+
+/// A card's badge: the file's extension ("ISO"), else what it is.
+pub fn badge(info: &DownloadInfo) -> String {
+    let extension = Path::new(&info.name).extension().and_then(OsStr::to_str).filter(|ext| (1..=5).contains(&ext.len()));
+    match (extension, info.kind) {
+        (Some(ext), _) => ext.to_uppercase(),
+        (None, SourceKind::Direct) => "ARQUIVO".into(),
+        (None, _) => "VÍDEO".into(),
+    }
+}
+
+/// The number in a card's ring: "62%", a check mark when done.
+pub fn ring_text(info: &DownloadInfo) -> String {
+    match info.total {
+        _ if info.state == State::Completed => "\u{2713}".into(),
+        Some(total) if total > 0 => format!("{:.0}%", (fraction(info) * 100.0).floor()),
+        _ => String::new(),
     }
 }
 
@@ -253,6 +293,7 @@ mod tests {
             awaiting_url: false,
             checksum: None,
             hash: None,
+            map: Vec::new(),
             speed_limit: 0,
         }
     }
@@ -344,6 +385,27 @@ mod tests {
         assert_eq!(duration(5), "5 s");
         assert_eq!(duration(200), "3 min 20 s");
         assert_eq!(duration(3900), "1 h 05 min");
+    }
+
+    #[test]
+    fn card_texts() {
+        let mut running = info(State::Running, 300, Some(800), 10.0);
+        running.name = "ubuntu-24.04.iso".into();
+        assert_eq!(badge(&running), "ISO");
+        assert_eq!(ring_text(&running), "37%");
+        // No map from the daemon: filled from the left.
+        assert_eq!(file_map(&running), [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        running.map = vec![100, 50, 0, 0, 0, 0, 100, 0];
+        assert_eq!(file_map(&running)[1], 0.5);
+        assert_eq!(file_map(&running)[6], 1.0);
+        let done = info(State::Completed, 800, Some(800), 0.0);
+        assert_eq!(file_map(&done), [1.0; MAP_PARTS]);
+        assert_eq!(ring_text(&done), "\u{2713}");
+        let mut video = info(State::Queued, 0, None, 0.0);
+        video.name = "Aula 03 — Async em Rust".into();
+        video.kind = SourceKind::Page;
+        assert_eq!(badge(&video), "VÍDEO");
+        assert_eq!(ring_text(&video), "");
     }
 
     #[test]

@@ -1,7 +1,8 @@
-//! Main window: views, categories and queues on the left (like IDM), the
-//! download list on the right with pause, resume, remove, open file and open
-//! folder (also in the right-click menu of each row, with moving between and
-//! inside queues), updated live from the daemon.
+//! Main window: views, categories and queues on the left (like IDM); on the
+//! right the live speed graph, quick filters and the downloads as cards (or
+//! as a list), with pause, resume, remove, open file and open folder (also in
+//! the right-click menu of each one, with moving between and inside queues),
+//! updated live from the daemon.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -13,6 +14,7 @@ use ldm_ipc::{AddRequest, Category, Direction, DownloadInfo, Queue, Request, Sta
 
 use crate::app::App;
 use crate::format;
+use crate::speed::SpeedPanel;
 use crate::ipc;
 use crate::item::DownloadItem;
 
@@ -22,6 +24,7 @@ pub enum View {
     All,
     Unfinished,
     Finished,
+    Failed,
     Category(Category),
     Queue(u64),
 }
@@ -29,7 +32,7 @@ pub enum View {
 impl View {
     /// The sidebar, top to bottom.
     pub fn all(queues: &[Queue]) -> Vec<View> {
-        let mut views = vec![View::All, View::Unfinished, View::Finished];
+        let mut views = vec![View::All, View::Unfinished, View::Finished, View::Failed];
         views.extend(Category::ALL.into_iter().map(View::Category));
         views.extend(queues.iter().map(|queue| View::Queue(queue.id)));
         views
@@ -40,6 +43,7 @@ impl View {
             View::All => "Todos os downloads".into(),
             View::Unfinished => "Em andamento".into(),
             View::Finished => "Concluídos".into(),
+            View::Failed => "Com erro".into(),
             View::Category(category) => category.label().into(),
             View::Queue(id) => queues.iter().find(|q| q.id == id).map(|q| q.name.clone()).unwrap_or_default(),
         }
@@ -50,6 +54,7 @@ impl View {
             View::All => "folder-download-symbolic",
             View::Unfinished => "media-playback-start-symbolic",
             View::Finished => "object-select-symbolic",
+            View::Failed => "dialog-error-symbolic",
             View::Category(category) => format::category_icon(category),
             View::Queue(_) => "view-list-symbolic",
         }
@@ -64,11 +69,24 @@ impl View {
         }
     }
 
+    /// The quick filters above the cards.
+    const CHIPS: [View; 4] = [View::All, View::Unfinished, View::Finished, View::Failed];
+
+    fn chip_label(self) -> &'static str {
+        match self {
+            View::All => "Todos",
+            View::Unfinished => "Em andamento",
+            View::Finished => "Concluídos",
+            _ => "Com erro",
+        }
+    }
+
     pub fn matches(self, info: &DownloadInfo) -> bool {
         match self {
             View::All => true,
             View::Unfinished => info.state != State::Completed,
             View::Finished => info.state == State::Completed,
+            View::Failed => info.state == State::Failed,
             View::Category(category) => info.category == category,
             View::Queue(id) => info.queue == id,
         }
@@ -88,6 +106,11 @@ pub struct MainWindow {
     counts: RefCell<Vec<(View, gtk::Label)>>,
     popover: gtk::PopoverMenu,
     status: gtk::Label,
+    speed: SpeedPanel,
+    /// The row menu on the cards.
+    cards_popover: gtk::PopoverMenu,
+    /// The quick filters' counts.
+    chip_counts: Vec<(View, gtk::Label)>,
     actions: Actions,
     columns: Vec<Column>,
     search: gtk::SearchEntry,
@@ -212,7 +235,7 @@ fn sidebar_row(view: View, queues: &[Queue]) -> (gtk::ListBoxRow, gtk::Label) {
         .ellipsize(pango::EllipsizeMode::End)
         .build();
     let count = gtk::Label::new(None);
-    count.add_css_class("dim-label");
+    count.add_css_class("ldm-count");
     let row_box = gtk::Box::builder()
         .spacing(10)
         .margin_top(7)
@@ -281,18 +304,23 @@ impl MainWindow {
         let window = gtk::ApplicationWindow::builder()
             .application(&app.app)
             .title("LDM")
-            .default_width(1100)
-            .default_height(600)
+            .default_width(1180)
+            .default_height(720)
             .build();
+        window.add_css_class("ldm");
 
         let header = gtk::HeaderBar::new();
-        let add = gtk::Button::builder()
-            .label("Adicionar URL")
-            .tooltip_text("Adicionar um endereço (Ctrl+N)")
-            .action_name("win.add")
-            .build();
-        add.add_css_class("suggested-action");
-        header.pack_start(&add);
+        let logo = gtk::Image::builder().icon_name("folder-download-symbolic").halign(gtk::Align::Center).build();
+        let logo_box = gtk::Box::builder().valign(gtk::Align::Center).build();
+        logo_box.add_css_class("ldm-logo");
+        logo.set_hexpand(true);
+        logo_box.append(&logo);
+        let title = gtk::Label::new(Some("LDM"));
+        title.add_css_class("ldm-title");
+        let brand = gtk::Box::builder().spacing(10).margin_end(10).build();
+        brand.append(&logo_box);
+        brand.append(&title);
+        header.pack_start(&brand);
         header.pack_start(&header_button("media-playback-start-symbolic", "Retomar / confirmar", "win.resume"));
         header.pack_start(&header_button("media-playback-pause-symbolic", "Pausar", "win.pause"));
         header.pack_start(&header_button("user-trash-symbolic", "Remover (Delete)", "win.remove"));
@@ -302,6 +330,8 @@ impl MainWindow {
             .menu_model(&main_menu())
             .build();
         header.pack_end(&menu);
+        let as_list = gtk::ToggleButton::builder().icon_name("view-list-symbolic").tooltip_text("Ver como lista").build();
+        header.pack_end(&as_list);
         header.pack_end(&header_button("folder-symbolic", "Abrir pasta", "win.open-folder"));
         header.pack_end(
             &gtk::Button::builder().label("Abrir").tooltip_text("Abrir o arquivo").action_name("win.open-file").build(),
@@ -316,6 +346,7 @@ impl MainWindow {
         let views: Rc<RefCell<Vec<View>>> = Rc::default();
         let sidebar = gtk::ListBox::new();
         sidebar.add_css_class("navigation-sidebar");
+        sidebar.add_css_class("ldm-sidebar");
         let v = views.clone();
         sidebar.set_header_func(move |row, _| {
             // "Categorias" and "Filas" above the first entry of each group.
@@ -325,10 +356,14 @@ impl MainWindow {
             let first = group.is_some() && (index == 0 || views.get(index - 1).and_then(|view| view.group()) != group);
             match group.filter(|_| first) {
                 Some(text) => {
-                    let heading =
-                        gtk::Label::builder().label(text).xalign(0.0).margin_start(12).margin_top(12).margin_bottom(4).build();
-                    heading.add_css_class("dim-label");
-                    heading.add_css_class("caption-heading");
+                    let heading = gtk::Label::builder()
+                        .label(text.to_uppercase())
+                        .xalign(0.0)
+                        .margin_start(18)
+                        .margin_top(14)
+                        .margin_bottom(6)
+                        .build();
+                    heading.add_css_class("ldm-heading");
                     row.set_header(Some(&heading));
                 }
                 None => row.set_header(gtk::Widget::NONE),
@@ -337,8 +372,9 @@ impl MainWindow {
         let sidebar_scroll = gtk::ScrolledWindow::builder()
             .child(&sidebar)
             .hscrollbar_policy(gtk::PolicyType::Never)
-            .width_request(210)
+            .width_request(212)
             .build();
+        sidebar_scroll.add_css_class("ldm-sidebar");
 
         let (view_now, query): (_, Rc<RefCell<String>>) = (current.clone(), Rc::default());
         let q = query.clone();
@@ -380,6 +416,7 @@ impl MainWindow {
         // Built with autoselect on, the first row would start selected.
         selection.set_selected(gtk::INVALID_LIST_POSITION);
         let view = gtk::ColumnView::new(Some(selection.clone()));
+        view.add_css_class("ldm-list");
         view.set_show_column_separators(true);
         view.set_reorderable(false);
         // Right click selects the row and opens its menu; the actions follow the selection.
@@ -412,13 +449,91 @@ impl MainWindow {
         }
         let list_scroll = gtk::ScrolledWindow::builder().child(&view).vexpand(true).hexpand(true).build();
 
+        // The same downloads as cards (the default) or as the list (☰-like toggle in the header).
+        let (a, w) = (Rc::downgrade(app), window.clone());
+        let cards = crate::cards::new(&selection, &row_menu_model(&queues), move |item| open_item(&a, &w, item.info()));
+        let stack = gtk::Stack::builder()
+            .transition_type(gtk::StackTransitionType::Crossfade)
+            .transition_duration(180)
+            .vexpand(true)
+            .hexpand(true)
+            .build();
+        stack.add_named(&cards.root, Some("cards"));
+        stack.add_named(&list_scroll, Some("list"));
+        let st = stack.clone();
+        as_list.connect_toggled(move |button| st.set_visible_child_name(if button.is_active() { "list" } else { "cards" }));
+
+        // The add button floats over the downloads, bottom right.
+        let fab_box = gtk::Box::builder().spacing(8).build();
+        fab_box.append(&gtk::Image::from_icon_name("list-add-symbolic"));
+        fab_box.append(&gtk::Label::new(Some("Adicionar URL")));
+        let fab = gtk::Button::builder()
+            .child(&fab_box)
+            .tooltip_text("Adicionar um endereço (Ctrl+N)")
+            .action_name("win.add")
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::End)
+            .margin_end(24)
+            .margin_bottom(22)
+            .build();
+        fab.add_css_class("ldm-fab");
+        let downloads = gtk::Overlay::builder().child(&stack).build();
+        downloads.add_overlay(&fab);
+
+        // Quick filters: the first sidebar entries, as chips.
+        let chips_row = gtk::Box::builder().spacing(8).margin_top(16).margin_bottom(6).margin_start(24).margin_end(24).build();
+        let mut chip_buttons = Vec::new();
+        let mut chip_counts = Vec::new();
+        for view in View::CHIPS {
+            let count = gtk::Label::new(None);
+            count.add_css_class("ldm-count");
+            let chip_box = gtk::Box::builder().spacing(6).build();
+            chip_box.append(&gtk::Label::new(Some(view.chip_label())));
+            chip_box.append(&count);
+            let chip = gtk::ToggleButton::builder().child(&chip_box).build();
+            chip.add_css_class("ldm-chip");
+            chips_row.append(&chip);
+            chip_buttons.push((view, chip));
+            chip_counts.push((view, count));
+        }
+        let chip_buttons = Rc::new(chip_buttons);
+        let syncing = Rc::new(Cell::new(false));
+        for (view, chip) in chip_buttons.iter() {
+            let (view, sidebar_, views_, current_, syncing_) = (*view, sidebar.clone(), views.clone(), current.clone(), syncing.clone());
+            chip.connect_toggled(move |chip| {
+                if syncing_.get() {
+                    return;
+                }
+                if !chip.is_active() {
+                    // A chip stays on while its view is the one shown.
+                    if current_.get() == view {
+                        syncing_.set(true);
+                        chip.set_active(true);
+                        syncing_.set(false);
+                    }
+                    return;
+                }
+                let index = views_.borrow().iter().position(|v| *v == view);
+                if let Some(row) = index.and_then(|i| sidebar_.row_at_index(i as i32)) {
+                    sidebar_.select_row(Some(&row));
+                }
+            });
+        }
+
+        let speed = SpeedPanel::new();
+        let main = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        main.add_css_class("ldm-main");
+        main.append(&speed.root);
+        main.append(&chips_row);
+        main.append(&downloads);
+
         let paned = gtk::Paned::builder()
             .orientation(gtk::Orientation::Horizontal)
             .start_child(&sidebar_scroll)
-            .end_child(&list_scroll)
+            .end_child(&main)
             .resize_start_child(false)
             .shrink_start_child(false)
-            .position(210)
+            .position(212)
             .vexpand(true)
             .build();
 
@@ -430,10 +545,13 @@ impl MainWindow {
             .margin_bottom(6)
             .ellipsize(pango::EllipsizeMode::End)
             .build();
+        let status_bar = gtk::Box::builder().build();
+        status_bar.add_css_class("ldm-statusbar");
+        status.set_hexpand(true);
+        status_bar.append(&status);
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.append(&paned);
-        content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-        content.append(&status);
+        content.append(&status_bar);
         window.set_child(Some(&content));
 
         let actions = Actions {
@@ -465,13 +583,18 @@ impl MainWindow {
             window.add_action(action);
         }
 
-        let (filter_, v, c) = (filter.clone(), views.clone(), current.clone());
+        let (filter_, v, c, chips) = (filter.clone(), views.clone(), current.clone(), chip_buttons.clone());
         sidebar.connect_row_selected(move |_, row| {
             let Some(row) = row else { return };
             let view = v.borrow().get(row.index() as usize).copied();
             if let Some(view) = view {
                 c.set(view);
                 filter_.changed(gtk::FilterChange::Different);
+                syncing.set(true);
+                for (chip_view, chip) in chips.iter() {
+                    chip.set_active(*chip_view == view);
+                }
+                syncing.set(false);
             }
         });
 
@@ -487,6 +610,9 @@ impl MainWindow {
             counts: RefCell::default(),
             popover,
             status,
+            speed,
+            cards_popover: cards.popover.clone(),
+            chip_counts,
             actions,
             columns,
             search,
@@ -528,6 +654,7 @@ impl MainWindow {
         self.queues.replace(queues.clone());
         if !same_entries {
             self.popover.set_menu_model(Some(&row_menu_model(&queues)));
+            self.cards_popover.set_menu_model(Some(&row_menu_model(&queues)));
             let views = View::all(&queues);
             self.views.replace(views.clone());
             while let Some(row) = self.sidebar.row_at_index(0) {
@@ -762,17 +889,8 @@ impl MainWindow {
         // Double click / Enter: confirm a pending download, open a finished
         // one, show the progress of the others.
         view.connect_activate(move |view, position| {
-            let Some(item) = view.model().and_then(|m| m.item(position)).and_downcast::<DownloadItem>() else { return };
-            let info = item.info();
-            let Some(app) = app.upgrade() else { return };
-            match info.state {
-                State::Pending => app.open_dialog(&info),
-                State::Completed => {
-                    if let Some(path) = info.path {
-                        open_file(window.upcast_ref(), path);
-                    }
-                }
-                _ => app.open_progress(info.id),
+            if let Some(item) = view.model().and_then(|m| m.item(position)).and_downcast::<DownloadItem>() {
+                open_item(&app, &window, item.info());
             }
         });
     }
@@ -785,7 +903,7 @@ impl MainWindow {
             self.filter.changed(gtk::FilterChange::Different);
             self.sorter.changed(gtk::SorterChange::Different);
             let items: Vec<DownloadItem> = self.store.iter::<DownloadItem>().flatten().collect();
-            for (view, label) in self.counts.borrow().iter() {
+            for (view, label) in self.counts.borrow().iter().chain(&self.chip_counts) {
                 let n = items.iter().filter(|item| item.with_info(|info| view.matches(info))).count();
                 label.set_label(&if n > 0 { n.to_string() } else { String::new() });
             }
@@ -795,18 +913,25 @@ impl MainWindow {
 
     pub fn set_connection(&self, connection: &Result<(), String>) {
         let text = match connection {
-            Err(reason) => format!("Sem conexão com o ldmd ({reason}). Tentando de novo…"),
+            Err(reason) => {
+                self.speed.set(0.0, 0, 0, None);
+                format!("Sem conexão com o ldmd ({reason}). Tentando de novo…")
+            }
             Ok(()) => {
-                let (mut total, mut running, mut speed) = (0, 0, 0.0);
+                let (mut total, mut running, mut speed, mut connections, mut left) = (0, 0, 0.0, 0, 0u64);
                 for item in self.store.iter::<DownloadItem>().flatten() {
                     item.with_info(|info| {
                         total += 1;
                         if info.state == State::Running {
                             running += 1;
                             speed += info.speed;
+                            connections += info.connections;
+                            left += info.total.map_or(0, |size| size.saturating_sub(info.downloaded));
                         }
                     });
                 }
+                let eta = (speed >= 1.0 && left > 0).then(|| (left as f64 / speed).ceil() as u64);
+                self.speed.set(speed, running, connections, eta);
                 let mut text = match total {
                     0 => "Nenhum download".to_string(),
                     1 => "1 download".to_string(),
@@ -832,6 +957,21 @@ impl MainWindow {
             }
         };
         self.status.set_label(&text);
+    }
+}
+
+/// Double click or Enter on a download: confirm a pending one, open a
+/// finished one, show the progress of the others.
+fn open_item(app: &Weak<App>, window: &gtk::ApplicationWindow, info: DownloadInfo) {
+    let Some(app) = app.upgrade() else { return };
+    match info.state {
+        State::Pending => app.open_dialog(&info),
+        State::Completed => {
+            if let Some(path) = info.path {
+                open_file(window.upcast_ref(), path);
+            }
+        }
+        _ => app.open_progress(info.id),
     }
 }
 
@@ -1037,7 +1177,8 @@ mod tests {
         assert!(View::Finished.matches(&info) && !View::Unfinished.matches(&info));
         let queues = ldm_ipc::Settings::default().all_queues();
         let views = View::all(&queues);
-        assert_eq!(views[3], View::Category(Category::Video));
+        assert_eq!(views[3], View::Failed);
+        assert_eq!(views[4], View::Category(Category::Video));
         assert_eq!(views.len(), 3 + Category::ALL.len() + 1);
         assert_eq!(views.last(), Some(&View::Queue(ldm_ipc::MAIN_QUEUE)));
         assert_eq!(View::Queue(0).label(&queues), ldm_ipc::MAIN_QUEUE_NAME);
@@ -1070,6 +1211,7 @@ mod tests {
             awaiting_url: false,
             checksum: None,
             hash: None,
+            map: Vec::new(),
             speed_limit: 0,
         }
     }

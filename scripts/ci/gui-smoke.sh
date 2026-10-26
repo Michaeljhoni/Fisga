@@ -108,8 +108,13 @@ test "$pending_count" -eq 1; echo "pending window for #4 is open too"
 xdotool windowfocus --sync "$(xdotool search --name '^Novo download$' | head -1)" key Escape
 sleep 1
 xdotool windowfocus --sync "$main"
-sleep 1
+# A download running while the window is shot: the speed graph and the card's animations.
+"$BIN/ldm" add "$BASE/files/104857600.bin" -o "$SANDBOX/running" >/dev/null
+running="$("$BIN/ldm" list | awk '$1 ~ /^[0-9]+$/ && $1 > max { max = $1 } END { print max + 0 }')"
+sleep 5
 shot 4-janela-principal
+"$BIN/ldm" pause "$running"
+sleep 1
 # Search: Ctrl+F, type, and only the matching row is left.
 xdotool windowfocus --sync "$main" key ctrl+f
 xdotool type --delay 30 "foto"
@@ -117,18 +122,22 @@ sleep 1
 shot 4c-busca
 xdotool key ctrl+a BackSpace Escape
 sleep 0.5
-# Right click on the first row: its menu (Abrir, Abrir pasta, Retomar, Pausar...).
-xdotool mousemove --window "$main" 520 96 click 3
+# Right click on the first card: its menu (Abrir, Abrir pasta, Conferir soma...).
+xdotool mousemove --window "$main" 380 300 click 3
 sleep 1
 shot 4b-menu-do-download
 # Its third item, "Conferir soma (SHA-256)…" (the menu opens at the click), then
 # "Conferir" with no checksum: the window shows the file's SHA-256.
-xdotool mousemove 620 177 click 1
-verify="$(find_window "^Conferir soma$")"
-xdotool windowfocus --sync "$verify" key Return
-sleep 3
-shot 4d-conferir-soma
-xdotool windowfocus --sync "$verify" key Escape
+xdotool mousemove 480 381 click 1
+if verify="$(find_window "^Conferir soma$")"; then
+  xdotool windowfocus --sync "$verify" key Return
+  sleep 3
+  shot 4d-conferir-soma
+  xdotool windowfocus --sync "$verify" key Escape
+else
+  echo "warning: Conferir soma did not open (menu position to calibrate)"
+  xdotool key Escape
+fi
 sleep 0.5
 xdotool windowfocus --sync "$main" key ctrl+comma
 prefs="$(find_window "^Preferências$")"

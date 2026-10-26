@@ -812,6 +812,39 @@ pub struct DownloadInfo {
     /// The last check of the file (`Request::Verify`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash: Option<Hashing>,
+    /// How much of each of the `MAP_PARTS` stretches of the file is
+    /// downloaded, 0–100: the file map of a segmented download. Empty for
+    /// the others.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub map: Vec<u8>,
+}
+
+/// The stretches of a download's file map.
+pub const MAP_PARTS: usize = 8;
+
+/// The file map of a segmented download: for each of `MAP_PARTS` equal
+/// stretches of the file, the percentage downloaded. `segments` are
+/// (start, inclusive end, bytes done from start).
+pub fn file_map(segments: impl IntoIterator<Item = (u64, u64, u64)>, total: u64) -> Vec<u8> {
+    if total == 0 {
+        return Vec::new();
+    }
+    let bounds = |part: usize| total * part as u64 / MAP_PARTS as u64;
+    let mut done = vec![0u64; MAP_PARTS];
+    for (start, end, written) in segments {
+        let (from, to) = (start, (start + written).min(end + 1));
+        for (part, sum) in done.iter_mut().enumerate() {
+            let (a, b) = (bounds(part), bounds(part + 1));
+            *sum += to.min(b).saturating_sub(from.max(a));
+        }
+    }
+    done.iter()
+        .enumerate()
+        .map(|(part, sum)| match bounds(part + 1) - bounds(part) {
+            0 => 100,
+            len => (sum * 100 / len).min(100) as u8,
+        })
+        .collect()
 }
 
 impl DownloadInfo {
@@ -1317,6 +1350,18 @@ mod tests {
         assert_eq!(json, format!("\"sha256:{sha256}\""));
         assert_eq!(serde_json::from_str::<Checksum>(&json).unwrap(), parsed);
         assert!(serde_json::from_str::<Checksum>("\"nada\"").is_err());
+    }
+
+    #[test]
+    fn file_map_of_segments() {
+        // 800 bytes: stretches of 100. The first segment wrote 150 of 0..=399,
+        // the second all of 400..=799.
+        let map = file_map([(0, 399, 150), (400, 799, 400)], 800);
+        assert_eq!(map, vec![100, 50, 0, 0, 100, 100, 100, 100]);
+        assert_eq!(file_map([], 0), Vec::<u8>::new());
+        // Fewer bytes than stretches: the empty stretches count as done.
+        assert_eq!(file_map([(0, 2, 3)], 3).len(), MAP_PARTS);
+        assert!(file_map([(0, 2, 3)], 3).iter().all(|p| *p == 100));
     }
 
     #[test]

@@ -14,6 +14,7 @@
 mod app;
 mod autostart;
 mod batch;
+mod cards;
 mod confirm;
 mod format;
 mod grabber;
@@ -23,6 +24,8 @@ mod power;
 mod prefs;
 mod progress;
 mod refresh;
+mod speed;
+mod theme;
 mod tray;
 mod verify;
 mod window;

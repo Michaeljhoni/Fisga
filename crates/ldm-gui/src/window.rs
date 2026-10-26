@@ -310,15 +310,12 @@ impl MainWindow {
         window.add_css_class("ldm");
 
         let header = gtk::HeaderBar::new();
-        let logo = gtk::Image::builder().icon_name("folder-download-symbolic").halign(gtk::Align::Center).build();
-        let logo_box = gtk::Box::builder().valign(gtk::Align::Center).build();
-        logo_box.add_css_class("ldm-logo");
-        logo.set_hexpand(true);
-        logo_box.append(&logo);
+        let logo = gtk::Image::builder().icon_name("folder-download-symbolic").valign(gtk::Align::Center).build();
+        logo.add_css_class("ldm-logo");
         let title = gtk::Label::new(Some("LDM"));
         title.add_css_class("ldm-title");
         let brand = gtk::Box::builder().spacing(10).margin_end(10).build();
-        brand.append(&logo_box);
+        brand.append(&logo);
         brand.append(&title);
         header.pack_start(&brand);
         header.pack_start(&header_button("media-playback-start-symbolic", "Retomar / confirmar", "win.resume"));
@@ -372,7 +369,7 @@ impl MainWindow {
         let sidebar_scroll = gtk::ScrolledWindow::builder()
             .child(&sidebar)
             .hscrollbar_policy(gtk::PolicyType::Never)
-            .width_request(212)
+            .width_request(232)
             .build();
         sidebar_scroll.add_css_class("ldm-sidebar");
 
@@ -533,7 +530,7 @@ impl MainWindow {
             .end_child(&main)
             .resize_start_child(false)
             .shrink_start_child(false)
-            .position(212)
+            .position(232)
             .vexpand(true)
             .build();
 

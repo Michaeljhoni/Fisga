@@ -68,7 +68,7 @@ impl Card {
         let badge = gtk::Label::builder().halign(gtk::Align::Start).build();
         badge.add_css_class("ldm-ext");
         badge.add_css_class("ldm-mono");
-        let name = gtk::Label::builder().xalign(0.0).ellipsize(pango::EllipsizeMode::Middle).build();
+        let name = gtk::Label::builder().xalign(0.0).ellipsize(pango::EllipsizeMode::Middle).max_width_chars(28).build();
         name.add_css_class("ldm-card-name");
         let size = gtk::Label::builder().xalign(0.0).build();
         size.add_css_class("ldm-dim");
@@ -82,24 +82,31 @@ impl Card {
         info.append(&badge);
         info.append(&name);
         info.append(&size);
-        let top = gtk::Box::builder().spacing(14).build();
+        // Every part at its own height: a card is as tall as its content.
+        let top = gtk::Box::builder().spacing(14).valign(gtk::Align::Start).vexpand(false).build();
         top.append(&ring_box);
         top.append(&info);
 
-        let map = gtk::DrawingArea::builder().content_height(28).hexpand(true).build();
+        let map = gtk::DrawingArea::builder().content_height(28).hexpand(true).valign(gtk::Align::Start).build();
 
         let dot = gtk::Box::builder().valign(gtk::Align::Center).build();
         dot.add_css_class("ldm-state-dot");
-        let status = gtk::Label::builder().xalign(0.0).hexpand(true).ellipsize(pango::EllipsizeMode::End).build();
+        let status =
+            gtk::Label::builder().xalign(0.0).hexpand(true).ellipsize(pango::EllipsizeMode::End).max_width_chars(30).build();
         let speed = gtk::Label::new(None);
         speed.add_css_class("ldm-cyan");
         speed.add_css_class("ldm-mono");
-        let bottom = gtk::Box::builder().spacing(8).build();
+        let bottom = gtk::Box::builder().spacing(8).valign(gtk::Align::Start).vexpand(false).build();
         bottom.append(&dot);
         bottom.append(&status);
         bottom.append(&speed);
 
-        let root = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(12).width_request(280).build();
+        let root = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(12)
+            .width_request(230)
+            .valign(gtk::Align::Start)
+            .build();
         root.add_css_class("ldm-card");
         root.append(&top);
         root.append(&map);

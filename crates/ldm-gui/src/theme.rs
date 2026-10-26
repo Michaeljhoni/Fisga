@@ -33,8 +33,7 @@ window.ldm headerbar entry, window.ldm searchbar entry {
   background: #f59e0b;
   color: #111;
   border-radius: 8px;
-  min-width: 26px;
-  min-height: 26px;
+  padding: 5px;
 }
 .ldm-title { font-weight: 800; letter-spacing: 1px; }
 

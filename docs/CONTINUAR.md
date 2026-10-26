@@ -296,17 +296,20 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
 - ~~Feito~~ (`ldm-core/src/engine.rs`, `lib.rs`, `control.rs`):
   - o cliente é `http1_only()`: com HTTP/2 os segmentos viravam streams de um único TCP;
   - conexão parada: a cada `TICK` (1 s) sem dados o dono grava o buffer; quem está ocioso assume o
-    resto de um segmento sem dados há `STALL` (3 s) (`Claim` em `Ctx::claim`; sem nada gravado, o
+    resto de um segmento que já recebia dados e parou há `STALL` (3 s); antes da resposta, só o timeout
+    (senão duas conexões ociosas trocariam o mesmo segmento esperando um servidor lento) (`Claim` em `Ctx::claim`; sem nada gravado, o
     segmento antigo fica `revoked` e sai do controle). O dono percebe por `Ctx::gone` e sai;
   - o split começa depois do que o dono tem no buffer (`Segment::buffered`), e o mínimo caiu para 256 KiB;
   - falhas: o contador zera quando houve progresso, a espera é linear (2 s a mais, até 30 s) e o limite é 15
     falhas seguidas; 4xx (menos 408/429) é definitivo (`Error::is_permanent`); 503/429 viram
     `Error::Throttled`: a conexão sai (`Ctx::leave`, menos a última), e a última espera o `Retry-After`;
+    se as outras falharem nesse meio-tempo, uma das que saíram volta (`Ctx::rejoin`); 200 em vez de 206
+    (`Error::RangeIgnored`) também é definitivo;
   - durabilidade: `persist` faz o `fdatasync` dos dados antes de gravar o `.ldm-part.json` (a cada 2 s), e
     `control::save` faz `fsync` do tmp e da pasta;
   - a espera pela resposta tem timeout; sem Range, o tempo sem dados tolerado é 10× maior (300 s).
 - ~~yt-dlp e links expirados (o "HTTP Error 410: Gone")~~ (`ytdlp.rs`): um stream capturado que falha com
-  401/403/410 é tentado de novo pela página (`page_of`: o frame, senão a aba), e a mensagem explica que o
+  401/403/410 é tentado de novo pelo frame onde ele tocava (`page_of`; não pela aba, que pode ter outros vídeos), e a mensagem explica que o
   link expirou. Um manifesto em outro site recebe o `Origin` do player (`origin_for`, `--add-header`).
 - Ainda não: conferir 64 bytes no resume (detecta arquivo trocado no servidor sem ETag), `fallocate` em vez
   de arquivo esparso, limitador que divide a taxa entre as conexões, a extensão descartar manifestos antigos.

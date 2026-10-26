@@ -94,6 +94,9 @@ pub enum Error {
     /// 503 or 429: too many connections, or the server is overloaded.
     #[error("o servidor está ocupado (status {status})")]
     Throttled { status: reqwest::StatusCode, retry_after: Option<Duration> },
+    /// A 200 to a Range request: with `If-Range`, the file changed on the server.
+    #[error("o servidor ignorou o Range: o arquivo mudou no servidor ou ele não aceita mais retomar")]
+    RangeIgnored,
     #[error("download cancelado")]
     Cancelled,
     #[error("{0}")]
@@ -103,9 +106,15 @@ pub enum Error {
 impl Error {
     /// Retrying will not help: the server refuses this request (403, 404, 410...).
     pub fn is_permanent(&self) -> bool {
-        matches!(self, Error::Status(s) if s.is_client_error()
-            && *s != reqwest::StatusCode::REQUEST_TIMEOUT
-            && *s != reqwest::StatusCode::TOO_MANY_REQUESTS)
+        match self {
+            Error::RangeIgnored => true,
+            Error::Status(s) => {
+                s.is_client_error()
+                    && *s != reqwest::StatusCode::REQUEST_TIMEOUT
+                    && *s != reqwest::StatusCode::TOO_MANY_REQUESTS
+            }
+            _ => false,
+        }
     }
 }
 

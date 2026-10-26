@@ -299,11 +299,15 @@ struct Segment {
     revoked: bool,
     /// Its owner waits for the speed limit: slow on purpose, not stalled.
     held: bool,
+    /// The server started sending it. Before that a slow server is waited
+    /// for (up to the idle timeout), not taken over: a takeover would only
+    /// wait for the same slow answer again.
+    streaming: bool,
 }
 
 impl Segment {
     fn new(state: SegmentState, owned: bool) -> Self {
-        Self { state, owned, buffered: 0, last_data: Instant::now(), revoked: false, held: false }
+        Self { state, owned, buffered: 0, last_data: Instant::now(), revoked: false, held: false, streaming: false }
     }
 
     /// Where a split may start: past what the owner holds in memory.
@@ -342,6 +346,8 @@ struct Ctx {
     downloaded: AtomicU64,
     /// Connections still working; a busy server (503/429) brings it down.
     workers: AtomicUsize,
+    /// Connections that left because the server was busy.
+    left: AtomicUsize,
     min_split: u64,
     max_retries: u32,
     idle_timeout: Duration,
@@ -380,7 +386,7 @@ impl Ctx {
         let stalled = segs
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.owned && !s.held && s.buffered == 0 && s.state.remaining() > 0)
+            .filter(|(_, s)| s.owned && s.streaming && !s.held && s.buffered == 0 && s.state.remaining() > 0)
             .filter(|(_, s)| s.last_data.elapsed() >= STALL)
             .max_by_key(|(_, s)| s.state.remaining())
             .map(|(i, _)| i);
@@ -404,6 +410,14 @@ impl Ctx {
         segs[index].owned = false;
         segs[index].buffered = 0;
         segs[index].held = false;
+        segs[index].streaming = false;
+    }
+
+    /// The server's answer for segment `index` arrived; its data follows.
+    fn streaming(&self, index: usize) {
+        let mut segs = self.segments.lock().unwrap();
+        segs[index].streaming = true;
+        segs[index].last_data = Instant::now();
     }
 
     /// The owner starts (or ends) waiting for the speed limit.
@@ -416,7 +430,22 @@ impl Ctx {
     /// One connection fewer, unless it is the last one.
     #[allow(deprecated)] // try_update needs a newer Rust than our MSRV (1.80)
     fn leave(&self) -> bool {
-        self.workers.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| if n > 1 { Some(n - 1) } else { None }).is_ok()
+        let left =
+            self.workers.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| if n > 1 { Some(n - 1) } else { None }).is_ok();
+        if left {
+            self.left.fetch_add(1, Ordering::SeqCst);
+        }
+        left
+    }
+
+    /// One connection that left (`leave`) comes back, if any did.
+    #[allow(deprecated)] // try_update needs a newer Rust than our MSRV (1.80)
+    fn rejoin(&self) -> bool {
+        let back = self.left.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok();
+        if back {
+            self.workers.fetch_add(1, Ordering::SeqCst);
+        }
+        back
     }
 
     fn bounds(&self, index: usize) -> (u64, u64) {
@@ -516,9 +545,7 @@ impl Ctx {
         };
         match resp.status() {
             StatusCode::PARTIAL_CONTENT => {}
-            StatusCode::OK => {
-                return Err(Error::Other("o servidor ignorou o Range (o arquivo mudou?)".into()));
-            }
+            StatusCode::OK => return Err(Error::RangeIgnored),
             status @ (StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE) => {
                 return Err(Error::Throttled { status, retry_after: retry_after(resp.headers()) });
             }
@@ -534,6 +561,7 @@ impl Ctx {
         if range_start.is_some_and(|s| s != from) {
             return Err(Error::Other("Content-Range diferente do pedido".into()));
         }
+        self.streaming(index);
 
         let mut stream = resp.bytes_stream();
         let mut buf = Vec::with_capacity(FLUSH_SIZE);
@@ -743,6 +771,7 @@ async fn segmented_download(
         segments: Mutex::new(states.into_iter().map(|state| Segment::new(state, false)).collect()),
         downloaded: AtomicU64::new(already),
         workers: AtomicUsize::new(connections),
+        left: AtomicUsize::new(0),
         min_split: opts.min_split_size.max(MIN_SPLIT_FLOOR),
         max_retries: opts.max_retries,
         idle_timeout: opts.idle_timeout,
@@ -771,7 +800,17 @@ async fn segmented_download(
     loop {
         tokio::select! {
             joined = workers.join_next() => match joined {
-                None => break,
+                None => {
+                    // The others failed while a busy server's connection was
+                    // leaving: one comes back, rather than giving up with work left.
+                    let unfinished = !cancel.is_cancelled() && ctx.snapshot().iter().any(|s| s.remaining() > 0);
+                    let fatal = last_error.as_ref().is_some_and(Error::is_permanent);
+                    if unfinished && !fatal && ctx.rejoin() {
+                        workers.spawn(worker(ctx.clone(), Duration::ZERO));
+                        continue;
+                    }
+                    break;
+                }
                 Some(Ok(Ok(()))) => {}
                 Some(Ok(Err(e))) => last_error = Some(e),
                 Some(Err(e)) => last_error = Some(Error::Other(format!("conexão abortou: {e}"))),
@@ -833,9 +872,12 @@ mod tests {
             url: Url::parse("http://localhost/").unwrap(),
             etag: None,
             file: Arc::new(file),
-            segments: Mutex::new(segments.into_iter().map(|state| Segment::new(state, owned)).collect()),
+            segments: Mutex::new(
+                segments.into_iter().map(|state| Segment { streaming: owned, ..Segment::new(state, owned) }).collect(),
+            ),
             downloaded: AtomicU64::new(0),
             workers: AtomicUsize::new(2),
+            left: AtomicUsize::new(0),
             min_split: MIN_SPLIT_FLOOR,
             max_retries: 0,
             idle_timeout: Duration::from_secs(1),
@@ -898,6 +940,27 @@ mod tests {
         assert_eq!(segs[1], SegmentState { start: 1000, end: 300 * 1024, done: 0 });
         assert!(ctx.gone(0, 1000), "the old owner stops");
         assert!(!ctx.gone(1, 1000));
+    }
+
+    #[test]
+    fn a_slow_server_is_waited_for_not_taken_over() {
+        let ctx = ctx_with(vec![SegmentState { start: 0, end: 99, done: 0 }], true);
+        ctx.segments.lock().unwrap()[0].streaming = false;
+        silent(&ctx, 0, STALL * 2);
+        assert!(matches!(ctx.claim(), Claim::Wait), "no answer yet: not stalled");
+        ctx.streaming(0);
+        silent(&ctx, 0, STALL * 2);
+        assert!(matches!(ctx.claim(), Claim::Segment(1)));
+    }
+
+    #[test]
+    fn a_connection_that_left_comes_back_once() {
+        let ctx = ctx_with(vec![SegmentState { start: 0, end: 99, done: 0 }], true);
+        assert!(!ctx.rejoin(), "nobody left");
+        assert!(ctx.leave());
+        assert!(ctx.rejoin());
+        assert!(!ctx.rejoin());
+        assert_eq!(ctx.workers.load(Ordering::SeqCst), 2);
     }
 
     #[test]

@@ -104,8 +104,9 @@ async fn handle(
             continue;
         }
         let limited = opts.max_active > 0 && range.is_some();
+        // Frees the slot however the answer ends: clients drop a split segment's connection mid-body.
+        let _slot = limited.then(|| Slot(opts.active.clone()));
         if limited && opts.active.fetch_add(1, Ordering::SeqCst) >= opts.max_active {
-            opts.active.fetch_sub(1, Ordering::SeqCst);
             opts.busy.fetch_add(1, Ordering::SeqCst);
             socket
                 .write_all(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\n\r\n")
@@ -142,9 +143,15 @@ async fn handle(
                 tokio::time::sleep(opts.delay).await;
             }
         }
-        if limited {
-            opts.active.fetch_sub(1, Ordering::SeqCst);
-        }
+    }
+}
+
+/// One answer in progress; leaving the scope (or the connection) ends it.
+struct Slot(Arc<AtomicUsize>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 

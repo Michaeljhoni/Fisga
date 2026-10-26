@@ -59,17 +59,13 @@ fn explain(error: String) -> String {
     }
 }
 
-/// Where to get a fresh link for a captured stream: the frame it played in,
-/// else the page.
+/// Where to get a fresh link for a captured stream: the frame it played in.
+/// Not the tab's page, which may hold other videos: yt-dlp would take the first.
 fn page_of(request: &AddRequest) -> Option<String> {
     if request.kind != SourceKind::Stream {
         return None;
     }
-    [&request.referrer, &request.page_url]
-        .into_iter()
-        .flatten()
-        .find(|page| page.starts_with("http") && **page != request.url)
-        .cloned()
+    request.referrer.clone().filter(|page| page.starts_with("http") && *page != request.url)
 }
 
 /// Downloads with yt-dlp. A captured stream whose link was refused (it
@@ -442,12 +438,12 @@ mod tests {
     }
 
     #[test]
-    fn a_stream_falls_back_to_its_frame_then_its_page() {
+    fn a_stream_falls_back_to_its_frame() {
         let cdn = "https://cdn.example.net/v/master.m3u8?token=abc";
         let both = stream(cdn, Some("https://player.example.com/embed/1"), Some("https://blog.example.org/post"));
         assert_eq!(page_of(&both).as_deref(), Some("https://player.example.com/embed/1"));
         let page_only = stream(cdn, None, Some("https://blog.example.org/post"));
-        assert_eq!(page_of(&page_only).as_deref(), Some("https://blog.example.org/post"));
+        assert_eq!(page_of(&page_only), None, "the tab may hold other videos");
         assert_eq!(page_of(&stream(cdn, Some(cdn), None)), None, "not the same link again");
         let page = AddRequest { kind: SourceKind::Page, ..both };
         assert_eq!(page_of(&page), None, "pages are already the page");

@@ -292,6 +292,17 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   (`makepkg --printsrcinfo`) e escolher uma licença (hoje `custom`, sem arquivo LICENSE).
 - Flatpak, .deb e .rpm.
 
+### Visual novo (proposta E do canvas "LDM — novo visual")
+- ~~Feito~~ (`ldm-gui/src/theme.rs`, `speed.rs`, `cards.rs`): tema escuro com CSS próprio (o tema
+  padrão em modo escuro por baixo; `theme::load` no `App::start`), gráfico de velocidade em
+  `DrawingArea` (amostra por segundo, desliza a cada quadro), `GridView` de cartões sobre a mesma
+  `SingleSelection` da lista (menu e clique duplo iguais, `open_item`), `Stack` cartões/lista,
+  chips sincronizados com a barra lateral e a vista nova *Com erro* (`View::Failed`). O mapa do
+  arquivo vem do daemon (`DownloadInfo.map`, `ldm_ipc::file_map` sobre os segmentos do motor); sem
+  ele (yt-dlp), `format::file_map` enche da esquerda pelo progresso. Cuidado: o tema padrão dá
+  margem a todo `box` dentro de `gridview > child` (vista de ícones); o CSS zera isso nos cartões.
+- Ainda não: lembrar a escolha cartões/lista nas configurações.
+
 ### Motor: estabilidade e banda (de `docs/ANALISE-IDM-DOWNLOAD.md`)
 - ~~Feito~~ (`ldm-core/src/engine.rs`, `lib.rs`, `control.rs`):
   - o cliente é `http1_only()`: com HTTP/2 os segmentos viravam streams de um único TCP;

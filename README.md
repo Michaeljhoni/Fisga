@@ -72,6 +72,13 @@ instalação antiga: `ldm install-hosts --uninstall` e `rm ~/.local/bin/{ldm,ldm
 
 ## Interface gráfica (`ldm-gui`)
 
+Visual escuro com destaque âmbar. No topo, o **gráfico de velocidade ao vivo** (o último minuto,
+com o total, quantos baixando, as conexões e o tempo para terminar). Abaixo, filtros rápidos
+(*Todos*, *Em andamento*, *Concluídos*, *Com erro*) e os downloads em **cartões**: um anel com o
+progresso, o tamanho e o **mapa do arquivo** (quanto de cada oitavo do arquivo já chegou, com um
+brilho subindo enquanto baixa). O botão de lista no topo troca os cartões pela lista com colunas, e
+o botão flutuante *Adicionar URL* fica no canto.
+
 - **Janela principal** (`ldm-gui`, ou "LDM" no menu de aplicativos): à esquerda, como no IDM,
   *Todos os downloads*, *Em andamento*, *Concluídos* e as **categorias** (Vídeos, Músicas, Imagens,
   Documentos, Compactados, Programas, Outros), cada uma com a contagem. À direita, a lista com nome,

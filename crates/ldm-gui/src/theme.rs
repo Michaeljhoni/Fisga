@@ -13,6 +13,20 @@ pub const MUTED: (f64, f64, f64) = (0.545, 0.576, 0.639); // #8b93a3
 pub const TRACK: (f64, f64, f64) = (0.122, 0.149, 0.200); // #1f2633
 
 const CSS: &str = r#"
+/* Every window (Novo download, progress, Preferências...) in the same palette. */
+window.background {
+  background-color: #151b25;
+  color: #e6e9ef;
+}
+window.background entry, window.background spinbutton {
+  background-color: #1b212c;
+  border-color: #2a3240;
+}
+window.background progressbar > trough { background-color: #232a36; }
+popover > contents, popover.menu > contents {
+  background-color: #1b212c;
+  color: #e6e9ef;
+}
 window.ldm, window.ldm .ldm-main {
   background-color: #0f131a;
   color: #e6e9ef;

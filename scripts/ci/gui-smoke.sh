@@ -96,6 +96,9 @@ echo "ldm-gui --pending quit after the windows closed"
 
 echo "== main window"
 "$BIN/ldm" add "$BASE/files/2097152.bin" -n foto.png --wait >/dev/null
+# Checked against its SHA-256: the list says so, and so does "Conferir soma".
+foto="$(find "$HOME/Downloads" -name foto.png)"
+"$BIN/ldm" verify "$("$BIN/ldm" list | awk '/foto.png/ { print $1 }')" "$(sha256sum "$foto")" | grep "confere"
 host "{\"type\":\"download\",\"url\":\"$BASE/files/4194304.bin\",\"kind\":\"direct\"}"
 sleep 2
 "$BIN/ldm-gui" &
@@ -118,7 +121,16 @@ sleep 0.5
 xdotool mousemove --window "$main" 520 96 click 3
 sleep 1
 shot 4b-menu-do-download
-xdotool key Escape
+# Its third item: "Conferir soma (SHA-256)…".
+xdotool key Down Down Down Return
+if verify="$(find_window "^Conferir soma$")"; then
+  sleep 1
+  shot 4d-conferir-soma
+  xdotool windowfocus --sync "$verify" key Escape
+else
+  echo "warning: the Conferir soma window did not open from the menu"
+  xdotool key Escape
+fi
 sleep 0.5
 xdotool windowfocus --sync "$main" key ctrl+comma
 prefs="$(find_window "^Preferências$")"

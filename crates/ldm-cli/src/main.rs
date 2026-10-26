@@ -8,8 +8,8 @@ use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use ldm_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
 use ldm_ipc::{
-    AddRequest, Category, Conflict, Connection, Direction, DownloadInfo, ProxyMode, ProxySettings, Queue, Request, Response,
-    Settings, SiteLogin, State, TimeOfDay, WhenDone, MAIN_QUEUE, WEEKDAYS,
+    AddRequest, Category, Checksum, Conflict, Connection, Direction, DownloadInfo, Hashing, ProxyMode, ProxySettings, Queue,
+    Request, Response, Settings, SiteLogin, State, TimeOfDay, WhenDone, MAIN_QUEUE, WEEKDAYS,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -172,6 +172,16 @@ enum Command {
         /// Fila do download (número em "ldm queue")
         #[arg(short = 'Q', long)]
         queue_id: Option<u64>,
+        /// Soma SHA-256 (ou SHA-1/384/512) publicada na página: o arquivo é conferido ao terminar
+        #[arg(long, value_parser = Checksum::parse)]
+        checksum: Option<Checksum>,
+    },
+    /// Confere a soma SHA-256 (ou SHA-1/384/512) do arquivo de um download
+    Verify {
+        id: u64,
+        /// A soma publicada na página do download; sem ela, só mostra a SHA-256 do arquivo
+        #[arg(value_parser = Checksum::parse)]
+        checksum: Option<Checksum>,
     },
     /// Limite de velocidade de um download, em KB/s (0 = só o limite geral)
     Limit { id: u64, kb_per_second: u64 },
@@ -307,6 +317,9 @@ enum Command {
         /// Fila do download (número em "ldm queue")
         #[arg(short = 'Q', long)]
         queue_id: Option<u64>,
+        /// Soma que o arquivo deve ter (SHA-256, SHA-1, SHA-384 ou SHA-512)
+        #[arg(long, value_parser = Checksum::parse)]
+        checksum: Option<Checksum>,
     },
     /// Pausa um download
     Pause { id: u64 },
@@ -347,8 +360,9 @@ enum Command {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
-        Command::Add { source, wait, confirm, queue_id } => add(source, wait, confirm, queue_id).await,
-        Command::Confirm { id, queue, dir, name, quality, if_exists, queue_id } => {
+        Command::Add { source, wait, confirm, queue_id, checksum } => add(source, wait, confirm, queue_id, checksum).await,
+        Command::Verify { id, checksum } => verify(id, checksum).await,
+        Command::Confirm { id, queue, dir, name, quality, if_exists, queue_id, checksum } => {
             let output_dir = dir.map(|d| std::path::absolute(&d).unwrap_or(d));
             let request = Request::Confirm {
                 id,
@@ -358,6 +372,7 @@ async fn main() -> anyhow::Result<()> {
                 format: quality,
                 conflict: if_exists,
                 queue: queue_id,
+                checksum,
             };
             simple(request).await
         }
@@ -559,7 +574,13 @@ async fn get(source: Source) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn add(source: Source, wait: bool, confirm: bool, queue: Option<u64>) -> anyhow::Result<()> {
+async fn add(
+    source: Source,
+    wait: bool,
+    confirm: bool,
+    queue: Option<u64>,
+    checksum: Option<Checksum>,
+) -> anyhow::Result<()> {
     ldm_ipc::ensure_daemon().await?;
     let request = AddRequest {
         queue,
@@ -572,6 +593,7 @@ async fn add(source: Source, wait: bool, confirm: bool, queue: Option<u64>) -> a
         headers: source.headers()?,
         start: true,
         confirm,
+        checksum,
         ..Default::default()
     };
     let mut connection = Connection::open().await?;
@@ -609,9 +631,15 @@ async fn add(source: Source, wait: bool, confirm: bool, queue: Option<u64>) -> a
         }
         bar.set_position(item.downloaded);
         bar.set_message(item.name.clone());
+        let checked = item.checksum.is_none() || matches!(item.hash, Some(Hashing::Done { .. } | Hashing::Failed { .. }));
         match item.state {
+            // With a checksum, done once the file is checked.
+            State::Completed if !checked => bar.set_message(format!("conferindo a soma de {}", item.name)),
             State::Completed => {
                 bar.finish_and_clear();
+                if let Some(problem) = check_problem(&item) {
+                    bail!(problem);
+                }
                 println!("✓ {}", item.path.map(|p| p.display().to_string()).unwrap_or(item.name));
                 return Ok(());
             }
@@ -945,6 +973,71 @@ fn state_label(state: State) -> &'static str {
     }
 }
 
+/// What is wrong with a finished download's check, if anything.
+fn check_problem(item: &DownloadInfo) -> Option<String> {
+    match (&item.hash, item.checksum_matches()) {
+        (Some(Hashing::Failed { error }), _) => Some(format!("não foi possível conferir a soma: {error}")),
+        (Some(Hashing::Done { digest }), Some(false)) => Some(format!(
+            "o {} não confere: o arquivo pode estar corrompido ou ter sido trocado\n  esperado: {}\n  arquivo:  {}",
+            digest.algo.label(),
+            item.checksum.as_ref().map_or("", |c| c.hex.as_str()),
+            digest.hex
+        )),
+        _ => None,
+    }
+}
+
+/// Checks the file of a download (`Request::Verify`) and waits for the result.
+async fn verify(id: u64, checksum: Option<Checksum>) -> anyhow::Result<()> {
+    let Response::Downloads { items } = ldm_ipc::call(&Request::List).await? else {
+        bail!("resposta inesperada do daemon");
+    };
+    let item = items.into_iter().find(|item| item.id == id).with_context(|| format!("download #{id} não encontrado"))?;
+    // Subscribed before asking (the list arrives once it is), so no update is missed.
+    let mut updates = Connection::open().await?;
+    updates.send(&Request::Subscribe { confirmer: false }).await?;
+    while !matches!(updates.recv().await?.context("o daemon encerrou a conexão")?, Response::Downloads { .. }) {}
+    ldm_ipc::call(&Request::Verify { id, checksum }).await?;
+    if item.state != State::Completed {
+        println!("download #{id}: a soma será conferida quando ele terminar");
+        return Ok(());
+    }
+    let bar = ProgressBar::new(item.total.unwrap_or(item.downloaded));
+    bar.set_style(bar_style());
+    bar.set_message("conferindo");
+    let mut started = false;
+    while let Some(message) = updates.recv().await? {
+        let item = match message {
+            Response::Update { item } if item.id == id => item,
+            Response::Removed { id: removed } if removed == id => bail!("o download foi removido"),
+            _ => continue,
+        };
+        match &item.hash {
+            Some(Hashing::Running { done }) => {
+                started = true;
+                bar.set_position(*done);
+            }
+            Some(Hashing::Done { digest }) if started => {
+                bar.finish_and_clear();
+                if let Some(problem) = check_problem(&item) {
+                    bail!(problem);
+                }
+                println!("{}: {}", digest.algo.label(), digest.hex);
+                if item.checksum_matches() == Some(true) {
+                    println!("✓ confere com a soma da página");
+                }
+                return Ok(());
+            }
+            Some(Hashing::Failed { .. }) if started => {
+                bar.finish_and_clear();
+                bail!(check_problem(&item).unwrap_or_default());
+            }
+            _ => {}
+        }
+    }
+    bail!("o daemon encerrou a conexão")
+}
+
 fn row(item: &DownloadInfo) -> String {
     let progress = match item.total {
         Some(total) if total > 0 => format!(
@@ -964,6 +1057,14 @@ fn row(item: &DownloadInfo) -> String {
     }
     if item.awaiting_url {
         line.push_str("\n      └ aguardando novo endereço: clique no link de novo no navegador");
+    }
+    match (&item.hash, item.checksum_matches()) {
+        (Some(Hashing::Running { done }), _) => line.push_str(&format!("\n      └ conferindo a soma… {}", bytes(*done))),
+        (_, Some(true)) => line.push_str("\n      └ soma conferida: é o arquivo da página"),
+        _ => {}
+    }
+    if let Some(problem) = check_problem(item) {
+        line.push_str(&format!("\n      └ {}", problem.lines().next().unwrap_or_default()));
     }
     line
 }

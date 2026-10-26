@@ -1152,6 +1152,7 @@ dependencies = [
  "ldm-core",
  "ldm-ipc",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "tokio",

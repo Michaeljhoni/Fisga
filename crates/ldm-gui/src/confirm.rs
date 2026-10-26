@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib, pango};
-use ldm_ipc::{Category, Conflict, DownloadInfo, Existing, MediaFormat, Queue, Request, SourceKind};
+use ldm_ipc::{Category, Checksum, Conflict, DownloadInfo, Existing, MediaFormat, Queue, Request, SourceKind};
 
 use crate::format;
 use crate::ipc;
@@ -25,6 +25,8 @@ pub struct ConfirmDialog {
     kind: SourceKind,
     window: gtk::Window,
     name: gtk::Entry,
+    /// The checksum published on the download page (optional).
+    checksum: gtk::Entry,
     size: gtk::Label,
     dir_label: gtk::Label,
     error: gtk::Label,
@@ -136,6 +138,12 @@ impl ConfirmDialog {
         exists_caption.set_valign(gtk::Align::Start);
         let queue_choice = gtk::DropDown::builder().halign(gtk::Align::Start).build();
         let queue_caption = caption("Fila");
+        let checksum = gtk::Entry::builder()
+            .placeholder_text("opcional: a SHA-256 publicada na página, para conferir o arquivo")
+            .text(info.checksum.as_ref().map(|c| c.hex.as_str()).unwrap_or_default())
+            .activates_default(true)
+            .hexpand(true)
+            .build();
 
         let grid = gtk::Grid::builder().column_spacing(12).row_spacing(10).build();
         for (row, (label, widget)) in [
@@ -145,6 +153,7 @@ impl ConfirmDialog {
             (queue_caption.clone(), queue_choice.upcast_ref()),
             (quality_caption.clone(), quality.upcast_ref()),
             (caption("Tamanho"), size.upcast_ref()),
+            (caption("Soma"), checksum.upcast_ref()),
             (exists_caption.clone(), exists_box.upcast_ref()),
         ]
         .into_iter()
@@ -185,6 +194,7 @@ impl ConfirmDialog {
             kind: info.kind,
             window,
             name,
+            checksum,
             size,
             dir_label,
             error,
@@ -476,6 +486,7 @@ impl ConfirmDialog {
             button.set_sensitive(!busy);
         }
         self.name.set_sensitive(!busy);
+        self.checksum.set_sensitive(!busy);
         self.quality.set_sensitive(!busy);
         self.queue.set_sensitive(!busy);
         self.exists_choice.set_sensitive(!busy);
@@ -489,7 +500,18 @@ impl ConfirmDialog {
         let conflict = self.conflict();
         let queue =
             self.queue_ids.borrow().get(self.queue.selected() as usize).copied().filter(|_| self.queue.is_visible());
-        let request = Request::Confirm { id: self.id, now, file_name, output_dir, format, conflict, queue };
+        let checksum = match self.checksum.text().trim() {
+            "" => None,
+            text => match Checksum::parse(text) {
+                Ok(checksum) => Some(checksum),
+                Err(e) => {
+                    self.error.set_label(&format!("Soma inválida: {e}"));
+                    self.error.set_visible(true);
+                    return;
+                }
+            },
+        };
+        let request = Request::Confirm { id: self.id, now, file_name, output_dir, format, conflict, queue, checksum };
         self.set_busy(true);
         self.error.set_visible(false);
         let this = self.clone();

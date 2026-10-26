@@ -137,14 +137,15 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: UnixStream, 
                     Err(e) => Response::Error { message: e.to_string() },
                 }
             }
-            Request::Confirm { id, now, file_name, output_dir, format, conflict, queue } => {
-                result(manager.confirm(id, Answer { now, file_name, output_dir, format, conflict, queue }))
+            Request::Confirm { id, now, file_name, output_dir, format, conflict, queue, checksum } => {
+                result(manager.confirm(id, Answer { now, file_name, output_dir, format, conflict, queue, checksum }))
             }
             Request::SetQueue { id, queue } => result(manager.set_queue(id, queue)),
             Request::Reorder { id, direction } => result(manager.reorder(id, direction)),
             Request::RefreshUrl { id, url } => result(manager.refresh_url(id, url).await),
             Request::AwaitUrl { id, waiting } => result(manager.await_url(id, waiting)),
             Request::SetSpeedLimit { id, limit } => result(manager.set_speed_limit(id, limit)),
+            Request::Verify { id, checksum } => result(manager.verify(id, checksum)),
             Request::Grab { url, depth } => match manager.grab(&url, depth).await {
                 Ok((links, pages)) => Response::Grabbed { links, pages },
                 Err(e) => Response::Error { message: format!("{e:#}") },

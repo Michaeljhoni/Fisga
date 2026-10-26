@@ -160,6 +160,12 @@ instalação antiga: `ldm install-hosts --uninstall` e `rm ~/.local/bin/{ldm,ldm
     em `~/.config/ldm/logins.json`, legível só pelo seu usuário, nunca no log.
   - Trocar o proxy vale para os downloads que começarem depois; os que estão baixando continuam
     pelo caminho antigo até serem pausados e retomados.
+- **Conferir a soma** (SHA-256, ou SHA-1/384/512): cole a soma publicada na página de download
+  no campo *Soma* da janela *Novo download* (ou `ldm add --checksum`), e o LDM lê o arquivo ao
+  terminar e confere. Se não bater, avisa, marca o download ("Concluído — atenção: o SHA-256 não
+  confere") e não roda as ações abaixo. Depois, no menu da linha, *Conferir soma (SHA-256)…*
+  mostra a SHA-256 do arquivo ou confere com outra soma; aceita o texto como as páginas
+  mostram: só os dígitos, `sha256:…`, ou uma linha de um arquivo `SHA256SUMS`.
 - **Ao concluir** (aba *Ao concluir* das Preferências), nesta ordem:
   - **Verificar com o antivírus**: o ClamAV (`clamdscan`, ou `clamscan` sem o serviço). Se achar
     um vírus, avisa, marca o download ("Concluído — atenção: ...") e não roda o comando.
@@ -236,6 +242,9 @@ ldm batch 'https://site/parte-*.rar' --from a --to f --dry-run   # só mostra os
 ldm export --unfinished > pendentes.txt          # os endereços da lista (importe com ldm batch --file)
 ldm grab https://site/pub/ --depth 1 --type documento         # lista os PDFs, DOCs... do site
 ldm grab https://site/aulas/ --pattern 'aula_*.mp4' --add -Q 1  # e manda para a fila 1
+ldm add https://site/distro.iso --checksum 3a7b…   # confere a SHA-256 da página ao terminar
+ldm verify 7                                     # a SHA-256 do arquivo do download 7
+ldm verify 7 "$(grep distro.iso SHA256SUMS)"     # confere com a linha do SHA256SUMS
 ldm settings --antivirus true --sound false      # ao concluir: ClamAV sim, som não
 ldm settings --on-complete 'mv "$LDM_FILE" ~/Concluídos/'   # comando ao concluir ("" = nenhum)
 ldm settings --watch-clipboard false             # não abrir a janela para links copiados

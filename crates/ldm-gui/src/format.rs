@@ -3,7 +3,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use ldm_ipc::{Category, DownloadInfo, State};
+use ldm_ipc::{Category, DownloadInfo, Hashing, State};
 
 /// Binary units with a decimal comma: "1,5 MB".
 pub fn bytes(n: u64) -> String {
@@ -152,9 +152,28 @@ pub fn state_label(state: State) -> &'static str {
     }
 }
 
+/// The checksum check of a finished download, as its status.
+pub fn check_status(info: &DownloadInfo) -> Option<String> {
+    match (&info.hash, info.checksum_matches()) {
+        (Some(Hashing::Running { done }), _) => Some(match info.total.filter(|total| *total > 0) {
+            Some(total) => format!("Conferindo a soma… {}%", (done * 100 / total).min(100)),
+            None => format!("Conferindo a soma… {}", bytes(*done)),
+        }),
+        (Some(Hashing::Failed { .. }), _) => Some("Concluído \u{2014} atenção: não foi possível conferir a soma".into()),
+        (Some(Hashing::Done { digest }), Some(false)) => {
+            Some(format!("Concluído \u{2014} atenção: o {} não confere", digest.algo.label()))
+        }
+        (Some(Hashing::Done { .. }), Some(true)) => Some("Concluído · soma conferida".into()),
+        _ => None,
+    }
+}
+
 pub fn status(info: &DownloadInfo) -> String {
     if info.awaiting_url {
         return "Aguardando novo endereço".into();
+    }
+    if let Some(check) = check_status(info).filter(|_| info.state == State::Completed && info.error.is_none()) {
+        return check;
     }
     let status: String = match (&info.error, info.state) {
         (Some(error), State::Failed) => return format!("Erro: {error}"),
@@ -207,7 +226,7 @@ pub fn category_dir(dir: &Path, from: Category, to: Category, category_folders: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ldm_ipc::SourceKind;
+    use ldm_ipc::{Checksum, SourceKind};
 
     fn info(state: State, downloaded: u64, total: Option<u64>, speed: f64) -> DownloadInfo {
         DownloadInfo {
@@ -232,6 +251,8 @@ mod tests {
             order: 1,
             page: None,
             awaiting_url: false,
+            checksum: None,
+            hash: None,
             speed_limit: 0,
         }
     }
@@ -323,6 +344,23 @@ mod tests {
         assert_eq!(duration(5), "5 s");
         assert_eq!(duration(200), "3 min 20 s");
         assert_eq!(duration(3900), "1 h 05 min");
+    }
+
+    #[test]
+    fn checksum_status() {
+        let mut done = info(State::Completed, 4096, Some(4096), 0.0);
+        assert_eq!(status(&done), "Concluído");
+        done.hash = Some(Hashing::Running { done: 1024 });
+        assert_eq!(status(&done), "Conferindo a soma… 25%");
+        let digest = Checksum::parse(&"ab".repeat(32)).unwrap();
+        done.hash = Some(Hashing::Done { digest: digest.clone() });
+        assert_eq!(status(&done), "Concluído", "nothing to compare with");
+        done.checksum = Some(digest);
+        assert_eq!(status(&done), "Concluído · soma conferida");
+        done.checksum = Some(Checksum::parse(&"cd".repeat(32)).unwrap());
+        assert_eq!(status(&done), "Concluído \u{2014} atenção: o SHA-256 não confere");
+        done.hash = Some(Hashing::Failed { error: "sumiu".into() });
+        assert_eq!(status(&done), "Concluído \u{2014} atenção: não foi possível conferir a soma");
     }
 
     #[test]

@@ -1,6 +1,7 @@
-//! What happens when a download finishes (`Settings::on_complete`): the
-//! ClamAV scan (an infected file is flagged and nothing else runs), the
-//! user's command, and the "complete" sound.
+//! What happens when a download finishes: the checksum check when the
+//! download has one (a different file is flagged and nothing else runs),
+//! then `Settings::on_complete`: the ClamAV scan (an infected file is
+//! flagged and nothing else runs), the user's command, and the "complete" sound.
 //!
 //! The user's command runs in `sh -c` with the file in environment variables
 //! (`$LDM_FILE`...), never pasted into the command text: a file name sent by
@@ -44,6 +45,9 @@ impl Manager {
     pub(super) async fn after_complete(self: Arc<Self>, id: u64, path: PathBuf) {
         let actions = self.settings().on_complete;
         let Some(info) = self.list().into_iter().find(|info| info.id == id) else { return };
+        if info.checksum.is_some() && !self.check_file(id, &path).await {
+            return;
+        }
         if actions.antivirus {
             match self.scan(&path).await {
                 Scan::Clean => tracing::info!(id, "ClamAV: limpo"),

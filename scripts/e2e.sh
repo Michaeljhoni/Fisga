@@ -316,6 +316,26 @@ if grep -q 2621441 "$SANDBOX/feito"; then echo "the command ran on an infected f
 echo "infected file flagged, command skipped"
 "$BIN/ldm" settings --antivirus false --on-complete "" | grep "comando:    nenhum"
 
+step "checksum: the file is checked against the one the page published"
+sum="$(sha256sum "$DL/10485760.bin" | cut -d' ' -f1)"
+"$BIN/ldm" add "$SMALL" -o "$SANDBOX/soma" --checksum "SHA-256: ${sum^^}" --wait | grep "✓"
+"$BIN/ldm" list | grep "soma conferida"; echo "right checksum: checked"
+if "$BIN/ldm" add "$SMALL" -o "$SANDBOX/soma-errada" --checksum "sha256:$(printf '0%.0s' $(seq 64))" --wait 2> "$SANDBOX/soma.err"; then
+  echo "a wrong checksum was accepted"; exit 1
+fi
+grep "não confere" "$SANDBOX/soma.err"
+"$BIN/ldm" list | grep "SHA-256 não confere"; echo "wrong checksum: flagged"
+id="$(last_id)"
+# The right one again, with the checksum it keeps.
+"$BIN/ldm" verify $((id - 1)) | grep -x "SHA-256: $sum"; echo "verify again: the file's SHA-256"
+# The wrong one with another checksum, as a SHA1SUMS file has it.
+(cd "$SANDBOX/soma-errada" && sha1sum 10485760.bin) > "$SANDBOX/SHA1SUMS"
+"$BIN/ldm" verify "$id" "$(cat "$SANDBOX/SHA1SUMS")" | grep "confere com a soma da página"; echo "verify with a SHA1SUMS line"
+if "$BIN/ldm" add "$SMALL" --checksum "md5:098f6bcd4621d373cade4e832627b4f6" 2>/dev/null; then
+  echo "an MD5 was accepted"; exit 1
+fi
+echo "invalid checksum refused"
+
 step "list"
 "$BIN/ldm" list
 echo; echo "E2E OK"

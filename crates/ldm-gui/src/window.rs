@@ -107,6 +107,7 @@ struct Actions {
     move_down: gio::SimpleAction,
     move_to_queue: gio::SimpleAction,
     refresh_url: gio::SimpleAction,
+    verify: gio::SimpleAction,
     /// Opens the progress window, where the download's own limit is set.
     limit_speed: gio::SimpleAction,
 }
@@ -132,6 +133,7 @@ fn row_menu_model(queues: &[Queue]) -> gio::Menu {
     let section = gio::Menu::new();
     section.append(Some("Abrir"), Some("win.open-file"));
     section.append(Some("Abrir pasta"), Some("win.open-folder"));
+    section.append(Some("Conferir soma (SHA-256)…"), Some("win.verify"));
     menu.append_section(None, &section);
     let section = gio::Menu::new();
     section.append(Some("Retomar"), Some("win.resume"));
@@ -444,6 +446,7 @@ impl MainWindow {
             move_down: gio::SimpleAction::new("move-down", None),
             move_to_queue: gio::SimpleAction::new("move-to-queue", Some(glib::VariantTy::UINT64)),
             refresh_url: gio::SimpleAction::new("refresh-url", None),
+            verify: gio::SimpleAction::new("verify", None),
             limit_speed: gio::SimpleAction::new("limit-speed", None),
         };
         for action in [
@@ -456,6 +459,7 @@ impl MainWindow {
             &actions.move_down,
             &actions.move_to_queue,
             &actions.refresh_url,
+            &actions.verify,
             &actions.limit_speed,
         ] {
             window.add_action(action);
@@ -714,6 +718,12 @@ impl MainWindow {
                 crate::refresh::show(w.upcast_ref(), &info);
             }
         });
+        let (s, w) = (selection.clone(), window.clone());
+        self.actions.verify.connect_activate(move |_, _| {
+            if let Some(item) = s.selected_item().and_downcast::<DownloadItem>() {
+                crate::verify::show(w.upcast_ref(), &item);
+            }
+        });
         let (s, a) = (selection.clone(), app.clone());
         self.actions.limit_speed.connect_activate(move |_, _| {
             if let (Some(info), Some(app)) = (Self::selected(&s), a.upgrade()) {
@@ -837,6 +847,8 @@ fn update_actions(actions: &Actions, selected: Option<DownloadInfo>) {
     actions.move_down.set_enabled(unfinished);
     actions.move_to_queue.set_enabled(state.is_some());
     actions.refresh_url.set_enabled(matches!(state, Some(State::Queued | State::Running | State::Paused | State::Failed)));
+    // A pending download takes its checksum in the "Novo download" window.
+    actions.verify.set_enabled(state.is_some_and(|s| s != State::Pending));
     actions.limit_speed.set_enabled(matches!(state, Some(State::Queued | State::Running | State::Paused | State::Failed)));
 }
 
@@ -1056,6 +1068,8 @@ mod tests {
             order: 1,
             page: None,
             awaiting_url: false,
+            checksum: None,
+            hash: None,
             speed_limit: 0,
         }
     }

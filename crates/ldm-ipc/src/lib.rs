@@ -93,6 +93,9 @@ pub struct AddRequest {
     /// A `Queue::id`; `None` = the main queue.
     #[serde(default)]
     pub queue: Option<u64>,
+    /// The checksum the download page published, checked when it finishes.
+    #[serde(default)]
+    pub checksum: Option<Checksum>,
 }
 
 fn yes() -> bool {
@@ -802,10 +805,141 @@ pub struct DownloadInfo {
     /// This download's own speed limit, bytes per second; 0 = only the global one.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub speed_limit: u64,
+    /// The checksum the file must have, from the download page; checked when
+    /// it finishes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checksum: Option<Checksum>,
+    /// The last check of the file (`Request::Verify`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<Hashing>,
+}
+
+impl DownloadInfo {
+    /// `Some(false)`: the file is not the one the download page published.
+    pub fn checksum_matches(&self) -> Option<bool> {
+        match (&self.checksum, &self.hash) {
+            (Some(expected), Some(Hashing::Done { digest })) => Some(expected == digest),
+            _ => None,
+        }
+    }
 }
 
 fn is_zero(value: &u64) -> bool {
     *value == 0
+}
+
+/// The algorithms download pages publish checksums in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HashAlgo {
+    Sha1,
+    Sha256,
+    Sha384,
+    Sha512,
+}
+
+impl HashAlgo {
+    pub const ALL: [HashAlgo; 4] = [HashAlgo::Sha1, HashAlgo::Sha256, HashAlgo::Sha384, HashAlgo::Sha512];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            HashAlgo::Sha1 => "sha1",
+            HashAlgo::Sha256 => "sha256",
+            HashAlgo::Sha384 => "sha384",
+            HashAlgo::Sha512 => "sha512",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            HashAlgo::Sha1 => "SHA-1",
+            HashAlgo::Sha256 => "SHA-256",
+            HashAlgo::Sha384 => "SHA-384",
+            HashAlgo::Sha512 => "SHA-512",
+        }
+    }
+
+    /// Hex digits in a digest.
+    pub fn hex_len(self) -> usize {
+        match self {
+            HashAlgo::Sha1 => 40,
+            HashAlgo::Sha256 => 64,
+            HashAlgo::Sha384 => 96,
+            HashAlgo::Sha512 => 128,
+        }
+    }
+}
+
+/// A file's checksum: the algorithm and the digest in lowercase hex, written
+/// "sha256:3a7b…".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Checksum {
+    pub algo: HashAlgo,
+    pub hex: String,
+}
+
+impl Checksum {
+    /// A checksum as download pages show it: "sha256:3A7B…", "SHA-256: 3a7b…",
+    /// a line of a SHA256SUMS file ("3a7b…  file.iso", or "SHA256 (file.iso) =
+    /// 3a7b…"), or the digits alone, the algorithm told by how many there are.
+    pub fn parse(text: &str) -> Result<Checksum, String> {
+        let words: Vec<String> = text
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .filter(|word| !word.is_empty())
+            .map(str::to_ascii_lowercase)
+            .collect();
+        let named = words.iter().find_map(|word| {
+            let word = word.replace('-', "");
+            HashAlgo::ALL.into_iter().find(|algo| algo.name() == word)
+        });
+        let digits = words.iter().find(|word| {
+            word.chars().all(|c| c.is_ascii_hexdigit()) && HashAlgo::ALL.iter().any(|algo| algo.hex_len() == word.len())
+        });
+        let Some(hex) = digits else {
+            return Err(match named {
+                Some(algo) => format!("o {} tem {} dígitos hexadecimais", algo.label(), algo.hex_len()),
+                None => "não há uma soma SHA-1, SHA-256, SHA-384 ou SHA-512 no texto".into(),
+            });
+        };
+        let by_length = HashAlgo::ALL.into_iter().find(|algo| algo.hex_len() == hex.len()).expect("checked above");
+        match named {
+            Some(algo) if algo != by_length => {
+                Err(format!("o {} tem {} dígitos hexadecimais; este tem {}", algo.label(), algo.hex_len(), hex.len()))
+            }
+            _ => Ok(Checksum { algo: by_length, hex: hex.clone() }),
+        }
+    }
+}
+
+impl std::fmt::Display for Checksum {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}:{}", self.algo.name(), self.hex)
+    }
+}
+
+impl From<Checksum> for String {
+    fn from(checksum: Checksum) -> String {
+        checksum.to_string()
+    }
+}
+
+impl TryFrom<String> for Checksum {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Checksum, String> {
+        Checksum::parse(&text)
+    }
+}
+
+/// Reading a finished download's file to get its checksum.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Hashing {
+    /// Bytes read so far.
+    Running { done: u64 },
+    Done { digest: Checksum },
+    Failed { error: String },
 }
 
 /// The most addresses a batch may have.
@@ -963,6 +1097,9 @@ pub enum Request {
         /// Another queue for it (a `Queue::id`).
         #[serde(default)]
         queue: Option<u64>,
+        /// The checksum the file must have.
+        #[serde(default)]
+        checksum: Option<Checksum>,
     },
     /// Moves a download to another queue, at its end.
     SetQueue { id: u64, queue: u64 },
@@ -977,6 +1114,14 @@ pub enum Request {
     /// A download's own speed limit in bytes per second (0 = none), on top of
     /// the global one. Applies at once to direct downloads.
     SetSpeedLimit { id: u64, limit: u64 },
+    /// Checks a finished download's file against `checksum`, which becomes
+    /// the one it must have; `None` keeps the one it has, or only computes
+    /// the SHA-256. An unfinished download is checked when it finishes.
+    Verify {
+        id: u64,
+        #[serde(default)]
+        checksum: Option<Checksum>,
+    },
     /// IDM's site grabber: the files linked from `url` and, up to `depth`
     /// levels, from its pages below it on the same site. Answered with
     /// `Response::Grabbed`; adding them is an `AddBatch`.
@@ -1142,6 +1287,59 @@ mod tests {
     }
 
     #[test]
+    fn checksums_as_download_pages_write_them() {
+        let sha256 = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+        let parsed = Checksum::parse(&sha256.to_uppercase()).unwrap();
+        assert_eq!(parsed, Checksum { algo: HashAlgo::Sha256, hex: sha256.into() });
+        for text in [
+            format!("sha256:{sha256}"),
+            format!("SHA-256: {sha256}"),
+            format!("{sha256}  ubuntu-24.04-desktop-amd64.iso"),
+            format!("SHA256 (ubuntu.iso) = {sha256}"),
+            format!("  {sha256}\n"),
+        ] {
+            assert_eq!(Checksum::parse(&text).unwrap(), parsed, "{text}");
+        }
+        let sha1 = Checksum::parse("SHA1: a94a8fe5ccb19ba61c4c0873d391e987982fbbd3").unwrap();
+        assert_eq!(sha1.algo, HashAlgo::Sha1);
+        assert_eq!(Checksum::parse(&"ab".repeat(64)).unwrap().algo, HashAlgo::Sha512);
+        assert_eq!(Checksum::parse(&"cd".repeat(48)).unwrap().algo, HashAlgo::Sha384);
+
+        // The name says SHA-256 but the digits are a SHA-1.
+        let wrong = Checksum::parse("sha256: a94a8fe5ccb19ba61c4c0873d391e987982fbbd3").unwrap_err();
+        assert!(wrong.contains("64"), "{wrong}");
+        assert!(Checksum::parse("MD5: 098f6bcd4621d373cade4e832627b4f6").is_err());
+        assert!(Checksum::parse("sha256: 9f86d08").unwrap_err().contains("64"));
+        assert!(Checksum::parse("").is_err());
+
+        // On the wire it is "algorithm:digits".
+        let json = serde_json::to_string(&parsed).unwrap();
+        assert_eq!(json, format!("\"sha256:{sha256}\""));
+        assert_eq!(serde_json::from_str::<Checksum>(&json).unwrap(), parsed);
+        assert!(serde_json::from_str::<Checksum>("\"nada\"").is_err());
+    }
+
+    #[test]
+    fn checksum_matches_only_a_finished_check() {
+        let mut info: DownloadInfo = serde_json::from_str(
+            r#"{"id":1,"url":"https://e.com/a","kind":"direct","name":"a","path":null,"state":"completed",
+               "downloaded":1,"total":1,"speed":0,"connections":0,"resumable":true,"error":null,"createdAt":0}"#,
+        )
+        .unwrap();
+        assert_eq!(info.checksum_matches(), None);
+        let digest = Checksum::parse(&"ab".repeat(32)).unwrap();
+        info.checksum = Some(digest.clone());
+        info.hash = Some(Hashing::Running { done: 1 });
+        assert_eq!(info.checksum_matches(), None);
+        info.hash = Some(Hashing::Done { digest: digest.clone() });
+        assert_eq!(info.checksum_matches(), Some(true));
+        info.hash = Some(Hashing::Done { digest: Checksum::parse(&"cd".repeat(32)).unwrap() });
+        assert_eq!(info.checksum_matches(), Some(false));
+        let json = serde_json::to_string(&info.hash).unwrap();
+        assert!(json.contains(r#""state":"done""#), "{json}");
+    }
+
+    #[test]
     fn subscribe_without_fields_is_not_a_confirmer() {
         let request: Request = serde_json::from_str(r#"{"type":"subscribe"}"#).unwrap();
         assert!(matches!(request, Request::Subscribe { confirmer: false }));
@@ -1159,6 +1357,7 @@ mod tests {
             format: None,
             conflict: None,
             queue: None,
+            checksum: None,
         };
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains(r#""type":"confirm""#), "{json}");
@@ -1174,7 +1373,8 @@ mod tests {
                 output_dir: None,
                 format: None,
                 conflict: None,
-                queue: None
+                queue: None,
+                checksum: None
             }
         ));
         let full: Request =

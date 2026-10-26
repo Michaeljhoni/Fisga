@@ -18,6 +18,8 @@ futures-util = "0.3"
 indicatif = "0.17"
 libc = "0.2"
 percent-encoding = "2"
+# Already in the tree through rustls; used for its SHA-1/2.
+ring = "0.17"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "stream", "socks"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

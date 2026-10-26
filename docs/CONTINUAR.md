@@ -271,6 +271,13 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   = `info.error` num download concluído, e para aí), o comando do usuário em `sh -c` com
   `$LDM_FILE`... no ambiente (nunca no texto), e o som. Nos testes, `LDM_CLAMSCAN_CMD` e
   `LDM_SOUND_CMD` trocam o ClamAV e o tocador.
+- ~~Conferir a soma (SHA-256)~~ (feito, `manager/verify.rs`): `Checksum::parse` (no `ldm-ipc`)
+  aceita os dígitos sozinhos (o algoritmo pelo tamanho: SHA-1/256/384/512), `sha256:…`, e linhas
+  de `SHA256SUMS` (GNU e BSD). `DownloadInfo.checksum` = a esperada; `DownloadInfo.hash` = a
+  última leitura (`Hashing::Running/Done/Failed`), e `checksum_matches()` compara. Com soma,
+  `after_complete` confere antes do ClamAV; diferente = avisa e para (sem comando nem som).
+  `Request::Verify` (menu da linha, `ldm verify`) lê de novo, com progresso a cada 250 ms.
+  O hash é o do `ring` (já vinha com o rustls, com SHA-NI), sem dependência nova. MD5 não.
 - ~~Grabber~~ (feito, `manager/grab.rs`): `Request::Grab { url, depth }` lê a página e, até
   `depth` (máximo `MAX_GRAB_DEPTH` = 3), as páginas do mesmo host abaixo da pasta inicial;
   `extract_links` pega `href`/`src` sem parser de HTML; limites de 100 páginas, 5 MB e 15 s por

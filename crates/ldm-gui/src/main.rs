@@ -24,6 +24,7 @@ mod prefs;
 mod progress;
 mod refresh;
 mod tray;
+mod verify;
 mod window;
 
 use gtk::prelude::*;

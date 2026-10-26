@@ -9,8 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context};
 use ldm_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
 use ldm_ipc::{
-    AddRequest, Category, Conflict, Direction, DownloadInfo, LocalTime, PowerPlan, Response, Settings, SourceKind,
-    State, MAIN_QUEUE,
+    AddRequest, Category, Checksum, Conflict, Direction, DownloadInfo, Hashing, LocalTime, PowerPlan, Response,
+    Settings, SourceKind, State, MAIN_QUEUE,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
@@ -23,6 +23,7 @@ mod grab;
 mod network;
 mod refresh;
 mod scheduler;
+mod verify;
 
 pub use scheduler::tick_interval;
 
@@ -38,6 +39,8 @@ pub struct Answer {
     pub conflict: Option<Conflict>,
     /// Another queue (a `Queue::id`).
     pub queue: Option<u64>,
+    /// The checksum the file must have.
+    pub checksum: Option<Checksum>,
 }
 
 pub enum JobResult {
@@ -190,6 +193,10 @@ impl Manager {
                 }
                 info.speed = 0.0;
                 info.probing = false;
+                // The check stopped with the daemon.
+                if matches!(info.hash, Some(Hashing::Running { .. })) {
+                    info.hash = None;
+                }
                 if info.category == Category::Other {
                     info.category = Category::detect(&info.name, info.kind);
                 }
@@ -467,6 +474,8 @@ impl Manager {
                 order,
                 page: request.page_url.clone().or(request.referrer.clone()),
                 awaiting_url: false,
+                checksum: request.checksum.clone(),
+                hash: None,
                 speed_limit: 0,
             };
             let _ = self.updates.send(Response::Update { item: info.clone() });
@@ -542,7 +551,7 @@ impl Manager {
 
     /// Answers a pending download: queue it, or start it right away (`now`).
     pub fn confirm(self: &Arc<Self>, id: u64, answer: Answer) -> anyhow::Result<()> {
-        let Answer { now, file_name, output_dir, format, conflict, queue } = answer;
+        let Answer { now, file_name, output_dir, format, conflict, queue, checksum } = answer;
         let settings = self.settings();
         if let Some(queue) = queue {
             self.check_queue(queue)?;
@@ -601,6 +610,9 @@ impl Manager {
             // Last, after every check that can refuse the answer.
             if let Some(queue) = queue {
                 job.info.queue = queue;
+            }
+            if checksum.is_some() {
+                job.info.checksum = checksum;
             }
             job.auto_dir = false;
             job.info.state = State::Queued;
@@ -723,6 +735,8 @@ impl Manager {
             job.forced = false;
             job.info.state = State::Running;
             job.info.error = None;
+            // The file is about to change: an earlier check no longer holds.
+            job.info.hash = None;
             let _ = self.updates.send(Response::Update { item: job.info.clone() });
             tokio::spawn(self.clone().run_job(id, cancel));
         }

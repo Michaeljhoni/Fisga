@@ -23,6 +23,10 @@ window.background entry, window.background spinbutton {
   border-color: #2a3240;
 }
 window.background progressbar > trough { background-color: #232a36; }
+window.background notebook > header, window.background notebook > stack { background-color: #151b25; }
+window.background notebook > header tab:checked { box-shadow: inset 0 -2px #f59e0b; }
+switch:checked { background-color: #f59e0b; }
+checkbutton check:checked { background-color: #f59e0b; color: #111; }
 popover > contents, popover.menu > contents {
   background-color: #1b212c;
   color: #e6e9ef;

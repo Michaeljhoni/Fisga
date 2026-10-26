@@ -1179,7 +1179,7 @@ mod tests {
         let views = View::all(&queues);
         assert_eq!(views[3], View::Failed);
         assert_eq!(views[4], View::Category(Category::Video));
-        assert_eq!(views.len(), 3 + Category::ALL.len() + 1);
+        assert_eq!(views.len(), 4 + Category::ALL.len() + 1);
         assert_eq!(views.last(), Some(&View::Queue(ldm_ipc::MAIN_QUEUE)));
         assert_eq!(View::Queue(0).label(&queues), ldm_ipc::MAIN_QUEUE_NAME);
         assert_eq!(View::Queue(0).group(), Some("Filas"));

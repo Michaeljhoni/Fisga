@@ -1,10 +1,11 @@
 //! Streams (HLS/DASH) and media pages (YouTube, Vimeo...) are handed to yt-dlp,
 //! which keeps site extractors up to date and merges audio/video with ffmpeg.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ldm_ipc::{AddRequest, Cookie, MediaFormat, SourceKind};
 use serde_json::Value;
@@ -40,6 +41,42 @@ fn write_cookies_file(name: &str, cookies: &[Cookie]) -> std::io::Result<PathBuf
 
 fn parse_number(value: &str) -> Option<f64> {
     value.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+/// The span the speed is measured over.
+const RATE_WINDOW: Duration = Duration::from_secs(5);
+
+/// The speed, measured here from the bytes yt-dlp reports. Its own figure
+/// covers only the request in progress (the start of each chunk reads far
+/// above the line's real speed) and stays put while nothing arrives, which
+/// froze the time left.
+#[derive(Default)]
+struct Rate {
+    samples: VecDeque<(Instant, u64)>,
+}
+
+impl Rate {
+    /// Adds what has arrived by `at`; `None` until a second of data is in.
+    fn sample(&mut self, at: Instant, bytes: u64) -> Option<f64> {
+        // Fewer bytes: the next file started (the audio after the video).
+        if self.samples.back().is_some_and(|(_, last)| bytes < *last) {
+            self.samples.clear();
+        }
+        self.samples.push_back((at, bytes));
+        while self.samples.len() > 2 && at.duration_since(self.samples[1].0) >= RATE_WINDOW {
+            self.samples.pop_front();
+        }
+        let (first_at, first) = *self.samples.front()?;
+        let elapsed = at.duration_since(first_at).as_secs_f64();
+        (elapsed >= 1.0).then(|| (bytes - first) as f64 / elapsed)
+    }
+
+    /// The bytes last reported, measured again now: they stop counting as
+    /// recent, so a stalled download slows down to zero.
+    fn tick(&mut self, at: Instant) -> Option<f64> {
+        let (_, bytes) = *self.samples.back()?;
+        self.sample(at, bytes)
+    }
 }
 
 /// Signed video links (HLS/DASH manifests) stop working after a while, and the
@@ -365,12 +402,19 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
     });
     let mut final_path: Option<PathBuf> = None;
     let mut last_error: Option<String> = None;
+    let mut rate = Rate::default();
+    let mut ticker = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
                 // yt-dlp keeps its .part files and continues them on the next run.
                 let _ = child.kill().await;
                 return JobResult::Paused;
+            }
+            _ = ticker.tick() => {
+                if let Some(speed) = rate.tick(Instant::now()) {
+                    manager.update(id, |info| info.speed = speed);
+                }
             }
             line = lines.recv() => {
                 let Some(line) = line else { break };
@@ -379,7 +423,10 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
                     let downloaded = fields.first().and_then(|v| parse_number(v));
                     let total = fields.get(1).and_then(|v| parse_number(v))
                         .or_else(|| fields.get(2).and_then(|v| parse_number(v)));
-                    let speed = fields.get(3).and_then(|v| parse_number(v));
+                    // yt-dlp's own speed only until there is enough to measure.
+                    let speed = downloaded
+                        .and_then(|d| rate.sample(Instant::now(), d as u64))
+                        .or_else(|| fields.get(3).and_then(|v| parse_number(v)));
                     manager.update(id, |info| {
                         if let Some(d) = downloaded { info.downloaded = d as u64; }
                         if let Some(t) = total { info.total = Some(t as u64); }
@@ -417,6 +464,31 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn speed_is_measured_over_seconds_not_bursts() {
+        const MB: u64 = 1_000_000;
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let mut rate = Rate::default();
+        assert_eq!(rate.sample(at(0), 0), None);
+        assert_eq!(rate.sample(at(500), 40 * MB), None, "half a second is too little to tell");
+        // 10 MB/s for ten seconds, then a burst: 40 MB in a tenth of a second.
+        for second in 1..=10 {
+            rate.sample(at(second * 1000), 40 * MB + second * 10 * MB);
+        }
+        let burst = rate.sample(at(10_100), 180 * MB).unwrap();
+        assert!(burst < 20.0 * MB as f64, "{burst}: the burst is spread over the window");
+        // Then nothing arrives: the speed falls to zero instead of staying put.
+        let mut speed = burst;
+        for second in 11..=16 {
+            speed = rate.tick(at(second * 1000)).unwrap();
+        }
+        assert_eq!(speed, 0.0);
+        // The audio after the video: counting starts over.
+        assert_eq!(rate.sample(at(17_000), 5 * MB), None);
+        assert_eq!(rate.sample(at(18_000), 7 * MB), Some(2.0 * MB as f64));
+    }
 
     fn stream(url: &str, referrer: Option<&str>, page: Option<&str>) -> AddRequest {
         AddRequest {

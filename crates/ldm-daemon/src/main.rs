@@ -67,6 +67,8 @@ async fn main() -> anyhow::Result<()> {
 
     let mut sigterm = signal(SignalKind::terminate())?;
     let mut sigint = signal(SignalKind::interrupt())?;
+    let mut update_check = tokio::time::interval(UPDATE_CHECK);
+    let mut restart = None;
     loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
@@ -75,6 +77,13 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Err(e) => tracing::warn!(error = %e, "accept falhou"),
             },
+            _ = update_check.tick() => {
+                if let Some(path) = replaced_binary().filter(|_| manager.is_idle() && manager.power_plan().is_none()) {
+                    tracing::info!(path = %path.display(), "o ldmd foi atualizado; reiniciando com a versão nova");
+                    restart = Some(path);
+                    break;
+                }
+            }
             _ = sigterm.recv() => break,
             _ = sigint.recv() => break,
             _ = shutdown.cancelled() => break,
@@ -85,7 +94,25 @@ async fn main() -> anyhow::Result<()> {
     shutdown.cancel();
     manager.shutdown().await;
     let _ = std::fs::remove_file(&socket);
+    if let Some(path) = restart {
+        use std::os::unix::process::CommandExt;
+        // Only returns on failure; the clients start an ldmd again anyway.
+        let error = std::process::Command::new(&path).args(std::env::args_os().skip(1)).exec();
+        tracing::warn!(%error, "não foi possível reiniciar o ldmd");
+    }
     Ok(())
+}
+
+/// How often the daemon looks for a newer version of itself.
+const UPDATE_CHECK: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// This program's file, once an update replaced it: what runs is still the
+/// old version, which a newer GUI cannot fully talk to (settings it does not
+/// know are dropped). Clients reconnect on their own after the restart.
+fn replaced_binary() -> Option<std::path::PathBuf> {
+    let exe = std::fs::read_link("/proc/self/exe").ok()?;
+    let path = std::path::PathBuf::from(exe.to_str()?.strip_suffix(" (deleted)")?);
+    path.exists().then_some(path)
 }
 
 /// Checks the scheduler's clock. A planned suspend/power off must be seen by

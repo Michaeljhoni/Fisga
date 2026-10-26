@@ -325,6 +325,15 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
 - ~~yt-dlp e links expirados (o "HTTP Error 410: Gone")~~ (`ytdlp.rs`): um stream capturado que falha com
   401/403/410 é tentado de novo pelo frame onde ele tocava (`page_of`; não pela aba, que pode ter outros vídeos), e a mensagem explica que o
   link expirou. Um manifesto em outro site recebe o `Origin` do player (`origin_for`, `--add-header`).
+- ~~Velocidade dos vídeos de sites~~ (`ytdlp.rs`, `Rate`): a velocidade é medida pelo LDM a partir dos
+  bytes que o yt-dlp informa, numa janela de 5 s e de novo a cada segundo. O número do yt-dlp vale só
+  para o pedaço em andamento (o YouTube entrega em rajadas, e o começo de cada pedaço passava de 100 MB/s
+  numa linha de 600 Mbit/s) e ficava parado quando nada chegava, congelando o "termina em".
+- ~~Daemon antigo depois de atualizar~~ (`ldmd`, `replaced_binary`): o pacote troca o `/usr/bin/ldmd`,
+  mas o processo antigo continuava rodando. Uma GUI nova falando com ele perdia as configurações que o
+  daemon antigo não conhece (o botão de lista voltava para os cartões). A cada 30 s o daemon vê se o
+  próprio arquivo foi substituído (`/proc/self/exe` termina em ` (deleted)`) e, sem nada em andamento,
+  se reinicia com `exec`. Os clientes se reconectam sozinhos. A GUI na bandeja ainda não faz o mesmo.
 - Ainda não: conferir 64 bytes no resume (detecta arquivo trocado no servidor sem ETag), `fallocate` em vez
   de arquivo esparso, limitador que divide a taxa entre as conexões, a extensão descartar manifestos antigos.
 

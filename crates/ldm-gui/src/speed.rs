@@ -103,8 +103,10 @@ impl SpeedPanel {
             0 => "Nenhum download em andamento".to_string(),
             n => {
                 let mut parts = vec![if n == 1 { "1 baixando".to_string() } else { format!("{n} baixando") }];
-                if connections > 0 {
-                    parts.push(format!("{connections} conexões"));
+                match connections {
+                    0 => {}
+                    1 => parts.push("1 conexão".to_string()),
+                    n => parts.push(format!("{n} conexões")),
                 }
                 if let Some(seconds) = left {
                     parts.push(format!("termina em ~{}", format::duration(seconds)));

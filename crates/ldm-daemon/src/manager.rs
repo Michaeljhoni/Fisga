@@ -775,6 +775,14 @@ impl Manager {
         }
     }
 
+    /// Nothing that a restart would cut short: no download running, no
+    /// pending one being checked, no checksum being computed.
+    pub fn is_idle(&self) -> bool {
+        self.inner.lock().unwrap().jobs.values().all(|job| {
+            job.cancel.is_none() && !job.info.probing && !matches!(job.info.hash, Some(Hashing::Running { .. }))
+        })
+    }
+
     async fn run_job(self: Arc<Self>, id: u64, cancel: CancellationToken) {
         let Some((request, path, limiter)) = ({
             let inner = self.inner.lock().unwrap();

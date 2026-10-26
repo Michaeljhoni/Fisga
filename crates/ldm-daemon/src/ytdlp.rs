@@ -6,7 +6,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ldm_ipc::{AddRequest, Cookie, MediaFormat};
+use ldm_ipc::{AddRequest, Cookie, MediaFormat, SourceKind};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -42,7 +42,57 @@ fn parse_number(value: &str) -> Option<f64> {
     value.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
+/// Signed video links (HLS/DASH manifests) stop working after a while, and the
+/// site then answers 401, 403 or 410 ("[generic] master: ... HTTP Error 410: Gone").
+fn link_refused(error: &str) -> bool {
+    ["HTTP Error 401", "HTTP Error 403", "HTTP Error 410"].iter().any(|code| error.contains(code))
+}
+
+/// yt-dlp's message, with what to do when the link was refused.
+fn explain(error: String) -> String {
+    match link_refused(&error) {
+        true => format!(
+            "o site recusou o link do vídeo; links de vídeo capturados costumam expirar. Abra a página, \
+             dê play e baixe de novo. (yt-dlp: {error})"
+        ),
+        false => error,
+    }
+}
+
+/// Where to get a fresh link for a captured stream: the frame it played in,
+/// else the page.
+fn page_of(request: &AddRequest) -> Option<String> {
+    if request.kind != SourceKind::Stream {
+        return None;
+    }
+    [&request.referrer, &request.page_url]
+        .into_iter()
+        .flatten()
+        .find(|page| page.starts_with("http") && **page != request.url)
+        .cloned()
+}
+
+/// Downloads with yt-dlp. A captured stream whose link was refused (it
+/// expired) is tried once more from its page, where yt-dlp finds a fresh one.
 pub async fn run(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel: CancellationToken) -> JobResult {
+    let result = run_once(manager, id, request, cancel.clone()).await;
+    let page = page_of(request);
+    match (result, page) {
+        (JobResult::Failed(error), Some(page)) if link_refused(&error) && !cancel.is_cancelled() => {
+            tracing::info!(id, "o site recusou o link do vídeo; tentando pela página");
+            let from_page = AddRequest { url: page, kind: SourceKind::Page, ..request.clone() };
+            match run_once(manager, id, &from_page, cancel).await {
+                JobResult::Failed(second) => {
+                    JobResult::Failed(format!("{error}\nPela página também não foi possível: {second}"))
+                }
+                other => other,
+            }
+        }
+        (result, _) => result,
+    }
+}
+
+async fn run_once(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel: CancellationToken) -> JobResult {
     let dir = request.output_dir.clone().unwrap_or_else(default_download_dir);
     let template = match &request.file_name {
         Some(name) => {
@@ -109,10 +159,25 @@ fn apply_proxy(command: &mut Command, proxy: &ldm_ipc::ProxySettings) {
     }
 }
 
+/// The `Origin` a browser player sends when it fetches a manifest from
+/// another site (a CDN); some CDNs refuse the request without it.
+fn origin_for(request: &AddRequest) -> Option<String> {
+    if request.kind != SourceKind::Stream {
+        return None;
+    }
+    let page = url::Url::parse(request.referrer.as_deref()?).ok()?;
+    let media = url::Url::parse(&request.url).ok()?;
+    let origin = page.origin();
+    (origin.is_tuple() && origin != media.origin()).then(|| origin.ascii_serialization())
+}
+
 /// Referer, user agent, cookies and the URL itself. Returns the cookies file to delete.
 fn add_request_options(command: &mut Command, name: &str, request: &AddRequest) -> Option<PathBuf> {
     if let Some(referrer) = &request.referrer {
         command.args(["--referer", referrer]);
+    }
+    if let Some(origin) = origin_for(request) {
+        command.arg("--add-header").arg(format!("Origin:{origin}"));
     }
     if let Some(user_agent) = &request.user_agent {
         command.args(["--user-agent", user_agent]);
@@ -347,9 +412,7 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
             Some(path) => JobResult::Completed(path),
             None => JobResult::Failed("o yt-dlp terminou sem informar o arquivo gerado".into()),
         },
-        Ok(status) => {
-            JobResult::Failed(last_error.unwrap_or_else(|| format!("o yt-dlp terminou com {status}")))
-        }
+        Ok(status) => JobResult::Failed(explain(last_error.unwrap_or_else(|| format!("o yt-dlp terminou com {status}")))),
         Err(e) => JobResult::Failed(e.to_string()),
     }
 }
@@ -358,6 +421,51 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn stream(url: &str, referrer: Option<&str>, page: Option<&str>) -> AddRequest {
+        AddRequest {
+            url: url.into(),
+            kind: SourceKind::Stream,
+            referrer: referrer.map(Into::into),
+            page_url: page.map(Into::into),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn refused_links_are_explained() {
+        let error = "[generic] master: Unable to download webpage: HTTP Error 410: Gone (caused by <HTTPError 410: Gone>)";
+        assert!(link_refused(error));
+        assert!(explain(error.into()).starts_with("o site recusou o link do vídeo"));
+        assert!(explain(error.into()).ends_with("Gone>))"), "yt-dlp's text is kept");
+        assert_eq!(explain("Unsupported URL".into()), "Unsupported URL");
+    }
+
+    #[test]
+    fn a_stream_falls_back_to_its_frame_then_its_page() {
+        let cdn = "https://cdn.example.net/v/master.m3u8?token=abc";
+        let both = stream(cdn, Some("https://player.example.com/embed/1"), Some("https://blog.example.org/post"));
+        assert_eq!(page_of(&both).as_deref(), Some("https://player.example.com/embed/1"));
+        let page_only = stream(cdn, None, Some("https://blog.example.org/post"));
+        assert_eq!(page_of(&page_only).as_deref(), Some("https://blog.example.org/post"));
+        assert_eq!(page_of(&stream(cdn, Some(cdn), None)), None, "not the same link again");
+        let page = AddRequest { kind: SourceKind::Page, ..both };
+        assert_eq!(page_of(&page), None, "pages are already the page");
+    }
+
+    #[test]
+    fn cross_site_manifests_get_the_players_origin() {
+        let cdn = "https://cdn.example.net/v/master.m3u8";
+        let request = stream(cdn, Some("https://player.example.com/embed/1?x=y"), None);
+        assert_eq!(origin_for(&request).as_deref(), Some("https://player.example.com"));
+        assert_eq!(origin_for(&stream(cdn, Some("https://cdn.example.net/page"), None)), None, "same site");
+        assert_eq!(origin_for(&stream(cdn, None, None)), None);
+        let mut command = Command::new("yt-dlp");
+        add_request_options(&mut command, "test", &request);
+        let args: Vec<_> = command.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(args.windows(2).any(|w| w == ["--add-header", "Origin:https://player.example.com"]), "{args:?}");
+        assert_eq!(args.last().map(String::as_str), Some(cdn));
+    }
 
     #[test]
     fn youtube_home_is_a_list() {

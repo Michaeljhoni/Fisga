@@ -67,9 +67,19 @@ pub fn load(path: &Path) -> Option<ControlFile> {
     (control.version == VERSION).then_some(control)
 }
 
-/// Atomic write (temp file + rename) so a crash never leaves a torn control file.
+/// Atomic and durable write (temp file synced, renamed, folder synced), so a
+/// crash or a power cut never leaves a torn or vanished control file.
 pub fn save(path: &Path, control: &ControlFile) -> io::Result<()> {
+    use std::io::Write;
     let tmp = with_suffix(path, ".tmp");
-    std::fs::write(&tmp, serde_json::to_vec(control)?)?;
-    std::fs::rename(tmp, path)
+    let mut file = std::fs::File::create(&tmp)?;
+    file.write_all(&serde_json::to_vec(control)?)?;
+    file.sync_all()?;
+    std::fs::rename(tmp, path)?;
+    // The rename itself is only durable once the folder is (Linux).
+    #[cfg(unix)]
+    if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        let _ = std::fs::File::open(dir).and_then(|dir| dir.sync_all());
+    }
+    Ok(())
 }

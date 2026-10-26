@@ -292,5 +292,25 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   (`makepkg --printsrcinfo`) e escolher uma licença (hoje `custom`, sem arquivo LICENSE).
 - Flatpak, .deb e .rpm.
 
+### Motor: estabilidade e banda (de `docs/ANALISE-IDM-DOWNLOAD.md`)
+- ~~Feito~~ (`ldm-core/src/engine.rs`, `lib.rs`, `control.rs`):
+  - o cliente é `http1_only()`: com HTTP/2 os segmentos viravam streams de um único TCP;
+  - conexão parada: a cada `TICK` (1 s) sem dados o dono grava o buffer; quem está ocioso assume o
+    resto de um segmento sem dados há `STALL` (3 s) (`Claim` em `Ctx::claim`; sem nada gravado, o
+    segmento antigo fica `revoked` e sai do controle). O dono percebe por `Ctx::gone` e sai;
+  - o split começa depois do que o dono tem no buffer (`Segment::buffered`), e o mínimo caiu para 256 KiB;
+  - falhas: o contador zera quando houve progresso, a espera é linear (2 s a mais, até 30 s) e o limite é 15
+    falhas seguidas; 4xx (menos 408/429) é definitivo (`Error::is_permanent`); 503/429 viram
+    `Error::Throttled`: a conexão sai (`Ctx::leave`, menos a última), e a última espera o `Retry-After`;
+  - durabilidade: `persist` faz o `fdatasync` dos dados antes de gravar o `.ldm-part.json` (a cada 2 s), e
+    `control::save` faz `fsync` do tmp e da pasta;
+  - a espera pela resposta tem timeout; sem Range, o tempo sem dados tolerado é 10× maior (300 s).
+- ~~yt-dlp e links expirados (o "HTTP Error 410: Gone")~~ (`ytdlp.rs`): um stream capturado que falha com
+  401/403/410 é tentado de novo pela página (`page_of`: o frame, senão a aba), e a mensagem explica que o
+  link expirou. Um manifesto em outro site recebe o `Origin` do player (`origin_for`, `--add-header`).
+- Ainda não: conferir 64 bytes no resume (detecta arquivo trocado no servidor sem ETag), `fallocate` em vez
+  de arquivo esparso, limitador que divide a taxa entre as conexões, a extensão descartar manifestos antigos.
+
 A análise do IDM que originou o roadmap está em `docs/ANALISE-IDM.md`, com o catálogo de
-funcionalidades e a arquitetura. O README tem o uso, a regra do niri e a seção de problemas.
+funcionalidades e a arquitetura. A análise mais funda do arquivo durante o download e das conexões
+está em `docs/ANALISE-IDM-DOWNLOAD.md`. O README tem o uso, a regra do niri e a seção de problemas.

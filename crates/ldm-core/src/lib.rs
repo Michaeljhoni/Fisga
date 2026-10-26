@@ -91,10 +91,22 @@ pub enum Error {
     Status(reqwest::StatusCode),
     #[error("URL inválida: {0}")]
     Url(#[from] url::ParseError),
+    /// 503 or 429: too many connections, or the server is overloaded.
+    #[error("o servidor está ocupado (status {status})")]
+    Throttled { status: reqwest::StatusCode, retry_after: Option<Duration> },
     #[error("download cancelado")]
     Cancelled,
     #[error("{0}")]
     Other(String),
+}
+
+impl Error {
+    /// Retrying will not help: the server refuses this request (403, 404, 410...).
+    pub fn is_permanent(&self) -> bool {
+        matches!(self, Error::Status(s) if s.is_client_error()
+            && *s != reqwest::StatusCode::REQUEST_TIMEOUT
+            && *s != reqwest::StatusCode::TOO_MANY_REQUESTS)
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -123,6 +135,11 @@ pub fn build_client_with(proxy: Proxy) -> Result<reqwest::Client> {
         .user_agent(DEFAULT_USER_AGENT)
         .redirect(reqwest::redirect::Policy::limited(10))
         .connect_timeout(Duration::from_secs(20))
+        // HTTP/2 would carry every segment over one TCP connection, sharing one
+        // congestion window: the point of several connections is several sockets.
+        .http1_only()
+        // Notices a connection a NAT or Wi-Fi change silently dropped.
+        .tcp_keepalive(Duration::from_secs(60))
         .pool_max_idle_per_host(16);
     let builder = match proxy {
         Proxy::System => builder,

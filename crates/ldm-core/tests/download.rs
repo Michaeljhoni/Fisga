@@ -1,9 +1,9 @@
 //! End-to-end tests against a tiny in-process HTTP/1.1 server with Range support.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ldm_core::{download, DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -18,6 +18,16 @@ struct ServerOpts {
     delay: Duration,
     /// Answer this many requests with 503 before serving normally.
     fail_first: Arc<AtomicUsize>,
+    /// The first range request of more than 512 KiB sends 64 KiB and then
+    /// nothing more, never closing: a stalled connection.
+    stall_once: Arc<AtomicBool>,
+    /// More range requests at once than this get 503 with `Retry-After: 1`
+    /// (0 = no limit); `busy` counts them.
+    max_active: usize,
+    active: Arc<AtomicUsize>,
+    busy: Arc<AtomicUsize>,
+    /// Range requests other than the probe's (`bytes=0-0`) get 404.
+    missing_segments: bool,
 }
 
 struct TestServer {
@@ -89,6 +99,20 @@ async fn handle(
                 (start, end.min(data.len() - 1))
             });
 
+        if opts.missing_segments && range.is_some_and(|(_, end)| end > 0) {
+            socket.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n").await?;
+            continue;
+        }
+        let limited = opts.max_active > 0 && range.is_some();
+        if limited && opts.active.fetch_add(1, Ordering::SeqCst) >= opts.max_active {
+            opts.active.fetch_sub(1, Ordering::SeqCst);
+            opts.busy.fetch_add(1, Ordering::SeqCst);
+            socket
+                .write_all(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\n\r\n")
+                .await?;
+            continue;
+        }
+
         let (status, start, end) = match range {
             Some((start, end)) if opts.ranges => {
                 counter.fetch_add(1, Ordering::Relaxed);
@@ -108,11 +132,18 @@ async fn handle(
         }
         response.push_str("\r\n");
         socket.write_all(response.as_bytes()).await?;
-        for chunk in data[start..=end].chunks(16 * 1024) {
+        let stall = end + 1 - start > 512 * 1024 && opts.stall_once.swap(false, Ordering::SeqCst);
+        for (i, chunk) in data[start..=end].chunks(16 * 1024).enumerate() {
+            if stall && i == 4 {
+                std::future::pending::<()>().await;
+            }
             socket.write_all(chunk).await?;
             if !opts.delay.is_zero() {
                 tokio::time::sleep(opts.delay).await;
             }
+        }
+        if limited {
+            opts.active.fetch_sub(1, Ordering::SeqCst);
         }
     }
 }
@@ -204,4 +235,55 @@ async fn pause_and_resume() {
     let Outcome::Completed(done_path) = result.unwrap() else { panic!("not completed") };
     assert_eq!(done_path, path);
     assert_eq!(std::fs::read(&done_path).unwrap(), *data);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stalled_connection_is_taken_over() {
+    let data = test_data(3 * 1024 * 1024);
+    let opts = ServerOpts {
+        ranges: true,
+        delay: Duration::from_millis(1),
+        stall_once: Arc::new(AtomicBool::new(true)),
+        ..Default::default()
+    };
+    let server = serve(data.clone(), opts).await;
+    let dir = temp_dir("stall");
+
+    // The stalled connection would only time out after 30 s.
+    let started = Instant::now();
+    let (result, _) =
+        run(&server.url, Target::Dir { dir: dir.clone(), file_name: None }, 4, CancellationToken::new()).await;
+    let Outcome::Completed(path) = result.unwrap() else { panic!("not completed") };
+    assert_eq!(std::fs::read(path).unwrap(), *data);
+    assert!(started.elapsed() < Duration::from_secs(20), "took {:?}", started.elapsed());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn busy_server_gets_fewer_connections() {
+    let data = test_data(4 * 1024 * 1024);
+    let busy = Arc::new(AtomicUsize::new(0));
+    let opts = ServerOpts { ranges: true, delay: Duration::from_millis(1), max_active: 2, busy: busy.clone(), ..Default::default() };
+    let server = serve(data.clone(), opts).await;
+    let dir = temp_dir("busy");
+
+    let (result, _) =
+        run(&server.url, Target::Dir { dir: dir.clone(), file_name: None }, 8, CancellationToken::new()).await;
+    let Outcome::Completed(path) = result.unwrap() else { panic!("not completed") };
+    assert_eq!(std::fs::read(path).unwrap(), *data);
+    // Each extra connection leaves at its first 503 instead of insisting.
+    let refused = busy.load(Ordering::SeqCst);
+    assert!(refused <= 10, "{refused} requests refused");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn missing_file_fails_without_retrying() {
+    let data = test_data(2 * 1024 * 1024);
+    let server = serve(data, ServerOpts { ranges: true, missing_segments: true, ..Default::default() }).await;
+    let dir = temp_dir("missing");
+
+    let started = Instant::now();
+    let (result, _) =
+        run(&server.url, Target::Dir { dir: dir.clone(), file_name: None }, 4, CancellationToken::new()).await;
+    assert!(matches!(result, Err(ldm_core::Error::Status(s)) if s == 404), "{result:?}");
+    assert!(started.elapsed() < Duration::from_secs(5), "took {:?}", started.elapsed());
 }

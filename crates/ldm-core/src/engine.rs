@@ -4,16 +4,18 @@
 //! and writes at its offset. When a connection has nothing left, it takes an
 //! unowned segment or splits the largest one still in progress at the midpoint of
 //! what remains. The connection that owned the split segment notices its new,
-//! smaller `end` on its next chunk and stops there.
+//! smaller `end` on its next chunk and stops there. A connection that stalls
+//! (no data for `STALL`) hands the rest of its segment to an idle one, and a
+//! server that answers 503/429 gets fewer connections.
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use reqwest::header::{CONTENT_RANGE, IF_RANGE, RANGE};
+use reqwest::header::{HeaderMap, CONTENT_RANGE, IF_RANGE, RANGE, RETRY_AFTER};
 use reqwest::{Client, StatusCode};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -27,10 +29,19 @@ use crate::{filename, Error, RequestSpec, Result};
 
 /// Bytes buffered per connection before a positional write.
 const FLUSH_SIZE: usize = 256 * 1024;
-/// Splits never create segments smaller than this. It must stay well above
-/// `FLUSH_SIZE` plus one network chunk, so a split point is always beyond the
-/// data a connection may still hold in its buffer.
-const MIN_SPLIT_FLOOR: u64 = 1024 * 1024;
+/// Splits never create segments smaller than this. The split point is always
+/// past what the owner still holds in its buffer (`Segment::buffered`).
+const MIN_SPLIT_FLOOR: u64 = 256 * 1024;
+/// A connection that received nothing for this long is stalled: an idle
+/// connection takes over the rest of its segment (IDM: about 2 s).
+const STALL: Duration = Duration::from_secs(3);
+/// How often a connection waiting for the server looks around: it writes what
+/// it holds (so its segment can be taken over exactly) and stops if it was.
+const TICK: Duration = Duration::from_secs(1);
+/// The longest wait a server's `Retry-After` gets.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(120);
+/// The data is forced to disk, then the control file saved, this often.
+const SAVE_EVERY: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub struct DownloadOptions {
@@ -38,9 +49,11 @@ pub struct DownloadOptions {
     pub connections: usize,
     /// Smallest segment produced by a split.
     pub min_split_size: u64,
-    /// Retries per segment before the connection gives up.
+    /// Failures in a row, without any progress between them, before a
+    /// connection gives up.
     pub max_retries: u32,
-    /// Abort a connection that receives nothing for this long.
+    /// Abort a connection that receives nothing for this long (ten times as
+    /// long without Range support, when giving up means starting over).
     pub idle_timeout: Duration,
     /// Delay between opening each additional connection.
     pub connection_stagger: Duration,
@@ -53,7 +66,7 @@ impl Default for DownloadOptions {
         Self {
             connections: 8,
             min_split_size: MIN_SPLIT_FLOOR,
-            max_retries: 8,
+            max_retries: 15,
             idle_timeout: Duration::from_secs(30),
             connection_stagger: Duration::from_millis(150),
             limiters: Vec::new(),
@@ -225,7 +238,8 @@ async fn single_stream(
                 let _ = tokio::fs::remove_file(&part).await;
                 return Ok(Outcome::Paused(final_path));
             }
-            next = tokio::time::timeout(opts.idle_timeout, stream.next()) => next,
+            // Giving up here means starting over: wait much longer.
+            next = tokio::time::timeout(opts.idle_timeout.saturating_mul(10), stream.next()) => next,
         };
         match next {
             Err(_) => return Err(Error::Other("tempo esgotado esperando dados do servidor".into())),
@@ -276,14 +290,46 @@ async fn single_stream(
 struct Segment {
     state: SegmentState,
     owned: bool,
+    /// Received by the owner but not written yet; it follows `state.pos()`.
+    buffered: u64,
+    /// When the owner last received data (or took the segment).
+    last_data: Instant,
+    /// Taken over before a byte of it was written: the old owner drops it.
+    /// Left out of the control file.
+    revoked: bool,
+    /// Its owner waits for the speed limit: slow on purpose, not stalled.
+    held: bool,
+}
+
+impl Segment {
+    fn new(state: SegmentState, owned: bool) -> Self {
+        Self { state, owned, buffered: 0, last_data: Instant::now(), revoked: false, held: false }
+    }
+
+    /// Where a split may start: past what the owner holds in memory.
+    fn cursor(&self) -> u64 {
+        self.state.pos() + self.buffered
+    }
+
+    /// What no one has received yet.
+    fn unclaimed(&self) -> u64 {
+        (self.state.end + 1).saturating_sub(self.cursor())
+    }
 }
 
 enum Claim {
     Segment(usize),
     /// Everything is owned and too small to split; check again later in case a
-    /// connection fails and releases its segment.
+    /// connection fails, stalls or releases its segment.
     Wait,
     Done,
+}
+
+/// How a connection ended without an error.
+enum Exit {
+    Finished,
+    /// The server asked for fewer connections and this one left.
+    Left,
 }
 
 struct Ctx {
@@ -294,6 +340,8 @@ struct Ctx {
     file: Arc<File>,
     segments: Mutex<Vec<Segment>>,
     downloaded: AtomicU64,
+    /// Connections still working; a busy server (503/429) brings it down.
+    workers: AtomicUsize,
     min_split: u64,
     max_retries: u32,
     idle_timeout: Duration,
@@ -309,31 +357,66 @@ impl Ctx {
         }
         if let Some(i) = segs.iter().position(|s| !s.owned && s.state.remaining() > 0) {
             segs[i].owned = true;
+            segs[i].last_data = Instant::now();
             return Claim::Segment(i);
         }
         let largest = segs
             .iter()
             .enumerate()
             .filter(|(_, s)| s.owned)
-            .max_by_key(|(_, s)| s.state.remaining())
-            .map(|(i, s)| (i, s.state));
-        if let Some((i, state)) = largest {
-            let remaining = state.remaining();
-            if remaining >= 2 * self.min_split {
-                let mid = state.pos() + remaining / 2;
+            .max_by_key(|(_, s)| s.unclaimed())
+            .map(|(i, s)| (i, s.cursor(), s.unclaimed()));
+        if let Some((i, cursor, unclaimed)) = largest {
+            if unclaimed >= 2 * self.min_split {
+                let mid = cursor + unclaimed / 2;
+                let end = segs[i].state.end;
                 segs[i].state.end = mid - 1;
-                segs.push(Segment {
-                    state: SegmentState { start: mid, end: state.end, done: 0 },
-                    owned: true,
-                });
+                segs.push(Segment::new(SegmentState { start: mid, end, done: 0 }, true));
                 return Claim::Segment(segs.len() - 1);
             }
+        }
+        // Too small to split: the rest of a stalled connection's segment. Its
+        // owner has written all it received (see `TICK`) and stops when it notices.
+        let stalled = segs
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.owned && !s.held && s.buffered == 0 && s.state.remaining() > 0)
+            .filter(|(_, s)| s.last_data.elapsed() >= STALL)
+            .max_by_key(|(_, s)| s.state.remaining())
+            .map(|(i, _)| i);
+        if let Some(i) = stalled {
+            let state = segs[i].state;
+            if state.done == 0 {
+                segs[i].revoked = true;
+                segs[i].state.done = state.len();
+            } else {
+                segs[i].state.end = state.pos() - 1;
+            }
+            tracing::info!(segment = i, remaining = state.remaining(), "conexão parada; outra assume o resto do trecho");
+            segs.push(Segment::new(SegmentState { start: state.pos(), end: state.end, done: 0 }, true));
+            return Claim::Segment(segs.len() - 1);
         }
         Claim::Wait
     }
 
     fn release(&self, index: usize) {
-        self.segments.lock().unwrap()[index].owned = false;
+        let mut segs = self.segments.lock().unwrap();
+        segs[index].owned = false;
+        segs[index].buffered = 0;
+        segs[index].held = false;
+    }
+
+    /// The owner starts (or ends) waiting for the speed limit.
+    fn hold(&self, index: usize, held: bool) {
+        let mut segs = self.segments.lock().unwrap();
+        segs[index].held = held;
+        segs[index].last_data = Instant::now();
+    }
+
+    /// One connection fewer, unless it is the last one.
+    #[allow(deprecated)] // try_update needs a newer Rust than our MSRV (1.80)
+    fn leave(&self) -> bool {
+        self.workers.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| if n > 1 { Some(n - 1) } else { None }).is_ok()
     }
 
     fn bounds(&self, index: usize) -> (u64, u64) {
@@ -341,12 +424,29 @@ impl Ctx {
         (segs[index].state.pos(), segs[index].state.end)
     }
 
-    fn end_of(&self, index: usize) -> u64 {
-        self.segments.lock().unwrap()[index].state.end
+    /// Nothing from `offset` on is this segment's any more (split or taken over).
+    fn gone(&self, index: usize, offset: u64) -> bool {
+        let segs = self.segments.lock().unwrap();
+        segs[index].revoked || offset > segs[index].state.end
     }
 
+    /// A chunk of `len` bytes arrived and the owner's data reaches `cursor`:
+    /// how much of it is still the segment's, and whether that reaches its end.
+    fn accept(&self, index: usize, cursor: u64, len: usize) -> (usize, bool) {
+        let mut segs = self.segments.lock().unwrap();
+        let seg = &mut segs[index];
+        seg.last_data = Instant::now();
+        if seg.revoked || cursor > seg.state.end {
+            return (0, true);
+        }
+        let take = len.min((seg.state.end + 1 - cursor) as usize);
+        seg.buffered += take as u64;
+        (take, cursor + take as u64 > seg.state.end)
+    }
+
+    /// The segments to save and show; the revoked ones are covered by others.
     fn snapshot(&self) -> Vec<SegmentState> {
-        self.segments.lock().unwrap().iter().map(|s| s.state).collect()
+        self.segments.lock().unwrap().iter().filter(|s| !s.revoked).map(|s| s.state).collect()
     }
 
     fn active(&self) -> usize {
@@ -372,8 +472,9 @@ impl Ctx {
             .map_err(|e| Error::Other(format!("falha na escrita: {e}")))??;
         {
             let mut segs = self.segments.lock().unwrap();
-            let state = &mut segs[index].state;
-            state.done = (state.done + len).min(state.len());
+            let seg = &mut segs[index];
+            seg.state.done = (seg.state.done + len).min(seg.state.len());
+            seg.buffered = seg.buffered.saturating_sub(len);
         }
         self.downloaded.fetch_add(len, Ordering::Relaxed);
         *offset += len;
@@ -385,7 +486,7 @@ impl Ctx {
     /// Downloads the rest of segment `index` with one HTTP request.
     async fn fetch_segment(&self, index: usize) -> Result<()> {
         let (from, end) = self.bounds(index);
-        if from > end {
+        if from > end || self.gone(index, from) {
             return Ok(());
         }
         let mut request = self
@@ -395,14 +496,31 @@ impl Ctx {
         if let Some(etag) = &self.etag {
             request = request.header(IF_RANGE, etag.as_str());
         }
-        let resp = tokio::select! {
-            _ = self.cancel.cancelled() => return Err(Error::Cancelled),
-            r = request.send() => r?,
+        // A server that never answers: another connection may take the segment meanwhile.
+        let asked = Instant::now();
+        let send = request.send();
+        tokio::pin!(send);
+        let resp = loop {
+            tokio::select! {
+                _ = self.cancel.cancelled() => return Err(Error::Cancelled),
+                r = &mut send => break r?,
+                _ = tokio::time::sleep(TICK) => {
+                    if self.gone(index, from) {
+                        return Ok(());
+                    }
+                    if asked.elapsed() >= self.idle_timeout {
+                        return Err(Error::Other("tempo esgotado esperando a resposta do servidor".into()));
+                    }
+                }
+            }
         };
         match resp.status() {
             StatusCode::PARTIAL_CONTENT => {}
             StatusCode::OK => {
                 return Err(Error::Other("o servidor ignorou o Range (o arquivo mudou?)".into()));
+            }
+            status @ (StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE) => {
+                return Err(Error::Throttled { status, retry_after: retry_after(resp.headers()) });
             }
             status => return Err(Error::Status(status)),
         }
@@ -420,13 +538,14 @@ impl Ctx {
         let mut stream = resp.bytes_stream();
         let mut buf = Vec::with_capacity(FLUSH_SIZE);
         let mut offset = from;
+        let mut last_data = Instant::now();
         loop {
             let next = tokio::select! {
                 _ = self.cancel.cancelled() => {
                     self.flush(index, &mut buf, &mut offset).await?;
                     return Err(Error::Cancelled);
                 }
-                next = tokio::time::timeout(self.idle_timeout, stream.next()) => next,
+                next = tokio::time::timeout(TICK, stream.next()) => next,
             };
             let chunk = match next {
                 Ok(Some(Ok(chunk))) => chunk,
@@ -436,33 +555,41 @@ impl Ctx {
                 }
                 Ok(None) => {
                     self.flush(index, &mut buf, &mut offset).await?;
-                    return if offset > self.end_of(index) {
+                    return if self.gone(index, offset) {
                         Ok(())
                     } else {
                         Err(Error::Other("conexão encerrada antes do fim do segmento".into()))
                     };
                 }
                 Err(_) => {
+                    // Quiet for a moment: write what is held, so that a stalled
+                    // segment can be taken over from exactly where it stopped.
                     self.flush(index, &mut buf, &mut offset).await?;
-                    return Err(Error::Other("tempo esgotado esperando dados".into()));
+                    if self.gone(index, offset) {
+                        return Ok(());
+                    }
+                    if last_data.elapsed() >= self.idle_timeout {
+                        return Err(Error::Other("tempo esgotado esperando dados".into()));
+                    }
+                    continue;
                 }
             };
+            last_data = Instant::now();
 
+            let limited = self.limiters.iter().any(|limiter| limiter.rate() > 0);
+            if limited {
+                self.hold(index, true);
+            }
             for limiter in &self.limiters {
                 limiter.consume(chunk.len()).await;
             }
+            if limited {
+                self.hold(index, false);
+            }
 
             // Another connection may have taken the tail of this segment.
-            let end_now = self.end_of(index);
-            let cursor = offset + buf.len() as u64;
-            if cursor > end_now {
-                self.flush(index, &mut buf, &mut offset).await?;
-                return Ok(());
-            }
-            let allowed = (end_now + 1 - cursor) as usize;
-            let take = chunk.len().min(allowed);
+            let (take, reached_end) = self.accept(index, offset + buf.len() as u64, chunk.len());
             buf.extend_from_slice(&chunk[..take]);
-            let reached_end = cursor + take as u64 > end_now;
             if buf.len() >= FLUSH_SIZE || reached_end {
                 self.flush(index, &mut buf, &mut offset).await?;
             }
@@ -473,6 +600,16 @@ impl Ctx {
     }
 }
 
+/// `Retry-After` in seconds (the HTTP-date form is rare on file servers).
+fn retry_after(headers: &HeaderMap) -> Option<Duration> {
+    headers.get(RETRY_AFTER)?.to_str().ok()?.trim().parse().ok().map(Duration::from_secs)
+}
+
+/// The wait before the `failures`-th retry in a row: 2 s more each time, up to 30 s.
+fn backoff(failures: u32) -> Duration {
+    Duration::from_secs((2 * u64::from(failures)).min(30))
+}
+
 async fn sleep_or_cancel(cancel: &CancellationToken, duration: Duration) -> bool {
     tokio::select! {
         _ = cancel.cancelled() => false,
@@ -481,18 +618,26 @@ async fn sleep_or_cancel(cancel: &CancellationToken, duration: Duration) -> bool
 }
 
 async fn worker(ctx: Arc<Ctx>, delay: Duration) -> Result<()> {
+    let result = work(&ctx, delay).await;
+    if !matches!(result, Ok(Exit::Left)) {
+        ctx.workers.fetch_sub(1, Ordering::SeqCst);
+    }
+    result.map(|_| ())
+}
+
+async fn work(ctx: &Ctx, delay: Duration) -> Result<Exit> {
     if !delay.is_zero() && !sleep_or_cancel(&ctx.cancel, delay).await {
-        return Ok(());
+        return Ok(Exit::Finished);
     }
     loop {
         if ctx.cancel.is_cancelled() {
-            return Ok(());
+            return Ok(Exit::Finished);
         }
         let index = match ctx.claim() {
-            Claim::Done => return Ok(()),
+            Claim::Done => return Ok(Exit::Finished),
             Claim::Wait => {
                 if !sleep_or_cancel(&ctx.cancel, Duration::from_millis(500)).await {
-                    return Ok(());
+                    return Ok(Exit::Finished);
                 }
                 continue;
             }
@@ -501,28 +646,63 @@ async fn worker(ctx: Arc<Ctx>, delay: Duration) -> Result<()> {
 
         let mut failures = 0u32;
         loop {
-            match ctx.fetch_segment(index).await {
+            let before = ctx.bounds(index).0;
+            let e = match ctx.fetch_segment(index).await {
                 Ok(()) => break,
                 Err(_) if ctx.cancel.is_cancelled() => {
                     ctx.release(index);
-                    return Ok(());
+                    return Ok(Exit::Finished);
                 }
-                Err(e) => {
-                    failures += 1;
-                    tracing::warn!(segment = index, attempt = failures, error = %e, "segmento falhou");
-                    if failures > ctx.max_retries {
+                Err(e) => e,
+            };
+            // It got somewhere: whatever went wrong is not lasting, count anew.
+            if ctx.bounds(index).0 > before {
+                failures = 0;
+            }
+            failures += 1;
+            tracing::warn!(segment = index, attempt = failures, error = %e, "segmento falhou");
+            if e.is_permanent() || failures > ctx.max_retries {
+                ctx.release(index);
+                return Err(e);
+            }
+            let wait = match &e {
+                Error::Throttled { retry_after, .. } => {
+                    // The server wants fewer connections: this one leaves, unless it is the last.
+                    if ctx.leave() {
+                        tracing::info!(segment = index, "servidor ocupado; uma conexão a menos");
                         ctx.release(index);
-                        return Err(e);
+                        return Ok(Exit::Left);
                     }
-                    let backoff = Duration::from_secs(1 << failures.min(4));
-                    if !sleep_or_cancel(&ctx.cancel, backoff).await {
-                        ctx.release(index);
-                        return Ok(());
-                    }
+                    retry_after.unwrap_or_else(|| backoff(failures)).min(MAX_RETRY_AFTER)
                 }
+                _ => backoff(failures),
+            };
+            if !sleep_or_cancel(&ctx.cancel, wait).await {
+                ctx.release(index);
+                return Ok(Exit::Finished);
             }
         }
         ctx.release(index);
+    }
+}
+
+/// Forces the written data to disk, then saves the control file that says it
+/// is there. After a power cut the control file never claims bytes the disk
+/// lost, which would leave a silent hole of zeros in the finished file.
+async fn persist(ctx: &Ctx, path: &Path, mut control: ControlFile) {
+    // Before the sync: only bytes already written count.
+    control.segments = ctx.snapshot();
+    let file = ctx.file.clone();
+    let path = path.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || {
+        file.sync_data()?;
+        control::save(&path, &control)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!(error = %e, "não foi possível salvar o arquivo de controle"),
+        Err(e) => tracing::warn!(error = %e, "não foi possível salvar o arquivo de controle"),
     }
 }
 
@@ -553,14 +733,16 @@ async fn segmented_download(
         file.set_len(total)?;
     }
 
+    let connections = opts.connections.max(1);
     let ctx = Arc::new(Ctx {
         client: client.clone(),
         spec: spec.clone(),
         url: probe.final_url.clone(),
         etag: probe.etag.clone(),
         file: Arc::new(file),
-        segments: Mutex::new(states.into_iter().map(|state| Segment { state, owned: false }).collect()),
+        segments: Mutex::new(states.into_iter().map(|state| Segment::new(state, false)).collect()),
         downloaded: AtomicU64::new(already),
+        workers: AtomicUsize::new(connections),
         min_split: opts.min_split_size.max(MIN_SPLIT_FLOOR),
         max_retries: opts.max_retries,
         idle_timeout: opts.idle_timeout,
@@ -568,22 +750,17 @@ async fn segmented_download(
         cancel: cancel.clone(),
     });
 
-    let save = |ctx: &Ctx| {
-        let control = ControlFile {
-            version: control::VERSION,
-            url: spec.url.clone(),
-            total,
-            etag: probe.etag.clone(),
-            segments: ctx.snapshot(),
-        };
-        if let Err(e) = control::save(&control_file, &control) {
-            tracing::warn!(error = %e, "não foi possível salvar o arquivo de controle");
-        }
+    let control = ControlFile {
+        version: control::VERSION,
+        url: spec.url.clone(),
+        total,
+        etag: probe.etag.clone(),
+        segments: Vec::new(),
     };
-    save(&ctx);
+    persist(&ctx, &control_file, control.clone()).await;
 
     let mut workers = JoinSet::new();
-    for i in 0..opts.connections.max(1) {
+    for i in 0..connections {
         workers.spawn(worker(ctx.clone(), opts.connection_stagger * i as u32));
     }
 
@@ -608,15 +785,15 @@ async fn segmented_download(
                     active_connections: ctx.active(),
                     segments: ctx.snapshot(),
                 }));
-                if last_save.elapsed() >= Duration::from_secs(1) {
+                if last_save.elapsed() >= SAVE_EVERY {
                     last_save = Instant::now();
-                    save(&ctx);
+                    persist(&ctx, &control_file, control.clone()).await;
                 }
             }
         }
     }
 
-    save(&ctx);
+    persist(&ctx, &control_file, control).await;
     let complete = ctx.snapshot().iter().all(|s| s.remaining() == 0);
     let _ = events.send(EngineEvent::Progress(Progress {
         downloaded: ctx.downloaded.load(Ordering::Relaxed),
@@ -644,6 +821,8 @@ async fn segmented_download(
 mod tests {
     use super::*;
 
+    const MB: u64 = 1024 * 1024;
+
     fn ctx_with(segments: Vec<SegmentState>, owned: bool) -> Ctx {
         let dir = std::env::temp_dir().join(format!("ldm-claim-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -654,8 +833,9 @@ mod tests {
             url: Url::parse("http://localhost/").unwrap(),
             etag: None,
             file: Arc::new(file),
-            segments: Mutex::new(segments.into_iter().map(|state| Segment { state, owned }).collect()),
+            segments: Mutex::new(segments.into_iter().map(|state| Segment::new(state, owned)).collect()),
             downloaded: AtomicU64::new(0),
+            workers: AtomicUsize::new(2),
             min_split: MIN_SPLIT_FLOOR,
             max_retries: 0,
             idle_timeout: Duration::from_secs(1),
@@ -664,16 +844,29 @@ mod tests {
         }
     }
 
+    /// Makes segment `index` look silent since `ago`.
+    fn silent(ctx: &Ctx, index: usize, ago: Duration) {
+        ctx.segments.lock().unwrap()[index].last_data = Instant::now() - ago;
+    }
+
     #[test]
     fn splits_largest_remaining_at_midpoint() {
-        let mb = 1024 * 1024;
-        let ctx = ctx_with(vec![SegmentState { start: 0, end: 10 * mb - 1, done: 2 * mb }], true);
+        let ctx = ctx_with(vec![SegmentState { start: 0, end: 10 * MB - 1, done: 2 * MB }], true);
         let Claim::Segment(i) = ctx.claim() else { panic!("expected a split") };
         let segs = ctx.snapshot();
         assert_eq!(i, 1);
         // 8 MiB remaining from 2 MiB: the new segment starts at 6 MiB.
-        assert_eq!(segs[0], SegmentState { start: 0, end: 6 * mb - 1, done: 2 * mb });
-        assert_eq!(segs[1], SegmentState { start: 6 * mb, end: 10 * mb - 1, done: 0 });
+        assert_eq!(segs[0], SegmentState { start: 0, end: 6 * MB - 1, done: 2 * MB });
+        assert_eq!(segs[1], SegmentState { start: 6 * MB, end: 10 * MB - 1, done: 0 });
+    }
+
+    #[test]
+    fn splits_past_the_owners_buffer() {
+        let ctx = ctx_with(vec![SegmentState { start: 0, end: 10 * MB - 1, done: 2 * MB }], true);
+        ctx.segments.lock().unwrap()[0].buffered = MB;
+        assert!(matches!(ctx.claim(), Claim::Segment(1)));
+        // From 3 MiB (2 written + 1 in memory), 7 MiB left: split at 6.5 MiB.
+        assert_eq!(ctx.snapshot()[1].start, 6 * MB + MB / 2);
     }
 
     #[test]
@@ -686,5 +879,69 @@ mod tests {
     fn prefers_unowned_segments() {
         let ctx = ctx_with(vec![SegmentState { start: 0, end: 99, done: 10 }], false);
         assert!(matches!(ctx.claim(), Claim::Segment(0)));
+    }
+
+    #[test]
+    fn takes_over_a_stalled_connection() {
+        let ctx = ctx_with(vec![SegmentState { start: 0, end: 300 * 1024, done: 1000 }], true);
+        // Silent, but not long enough, or still holding data: nothing to do.
+        silent(&ctx, 0, STALL / 2);
+        assert!(matches!(ctx.claim(), Claim::Wait));
+        silent(&ctx, 0, STALL * 2);
+        ctx.segments.lock().unwrap()[0].buffered = 10;
+        assert!(matches!(ctx.claim(), Claim::Wait));
+        ctx.segments.lock().unwrap()[0].buffered = 0;
+
+        assert!(matches!(ctx.claim(), Claim::Segment(1)));
+        let segs = ctx.snapshot();
+        assert_eq!(segs[0], SegmentState { start: 0, end: 999, done: 1000 });
+        assert_eq!(segs[1], SegmentState { start: 1000, end: 300 * 1024, done: 0 });
+        assert!(ctx.gone(0, 1000), "the old owner stops");
+        assert!(!ctx.gone(1, 1000));
+    }
+
+    #[test]
+    fn a_connection_held_by_the_speed_limit_is_not_stalled() {
+        let ctx = ctx_with(vec![SegmentState { start: 0, end: 99, done: 10 }], true);
+        ctx.hold(0, true);
+        silent(&ctx, 0, STALL * 2);
+        assert!(matches!(ctx.claim(), Claim::Wait));
+        ctx.hold(0, false);
+        silent(&ctx, 0, STALL * 2);
+        assert!(matches!(ctx.claim(), Claim::Segment(1)));
+    }
+
+    #[test]
+    fn a_stalled_connection_without_data_gives_up_its_whole_segment() {
+        let ctx = ctx_with(vec![SegmentState { start: 0, end: 99, done: 0 }], true);
+        silent(&ctx, 0, STALL * 2);
+        assert!(matches!(ctx.claim(), Claim::Segment(1)));
+        // The old one is left out of the control file; the new one has it all.
+        assert_eq!(ctx.snapshot(), vec![SegmentState { start: 0, end: 99, done: 0 }]);
+        assert!(ctx.gone(0, 0));
+        assert_eq!(ctx.accept(0, 0, 50), (0, true), "late data of the old owner is dropped");
+        assert_eq!(ctx.accept(1, 0, 50), (50, false));
+        assert_eq!(ctx.accept(1, 50, 80), (50, true));
+    }
+
+    #[test]
+    fn only_the_last_connection_stays() {
+        let ctx = ctx_with(vec![SegmentState { start: 0, end: 99, done: 0 }], true);
+        assert!(ctx.leave());
+        assert!(!ctx.leave(), "the last one keeps trying");
+        assert_eq!(ctx.workers.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn retry_waits() {
+        assert_eq!(backoff(1), Duration::from_secs(2));
+        assert_eq!(backoff(5), Duration::from_secs(10));
+        assert_eq!(backoff(40), Duration::from_secs(30));
+        let mut headers = HeaderMap::new();
+        assert_eq!(retry_after(&headers), None);
+        headers.insert(RETRY_AFTER, "7".parse().unwrap());
+        assert_eq!(retry_after(&headers), Some(Duration::from_secs(7)));
+        headers.insert(RETRY_AFTER, "Wed, 21 Oct 2015 07:28:00 GMT".parse().unwrap());
+        assert_eq!(retry_after(&headers), None);
     }
 }

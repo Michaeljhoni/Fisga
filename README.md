@@ -314,10 +314,14 @@ Hyprland, `windowrulev2 = float, class:^(io\.ldm\.Ldm)$, title:negative:^LDM$`.
   quando aberta pelo menu ou pelo daemon).
 - **"LDM" no menu não abre nada:** rode `ldm-gui` num terminal para ver o erro; reinstale com
   `scripts/install-dev.sh`, que grava o atalho com o caminho completo do executável.
+- **Vídeo falha com "HTTP Error 410: Gone" (ou 403):** o link do vídeo que a extensão capturou (um
+  `master.m3u8`, por exemplo) era assinado e expirou. O LDM já tenta de novo pela página de onde ele
+  veio; se também falhar, recarregue a página, dê play e baixe logo em seguida.
 
 ## Estado
 
-- [x] Motor segmentado com retomada, testado
+- [x] Motor segmentado com retomada, testado: uma conexão TCP por segmento, conexão parada assumida
+      por outra, menos conexões quando o servidor pede (503/429), progresso salvo só depois dos dados
 - [x] Daemon, CLI, host nativo
 - [x] Extensão: botão sobre vídeo/áudio, menu de mídias detectadas, captura de downloads, menu de contexto
 - [x] Interface gráfica (GTK4): janela "Novo download" ao clicar no botão, lista com ações

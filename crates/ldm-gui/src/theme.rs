@@ -116,6 +116,11 @@ gridview.ldm-cards > child {
   border-radius: 18px;
 }
 gridview.ldm-cards > child:selected { background: transparent; }
+/* The default theme spaces out every box in a grid (icon views): not in cards. */
+gridview.ldm-cards > child box {
+  margin: 0;
+  border-spacing: 0;
+}
 .ldm-card {
   background: #151b25;
   border: 1px solid #232a36;

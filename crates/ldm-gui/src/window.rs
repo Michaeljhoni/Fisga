@@ -102,6 +102,8 @@ pub struct MainWindow {
     newest_first: Rc<Cell<bool>>,
     as_list: gtk::ToggleButton,
     order: gtk::Button,
+    order_icon: gtk::Image,
+    order_label: gtk::Label,
     store: gio::ListStore,
     sidebar: gtk::ListBox,
     /// The sidebar entries, in order (queues change with the settings).
@@ -333,8 +335,14 @@ impl MainWindow {
         header.pack_end(&menu);
         let as_list = gtk::ToggleButton::builder().icon_name("view-list-symbolic").tooltip_text("Ver como lista").build();
         header.pack_end(&as_list);
-        // Newest or oldest on top; the icon and tooltip follow `set_view`.
-        let order = gtk::Button::new();
+        // Newest or oldest on top, in words: icon themes rarely have the sort icons.
+        // GTK's own arrow and the text follow `set_view`.
+        let order_icon = gtk::Image::new();
+        let order_label = gtk::Label::new(None);
+        let order_box = gtk::Box::builder().spacing(4).build();
+        order_box.append(&order_icon);
+        order_box.append(&order_label);
+        let order = gtk::Button::builder().child(&order_box).build();
         header.pack_end(&order);
         header.pack_end(&header_button("folder-symbolic", "Abrir pasta", "win.open-folder"));
         header.pack_end(
@@ -631,6 +639,8 @@ impl MainWindow {
             newest_first,
             as_list,
             order,
+            order_icon,
+            order_label,
             store: app.store.clone(),
             sidebar,
             views,
@@ -664,11 +674,12 @@ impl MainWindow {
             self.newest_first.set(newest_first);
             self.sorter.changed(gtk::SorterChange::Inverted);
         }
-        let (icon, tooltip) = match newest_first {
-            true => ("view-sort-descending-symbolic", "Mais recentes no topo (clique para inverter)"),
-            false => ("view-sort-ascending-symbolic", "Mais antigos no topo (clique para inverter)"),
+        let (icon, label, tooltip) = match newest_first {
+            true => ("pan-up-symbolic", "Recentes", "Mais recentes no topo (clique para inverter)"),
+            false => ("pan-down-symbolic", "Antigos", "Mais antigos no topo (clique para inverter)"),
         };
-        self.order.set_icon_name(icon);
+        self.order_icon.set_icon_name(Some(icon));
+        self.order_label.set_label(label);
         self.order.set_tooltip_text(Some(tooltip));
     }
 

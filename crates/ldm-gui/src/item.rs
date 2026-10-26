@@ -57,6 +57,8 @@ impl DownloadItem {
     }
 
     pub fn update(&self, info: DownloadInfo) {
+        // First: a handler of the notify signals below reads the new info.
+        self.imp().info.replace(Some(info.clone()));
         self.set_name(info.name.clone());
         self.set_size(format::size(&info));
         self.set_progress(format::fraction(&info));
@@ -67,7 +69,6 @@ impl DownloadItem {
         if self.added().is_empty() {
             self.set_added(format::added(&info));
         }
-        self.imp().info.replace(Some(info));
     }
 
     pub fn info(&self) -> DownloadInfo {

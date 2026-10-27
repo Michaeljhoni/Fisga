@@ -3,6 +3,7 @@ name = "fisga-daemon"
 description = "fisgad: background service that runs the downloads"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 
 [[bin]]

@@ -3,6 +3,7 @@ name = "fisga-native-host"
 description = "Native messaging host: bridges the browser extension to fisgad"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 
 [[bin]]

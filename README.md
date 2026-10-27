@@ -66,3 +66,8 @@ fisga stop                                  # pausa tudo e encerra o serviço
 - [Guia completo](docs/GUIA.md): todas as opções, a extensão, regras de janela para niri, Sway e
   Hyprland, problemas comuns e o caminho de quem vinha do LDM, o nome antigo.
 - [Para quem vai mexer no código](docs/CONTINUAR.md).
+
+## Licença
+
+[GPL-3.0-or-later](LICENSE): pode usar, estudar, modificar e redistribuir; quem distribuir uma versão
+modificada mantém o código aberto sob a mesma licença.

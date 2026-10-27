@@ -1,30 +1,30 @@
 # Maintainer: Michaeljhoni <desenvolvimento@gbonline.com.br>
 #
-# Builds Fisga from git. While the repository is private, build from your own
-# checkout:   cd packaging/arch && FISGA_GIT="git+file://$(realpath ../..)" makepkg -si
-# (makepkg clones what is committed, not uncommitted changes.)
+# The AUR package fisga-git is this file and its .SRCINFO. After changing it, run
+# makepkg --printsrcinfo > .SRCINFO (CI checks the two match).
+# To build uncommitted work from a checkout instead of GitHub:
+#   cd packaging/arch && FISGA_GIT="git+file://$(realpath ../..)" makepkg -si
+# (makepkg clones what is committed in that checkout.)
 
 pkgname=fisga-git
-pkgver=r0
+pkgver=r60.3cf63d2
 pkgrel=1
-pkgdesc='Gerenciador de downloads para Linux inspirado no IDM: várias conexões, filas, agendador e extensão para o navegador'
+pkgdesc='Download manager with multiple connections, queues, a scheduler and a browser extension'
 arch=('x86_64' 'aarch64')
 url='https://github.com/Michaeljhoni/Fisga'
-license=('custom')
+license=('GPL-3.0-or-later')
 depends=('gtk4' 'gcc-libs' 'glibc')
 makedepends=('cargo' 'git')
 optdepends=(
-  'yt-dlp: vídeos de sites (YouTube e outros)'
-  'ffmpeg: juntar áudio e vídeo dos sites'
-  'libnotify: notificações'
-  'wl-clipboard: capturar links copiados no Wayland'
-  'clamav: verificar os downloads com antivírus'
-  'libcanberra: som ao concluir'
+  'yt-dlp: videos from sites (YouTube and others)'
+  'ffmpeg: merge audio and video from sites'
+  'libnotify: notifications'
+  'wl-clipboard: catch copied links on Wayland'
+  'clamav: scan downloads with an antivirus'
+  'libcanberra: sound when a download finishes'
 )
 provides=('fisga')
-# Fisga was called LDM: the new package takes the old one's place.
-conflicts=('fisga' 'ldm-git')
-replaces=('ldm-git')
+conflicts=('fisga')
 # makepkg's GCC LTO turns ring's C code (TLS) into objects the Rust linker cannot
 # read; the Rust side keeps its own LTO (Cargo.toml, profile.release).
 options=('!lto')

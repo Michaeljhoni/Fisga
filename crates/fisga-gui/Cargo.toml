@@ -3,6 +3,7 @@ name = "fisga-gui"
 description = "fisga-gui: GTK4 interface (download list and the \"Novo download\" window); a client of fisgad"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 rust-version = "1.83"
 
 [[bin]]

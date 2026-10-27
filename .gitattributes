@@ -3,3 +3,5 @@
 *.sh text eol=lf
 scripts/Dockerfile.build text eol=lf
 PKGBUILD text eol=lf
+.SRCINFO text eol=lf
+LICENSE text eol=lf

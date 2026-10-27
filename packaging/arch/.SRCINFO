@@ -1,0 +1,26 @@
+pkgbase = fisga-git
+	pkgdesc = Download manager with multiple connections, queues, a scheduler and a browser extension
+	pkgver = r60.3cf63d2
+	pkgrel = 1
+	url = https://github.com/Michaeljhoni/Fisga
+	arch = x86_64
+	arch = aarch64
+	license = GPL-3.0-or-later
+	makedepends = cargo
+	makedepends = git
+	depends = gtk4
+	depends = gcc-libs
+	depends = glibc
+	optdepends = yt-dlp: videos from sites (YouTube and others)
+	optdepends = ffmpeg: merge audio and video from sites
+	optdepends = libnotify: notifications
+	optdepends = wl-clipboard: catch copied links on Wayland
+	optdepends = clamav: scan downloads with an antivirus
+	optdepends = libcanberra: sound when a download finishes
+	provides = fisga
+	conflicts = fisga
+	options = !lto
+	source = fisga::git+https://github.com/Michaeljhoni/Fisga.git
+	sha256sums = SKIP
+
+pkgname = fisga-git

@@ -300,12 +300,14 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   página. Os filtros (`grab_filter`, `glob_matches`) ficam no `fisga-ipc`, usados pela GUI
   (`grabber.rs`) e pela CLI (`fisga grab`); adicionar é um `AddBatch`. Ainda sem filtro por
   tamanho (precisaria de uma sondagem por arquivo).
-- ~~Pacote para o Arch~~ (feito): `packaging/arch/PKGBUILD` (`fisga-git`), fonte em `$FISGA_GIT`
-  (o checkout local enquanto o repositório é privado). `fisga install-hosts --system $pkgdir
+- ~~Pacote para o Arch~~ (feito): `packaging/arch/PKGBUILD` (`fisga-git`, GPL-3.0-or-later),
+  fonte no GitHub ou em `$FISGA_GIT` (um checkout local). `fisga install-hosts --system $pkgdir
   --host-path /usr/bin/fisga-native-host` grava os manifestos do sistema. O job `arch-package`
-  do CI roda o `makepkg` num container `archlinux`, instala o pacote e confere os arquivos.
-  Para publicar no AUR: tornar o repositório público, gerar o `.SRCINFO`
-  (`makepkg --printsrcinfo`) e escolher uma licença (hoje `custom`, sem arquivo LICENSE).
+  do CI confere que o `.SRCINFO` bate com o PKGBUILD, roda o `makepkg` num container
+  `archlinux`, instala o pacote e confere os arquivos. Ao mudar o PKGBUILD:
+  `makepkg --printsrcinfo > .SRCINFO`. Publicar no AUR (com o repositório público e a chave SSH
+  na conta): clonar `ssh://aur@aur.archlinux.org/fisga-git.git`, copiar o `PKGBUILD` e o
+  `.SRCINFO`, commit e push.
 - Flatpak, .deb e .rpm.
 
 ### Visual novo (proposta E do canvas "Fisga — novo visual")

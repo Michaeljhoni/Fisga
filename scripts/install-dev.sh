@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds LDM, installs it in ~/.local/bin and registers the browser host.
+# Builds Fisga, installs it in ~/.local/bin and registers the browser host.
 # Works on any distro with a Rust toolchain and the GTK4 headers (>= 4.10):
 #   Arch: pacman -S rust gtk4   Debian/Ubuntu: libgtk-4-dev   Fedora: gtk4-devel
 set -euo pipefail
@@ -7,12 +7,13 @@ cd "$(dirname "$0")/.."
 
 PREFIX="${PREFIX:-$HOME/.local}"
 cargo build --release --workspace
-install -Dm755 target/release/ldm target/release/ldmd target/release/ldm-native-host target/release/ldm-gui -t "$PREFIX/bin"
+install -Dm755 target/release/fisga target/release/fisgad target/release/fisga-native-host target/release/fisga-gui -t "$PREFIX/bin"
 # Absolute Exec path: app launchers (niri, noctalia, fuzzel...) often run without ~/.local/bin in PATH.
 mkdir -p "$PREFIX/share/applications"
-sed "s|^Exec=ldm-gui|Exec=$PREFIX/bin/ldm-gui|" crates/ldm-gui/data/io.ldm.Ldm.desktop > "$PREFIX/share/applications/io.ldm.Ldm.desktop"
+sed "s|^Exec=fisga-gui|Exec=$PREFIX/bin/fisga-gui|" crates/fisga-gui/data/io.fisga.Fisga.desktop > "$PREFIX/share/applications/io.fisga.Fisga.desktop"
+install -Dm644 crates/fisga-gui/data/io.fisga.Fisga.svg -t "$PREFIX/share/icons/hicolor/scalable/apps"
 command -v update-desktop-database >/dev/null && update-desktop-database "$PREFIX/share/applications" || true
-"$PREFIX/bin/ldm" install-hosts
+"$PREFIX/bin/fisga" install-hosts
 bash extension/build.sh
 
 missing=()
@@ -22,7 +23,7 @@ done
 
 cat <<EOF
 
-LDM instalado em $PREFIX/bin.
+Fisga instalado em $PREFIX/bin.
 
 Extensão:
   Chrome/Chromium/Brave/Edge/Vivaldi: abra chrome://extensions, ative o "Modo do desenvolvedor",

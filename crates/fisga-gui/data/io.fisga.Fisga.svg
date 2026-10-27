@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>Fisga</title>
+  <rect x="6" y="6" width="116" height="116" rx="30" fill="#161c27"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M104 40C98 28 78 28 78 48V88a19 19 0 0 1-38 0V78" stroke="#f59e0b" stroke-width="13"/>
+    <path d="M40 72l12 13" stroke="#f59e0b" stroke-width="11"/>
+    <path d="M60 62h38" stroke="#f59e0b" stroke-width="12"/>
+    <path d="M42 22v30M32 43l10 10 10-10" stroke="#e6e9ef" stroke-width="10"/>
+  </g>
+</svg>

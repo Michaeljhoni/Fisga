@@ -8,8 +8,8 @@ edition = "2021"
 rust-version = "1.80"
 
 [workspace.dependencies]
-ldm-core = { path = "crates/ldm-core" }
-ldm-ipc = { path = "crates/ldm-ipc" }
+fisga-core = { path = "crates/fisga-core" }
+fisga-ipc = { path = "crates/fisga-ipc" }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

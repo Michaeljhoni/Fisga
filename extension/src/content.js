@@ -6,8 +6,8 @@
 // YouTube enforce Trusted Types and reject innerHTML.
 (() => {
   "use strict";
-  if (window.__ldmOverlay) return;
-  window.__ldmOverlay = true;
+  if (window.__fisgaOverlay) return;
+  window.__fisgaOverlay = true;
 
   const api = globalThis.browser ?? globalThis.chrome;
   const t = (key, fallback) => {
@@ -51,7 +51,7 @@
   }
 
   // --------------------------------------------------------------- force key
-  // Held while clicking a link, it sends the link to LDM whatever it is (the
+  // Held while clicking a link, it sends the link to Fisga whatever it is (the
   // app's "Navegador" preferences). Alt+click would save it with the browser.
   const FORCE_KEYS = {
     alt: { alt: true, ctrl: false, shift: false },
@@ -76,7 +76,7 @@
       e.stopImmediatePropagation();
       api.runtime
         .sendMessage({ type: "force-link", url: link.href, pageUrl: location.href, linkTitle: link.textContent?.trim() || link.title })
-        .then((res) => res?.ok || console.warn("LDM:", res?.error))
+        .then((res) => res?.ok || console.warn("Fisga:", res?.error))
         .catch(() => {});
     },
     true,
@@ -230,7 +230,7 @@
   }
 
   function buildUi() {
-    const host = document.createElement("ldm-download-button");
+    const host = document.createElement("fisga-download-button");
     host.style.cssText =
       "all:initial !important; position:fixed !important; left:0 !important; top:0 !important;" +
       "z-index:2147483647 !important; display:none; pointer-events:auto !important;";
@@ -249,7 +249,7 @@
     const bar = node("div", "bar");
     const main = node("button", "main");
     main.type = "button";
-    main.title = t("btnDownloadTitle", "Baixar com o LDM");
+    main.title = t("btnDownloadTitle", "Baixar com o Fisga");
     const label = node("span", "label", t("btnDownload", "Baixar"));
     main.append(svg(["M12 4v11", "M7 10l5 5 5-5", "M5 20h14"]), label);
     const more = node("button", "more");
@@ -447,7 +447,7 @@
     try {
       const res = await api.runtime.sendMessage({ type: "download-media", choice, ...mediaInfo(active) });
       if (res?.ok) {
-        setState("ok", res.pending ? t("sentConfirm", "Confirme no LDM") : t("sent", "Enviado"));
+        setState("ok", res.pending ? t("sentConfirm", "Confirme no Fisga") : t("sent", "Enviado"));
       } else {
         setState("err", t("failed", "Erro"));
         showToast(res?.error || "Erro desconhecido");

@@ -83,12 +83,12 @@ async function evaluate(session, expression) {
 }
 
 const STUB = `(() => {
-  globalThis.__ldmSent ??= [];
+  globalThis.__fisgaSent ??= [];
   const fake = async (host, msg) => {
-    globalThis.__ldmSent.push(msg);
+    globalThis.__fisgaSent.push(msg);
     if (msg.type === "ping") return { type: "pong", version: "stub", daemon: true };
     if (msg.type === "settings") return { type: "settings", fileTypes: ["zip", "safetensors"], forceKey: "alt" };
-    return { type: "added", id: globalThis.__ldmSent.length, pending: msg.confirm !== false };
+    return { type: "added", id: globalThis.__fisgaSent.length, pending: msg.confirm !== false };
   };
   try { chrome.runtime.sendNativeMessage = fake; } catch {}
   if (chrome.runtime.sendNativeMessage !== fake) Object.defineProperty(chrome.runtime, "sendNativeMessage", { value: fake, configurable: true });
@@ -111,7 +111,7 @@ async function worker() {
 }
 
 async function sent(sw) {
-  return evaluate(sw, "JSON.stringify(globalThis.__ldmSent.filter(m => m.type === 'download').map(m => ({url: m.url, kind: m.kind, title: m.title, fileName: m.fileName, confirm: m.confirm})))").then(JSON.parse);
+  return evaluate(sw, "JSON.stringify(globalThis.__fisgaSent.filter(m => m.type === 'download').map(m => ({url: m.url, kind: m.kind, title: m.title, fileName: m.fileName, confirm: m.confirm})))").then(JSON.parse);
 }
 
 async function shot(page, name) {
@@ -141,7 +141,7 @@ async function overlayBox(page, className) {
   let hostNode = null;
   const walk = (n) => {
     if (hostNode) return;
-    if (n.nodeName === "LDM-DOWNLOAD-BUTTON") hostNode = n;
+    if (n.nodeName === "Fisga-DOWNLOAD-BUTTON") hostNode = n;
     for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? []), ...(n.contentDocument ? [n.contentDocument] : [])]) walk(c);
   };
   walk(root);
@@ -363,7 +363,7 @@ async function linkBox(page, id) {
   return evaluate(page, `(() => { const r = document.getElementById(${JSON.stringify(id)}).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
 }
 
-// A plain click on a link to a .safetensors goes to LDM, not to the browser.
+// A plain click on a link to a .safetensors goes to Fisga, not to the browser.
 async function takeoverScenario(sw, base) {
   log(`--- takeover: ${base}`);
   const page = await openPage(base + "/");
@@ -379,7 +379,7 @@ async function takeoverScenario(sw, base) {
   return { name: "takeover", results: [{ expected: base + "/storage/a1b2c3?X-Amz-Signature=abc", sent: msg, browserDownloads: left }] };
 }
 
-// Alt+click on a link to a page: to LDM, and the tab stays where it was.
+// Alt+click on a link to a page: to Fisga, and the tab stays where it was.
 async function forceScenario(sw, base) {
   log(`--- force: ${base}`);
   const page = await openPage(base + "/");
@@ -395,7 +395,7 @@ async function forceScenario(sw, base) {
     const n = (await sent(sw)).length;
     await click(page, box.x, box.y);
     await sleep(1500);
-    return { sentToLdm: (await sent(sw)).length > n, at: await evaluate(page, "location.pathname") };
+    return { sentToFisga: (await sent(sw)).length > n, at: await evaluate(page, "location.pathname") };
   })();
   log(`sent: ${JSON.stringify(msg)}; stayed at ${at}; plain click: ${JSON.stringify(plain)}`);
   return { name: "force", results: [{ expected: base + "/outra-pagina", sent: msg, stayedAt: at, plainClick: plain }] };

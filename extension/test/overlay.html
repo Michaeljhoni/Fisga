@@ -7,7 +7,7 @@
 <html lang="pt-BR">
   <head>
     <meta charset="utf-8" />
-    <title>LDM overlay test</title>
+    <title>Fisga overlay test</title>
     <style>
       body { font: 15px system-ui, sans-serif; margin: 24px; background: #f1f5f9; }
       .player { position: relative; width: 640px; max-width: 100%; background: #000; }
@@ -18,9 +18,9 @@
       #log { white-space: pre-wrap; background: #0f172a; color: #e2e8f0; padding: 10px; border-radius: 8px; min-height: 60px; }
     </style>
     <script>
-      window.__ldmLog = [];
+      window.__fisgaLog = [];
       const log = (m) => {
-        window.__ldmLog.push(m);
+        window.__fisgaLog.push(m);
         document.getElementById("log").textContent += JSON.stringify(m) + "\n";
       };
       window.chrome = {
@@ -40,7 +40,7 @@
                 ],
               };
             }
-            return window.__ldmFail ? { ok: false, error: "App LDM não encontrado. Instale-o e rode: ldm install-hosts" } : { ok: true, id: 1 };
+            return window.__fisgaFail ? { ok: false, error: "App Fisga não encontrado. Instale-o e rode: fisga install-hosts" } : { ok: true, id: 1 };
           },
         },
       };

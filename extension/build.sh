@@ -11,7 +11,7 @@ for browser in chrome firefox; do
   cp "manifest.$browser.json" "dist/$browser/manifest.json"
 done
 if command -v zip >/dev/null; then
-  (cd dist/firefox && zip -qr ../ldm-firefox.xpi .)
-  (cd dist/chrome && zip -qr ../ldm-chrome.zip .)
+  (cd dist/firefox && zip -qr ../fisga-firefox.xpi .)
+  (cd dist/chrome && zip -qr ../fisga-chrome.zip .)
 fi
 echo "extension built in $(pwd)/dist"

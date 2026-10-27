@@ -1,0 +1,14 @@
+[package]
+name = "fisga-ipc"
+description = "Messages and Unix-socket client shared by the daemon, CLI, GUI and browser host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+url.workspace = true

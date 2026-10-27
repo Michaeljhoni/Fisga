@@ -2,12 +2,12 @@
 //
 // - Sniffs media responses per tab, so a click on the overlay button can send
 //   the real file or stream even when the <video> only shows a blob: URL.
-// - Resolves what to download and hands it to the LDM app via native messaging.
+// - Resolves what to download and hands it to the Fisga app via native messaging.
 // - Optionally takes over regular browser downloads, like IDM does: the file
 //   types and the force key come from the app's "Navegador" preferences.
 
 const api = globalThis.browser ?? globalThis.chrome;
-const HOST = "io.ldm.native";
+const HOST = "io.fisga.native";
 
 const DEFAULT_SETTINGS = {
   intercept: true,
@@ -15,7 +15,7 @@ const DEFAULT_SETTINGS = {
   // Open the "Novo download" window in the app before starting (like IDM).
   confirm: true,
   // The app's "Navegador" preferences (copied by syncWithApp); these serve
-  // until the app answers. Keep them like DEFAULT_FILE_TYPES in ldm-ipc.
+  // until the app answers. Keep them like DEFAULT_FILE_TYPES in fisga-ipc.
   fileTypes: (
     "3gp 7z aac apk appimage avi bin bz2 ckpt deb dmg epub exe flac flatpak flv gguf gz img iso jar m4a m4v mkv " +
     "mov mp3 mp4 mpeg mpg msi ogg ogv onnx opus pkg pt pth rar rpm run safetensors tar tgz wav webm wma wmv xz zip zst"
@@ -297,7 +297,7 @@ async function resolveTarget(msg, sender) {
   return { url: frameUrl, kind: "page" };
 }
 
-// ---------------------------------------------------------- talking to LDM
+// ---------------------------------------------------------- talking to Fisga
 async function cookiesFor(url) {
   try {
     const cookies = await api.cookies.getAll({ url });
@@ -318,7 +318,7 @@ async function sendToApp(payload) {
   } catch (err) {
     const text = String(err?.message || err);
     if (/not found|no such native application|access to the specified native messaging host is forbidden/i.test(text)) {
-      throw new Error(message("hostMissing", "App LDM não encontrado. Instale-o e rode: ldm install-hosts"));
+      throw new Error(message("hostMissing", "App Fisga não encontrado. Instale-o e rode: fisga install-hosts"));
     }
     throw new Error(text);
   }
@@ -454,7 +454,7 @@ async function takeOver(item) {
       cookies: await cookiesFor(url),
     });
   } catch (err) {
-    console.warn("LDM: devolvendo o download ao navegador:", err);
+    console.warn("Fisga: devolvendo o download ao navegador:", err);
     passThrough.add(url);
     api.downloads.download({ url }).catch(() => passThrough.delete(url));
   }
@@ -469,7 +469,7 @@ api.downloads.onChanged.addListener(async (delta) => {
 api.downloads.onErased.addListener((id) => judged.delete(id));
 
 // -------------------------------------------------------------- force key
-/** A link clicked with the force key held: to LDM, whatever it is. */
+/** A link clicked with the force key held: to Fisga, whatever it is. */
 async function forceLink(msg, sender) {
   const url = msg.url;
   if (!/^https?:/i.test(url ?? "")) throw new Error("link sem endereço http(s)");
@@ -490,13 +490,13 @@ async function forceLink(msg, sender) {
 api.runtime.onInstalled.addListener(async () => {
   syncWithApp();
   await Promise.resolve(api.contextMenus.removeAll()).catch(() => {});
-  api.contextMenus.create({ id: "ldm-link", title: message("menuLink", "Baixar link com o LDM"), contexts: ["link"] });
-  api.contextMenus.create({ id: "ldm-media", title: message("menuMedia", "Baixar esta mídia com o LDM"), contexts: ["video", "audio"] });
+  api.contextMenus.create({ id: "fisga-link", title: message("menuLink", "Baixar link com o Fisga"), contexts: ["link"] });
+  api.contextMenus.create({ id: "fisga-media", title: message("menuMedia", "Baixar esta mídia com o Fisga"), contexts: ["video", "audio"] });
 });
 
 api.contextMenus.onClicked.addListener(async (info, tab) => {
   try {
-    if (info.menuItemId === "ldm-link" && info.linkUrl) {
+    if (info.menuItemId === "fisga-link" && info.linkUrl) {
       await sendToApp({
         url: info.linkUrl,
         kind: "direct",
@@ -505,11 +505,11 @@ api.contextMenus.onClicked.addListener(async (info, tab) => {
         userAgent: navigator.userAgent,
         cookies: await cookiesFor(info.linkUrl),
       });
-    } else if (info.menuItemId === "ldm-media") {
+    } else if (info.menuItemId === "fisga-media") {
       const sender = { tab, url: info.frameUrl || info.pageUrl, frameId: info.frameId ?? 0 };
       await downloadMedia({ src: info.srcUrl, pageUrl: info.pageUrl, title: tab?.title }, sender);
     }
   } catch (err) {
-    console.warn("LDM:", err);
+    console.warn("Fisga:", err);
   }
 });

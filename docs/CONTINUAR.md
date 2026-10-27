@@ -6,19 +6,25 @@ completo (bandeja, iniciar com a sessão, agendador e várias filas).
 
 ## O projeto em uma frase
 
-**LDM** é um gerenciador de downloads para Linux inspirado no Internet Download Manager (IDM),
+**Fisga** é um gerenciador de downloads para Linux inspirado no Internet Download Manager (IDM),
 escrito em Rust do zero (clean-room). Inclui uma extensão para Chrome e Firefox que captura
 downloads e vídeos, e uma interface GTK4 com os textos em português.
-Repositório privado: <https://github.com/Michaeljhoni/ldm>.
+Repositório privado: <https://github.com/Michaeljhoni/ldm>. Até 27/10/2026 o projeto se chamava
+**LDM**: o repositório e o clone do dono (`~/ldm`) ainda têm esse nome. O que o Fisga faz para quem
+vinha do LDM (pastas, `.ldm-part`, autostart, host nativo, `$LDM_FILE`) está no README, em
+"Vindo do LDM"; o código fica em `fisga_ipc::migrate_legacy_dirs`, `control::adopt_legacy`,
+`autostart::migrate_legacy` e `hosts::install`.
 
 ## Quem usa e como
 
 - O dono do projeto desenvolve no **Windows**, mas usa e testa no **Arch Linux com o niri**
-  (Wayland), em casa, por acesso remoto. Lá ele atualiza com:
+  (Wayland), em casa, por acesso remoto. Lá ele atualiza pelo pacote:
   ```bash
-  cd ldm && git pull && scripts/install-dev.sh && ldm stop
+  cd ~/ldm && git restore packaging/arch/PKGBUILD && git pull && cd packaging/arch && rm -rf fisga ldm src && makepkg -si && pkill -x fisga-gui; fisga stop
   ```
-  O `ldm stop` encerra o daemon antigo; o novo sobe sozinho no próximo download.
+  O `fisga stop` encerra o daemon antigo; o novo sobe sozinho no próximo download. O `makepkg`
+  reescreve o `pkgver` do PKGBUILD (por isso o `git restore`) e guarda um clone em
+  `packaging/arch/fisga`, que pode ficar velho (por isso o `rm -rf`).
 - Ele só vê o que está no `main` do GitHub. **Tudo precisa ser commitado e enviado.**
 - Responda **sempre em português (pt-BR)**. Código, comentários e mensagens de commit ficam em
   inglês, como no resto do repositório.
@@ -27,26 +33,26 @@ Repositório privado: <https://github.com/Michaeljhoni/ldm>.
 ## Arquitetura
 
 ```
-navegador ──Native Messaging──▶ ldm-native-host ──socket Unix──▶ ldmd ──▶ downloads
+navegador ──Native Messaging──▶ fisga-native-host ──socket Unix──▶ fisgad ──▶ downloads
                                                                   ▲
-                                         ldm (CLI) ───────────────┤
-                                         ldm-gui (GTK4) ──────────┘
+                                         fisga (CLI) ───────────────┤
+                                         fisga-gui (GTK4) ──────────┘
 ```
 
 | Crate | O que faz |
 |---|---|
-| `crates/ldm-core` | Motor: sondagem com `Range`, segmentação dinâmica, retomada (`arquivo.ldm-part` + `arquivo.ldm-part.json`) e `RateLimiter` (limite de velocidade). Em `examples/range_server.rs` está o servidor de teste local. |
-| `crates/ldm-ipc` | Protocolo JSON por linha no socket `$XDG_RUNTIME_DIR/ldm/ldmd.sock`. Tipos `Request`, `Response`, `DownloadInfo`, `Settings`, `Category`, `MediaFormat`, `Conflict`, mais `existing()` e `unique_name()`. |
-| `crates/ldm-daemon` (`ldmd`) | Lista, fila e jobs (`manager.rs`); agendador e suspender/desligar (`manager/scheduler.rs`); yt-dlp para vídeos de sites (`ytdlp.rs`); abre o `ldm-gui --pending` para confirmar um download (`gui.rs`); monitor da área de transferência (`clipboard.rs`); notificações. |
-| `crates/ldm-cli` (`ldm`) | `add`, `get`, `list`, `confirm`, `pause`, `resume`, `rm`, `watch`, `settings`, `schedule`, `queue`, `move`, `install-hosts`, `stop`. |
-| `crates/ldm-native-host` | Ponte entre a extensão e o `ldmd`. |
-| `crates/ldm-gui` (`ldm-gui`, app-id `io.ldm.Ldm`) | GTK4 0.10 (feature `v4_10`), glib 0.21. Janelas: principal (`window.rs`), Novo download (`confirm.rs`), progresso / Download concluído (`progress.rs`), Preferências com abas Geral e Filas (`prefs.rs`, `queues_page`), contagem antes de suspender/desligar (`power.rs`). Bandeja com o crate `ksni` 0.3 (`tray.rs`, roda no runtime tokio do `ipc.rs`); autostart (`autostart.rs`). `app.rs` mantém o estado e decide quando o app fica vivo. |
+| `crates/fisga-core` | Motor: sondagem com `Range`, segmentação dinâmica, retomada (`arquivo.fisga-part` + `arquivo.fisga-part.json`) e `RateLimiter` (limite de velocidade). Em `examples/range_server.rs` está o servidor de teste local. |
+| `crates/fisga-ipc` | Protocolo JSON por linha no socket `$XDG_RUNTIME_DIR/fisga/fisgad.sock`. Tipos `Request`, `Response`, `DownloadInfo`, `Settings`, `Category`, `MediaFormat`, `Conflict`, mais `existing()` e `unique_name()`. |
+| `crates/fisga-daemon` (`fisgad`) | Lista, fila e jobs (`manager.rs`); agendador e suspender/desligar (`manager/scheduler.rs`); yt-dlp para vídeos de sites (`ytdlp.rs`); abre o `fisga-gui --pending` para confirmar um download (`gui.rs`); monitor da área de transferência (`clipboard.rs`); notificações. |
+| `crates/fisga-cli` (`fisga`) | `add`, `get`, `list`, `confirm`, `pause`, `resume`, `rm`, `watch`, `settings`, `schedule`, `queue`, `move`, `install-hosts`, `stop`. |
+| `crates/fisga-native-host` | Ponte entre a extensão e o `fisgad`. |
+| `crates/fisga-gui` (`fisga-gui`, app-id `io.fisga.Fisga`) | GTK4 0.10 (feature `v4_10`), glib 0.21. Janelas: principal (`window.rs`), Novo download (`confirm.rs`), progresso / Download concluído (`progress.rs`), Preferências com abas Geral e Filas (`prefs.rs`, `queues_page`), contagem antes de suspender/desligar (`power.rs`). Bandeja com o crate `ksni` 0.3 (`tray.rs`, roda no runtime tokio do `ipc.rs`); autostart (`autostart.rs`). `app.rs` mantém o estado e decide quando o app fica vivo. |
 | `extension/` | Extensão MV3 para Chrome e Firefox. `src/background.js` e `src/content.js` colocam o botão "Baixar" sobre os players; `build.sh` gera `extension/dist/`. |
 
 Dados no Linux:
-- lista de downloads: `~/.local/share/ldm/downloads.json`;
-- configurações: `~/.config/ldm/settings.json`;
-- logs: `~/.local/state/ldm/ldmd.log` e `ldm-gui.log`.
+- lista de downloads: `~/.local/share/fisga/downloads.json`;
+- configurações: `~/.config/fisga/settings.json`;
+- logs: `~/.local/state/fisga/fisgad.log` e `fisga-gui.log`.
 
 ## O que já está pronto (tudo no `main`, com CI verde)
 
@@ -67,11 +73,11 @@ Dados no Linux:
 - **Arquivo já existe** (pacote 1): salvar com outro nome (`arquivo (1).iso`), substituir, ou
   continuar o download incompleto.
 - **Captura de links copiados** (pacote 1):
-  - Usa o `wl-paste --watch`. A variável `LDM_CLIPBOARD_CMD` troca o comando e é usada nos testes.
+  - Usa o `wl-paste --watch`. A variável `FISGA_CLIPBOARD_CMD` troca o comando e é usada nos testes.
   - Só pega links de vídeo, música, programa, arquivo compactado e PDF.
   - Se nenhuma janela puder perguntar, o link é descartado.
 
-- **Várias filas** (pacote 2): `ldm_ipc::Queue { id, name, max_parallel, schedule }`.
+- **Várias filas** (pacote 2): `fisga_ipc::Queue { id, name, max_parallel, schedule }`.
   - A fila principal (`MAIN_QUEUE` = 0) continua nos campos antigos `Settings.max_parallel` e
     `Settings.schedule`, para os `settings.json` antigos valerem; as outras ficam em
     `Settings.queues`. Use `all_queues()`, `queue(id)`, `set_queue()` e `remove_queue()`.
@@ -90,26 +96,26 @@ Dados no Linux:
     reaproveitados (`Settings.last_queue_id`).
 - **Agendador** (pacote 2), por fila (antes só em `Settings.schedule`):
   - Horário de início, de parada (opcional) e dias da semana. A janela que passa da meia-noite
-    pertence ao dia em que começou (`Schedule::window_at`, testada em `ldm-ipc`).
+    pertence ao dia em que começou (`Schedule::window_at`, testada em `fisga-ipc`).
   - Fora do horário a fila não inicia nada; "Baixar agora" e retomar à mão (`resume` com a fila
     fechada marca `forced`) começam na hora.
   - No fim da janela, só os jobs que a fila iniciou (`Job.from_queue`) são pausados e voltam para
     `Queued` (`Job.requeue`). Ligar o agendador fora do horário não pausa nada.
   - "Fila concluída" só vale numa janela cujo início foi visto (o relógio passou pelo horário,
     ou o usuário mudou o agendamento dentro dela) e depois que um download iniciado pela fila
-    terminou. Pausados que a fila iniciou ainda contam como pendentes. Iniciar o `ldmd` no meio
+    terminou. Pausados que a fila iniciou ainda contam como pendentes. Iniciar o `fisgad` no meio
     de uma janela nunca suspende/desliga, e uma janela sem horário de parada fica fechada até o
-    próximo início. `started`/`done` ficam em `~/.local/share/ldm/scheduler.json`, para um
+    próximo início. `started`/`done` ficam em `~/.local/share/fisga/scheduler.json`, para um
     reinício não repetir o desligamento.
   - Ao terminar a fila: nada, suspender ou desligar. O daemon anuncia um `PowerPlan`
-    (`Response::Power`), espera 60 s (`LDM_POWER_DELAY`) e roda `systemctl suspend|poweroff`
-    (`LDM_POWER_CMD` troca o comando nos testes). Sem GUI conectada, abre o `ldm-gui --pending`
-    para mostrar a contagem. `Request::CancelPower` / `ldm schedule --cancel` cancelam.
-  - O relógio é conferido a cada 15 s (`LDM_SCHEDULER_TICK_MS`).
+    (`Response::Power`), espera 60 s (`FISGA_POWER_DELAY`) e roda `systemctl suspend|poweroff`
+    (`FISGA_POWER_CMD` troca o comando nos testes). Sem GUI conectada, abre o `fisga-gui --pending`
+    para mostrar a contagem. `Request::CancelPower` / `fisga schedule --cancel` cancelam.
+  - O relógio é conferido a cada 15 s (`FISGA_SCHEDULER_TICK_MS`).
 
 - **Atualizar endereço** (pacote 3, `manager/refresh.rs`):
   - `Request::RefreshUrl { id, url }`: sonda o link novo, recusa outro tamanho, troca o link,
-    limpa o ETag do `.ldm-part.json` (um link novo costuma vir com outro ETag, e o motor
+    limpa o ETag do `.fisga-part.json` (um link novo costuma vir com outro ETag, e o motor
     recomeçaria do zero) e retoma.
   - `Request::AwaitUrl { id, waiting }` (`DownloadInfo.awaiting_url`): o próximo download
     pendente vindo do navegador com o mesmo tamanho (de preferência o mesmo nome) é absorvido
@@ -120,10 +126,10 @@ Dados no Linux:
 - **Proxy e logins por site** (pacote 3, `manager/network.rs`):
   - `Settings.proxy: ProxySettings { mode: System|None|Manual, url }`. O cliente do `reqwest`
     fica num `Mutex` e é recriado em `set_settings` quando o proxy muda; um proxy inválido é
-    recusado antes de salvar. `ldm_core::build_client_with(Proxy::...)`.
+    recusado antes de salvar. `fisga_core::build_client_with(Proxy::...)`.
   - O yt-dlp recebe o proxy manual pelas variáveis `*_proxy` (não pelo `--proxy`, para a senha
     não aparecer no `/proc/<pid>/cmdline`); "sem proxy" é `--proxy ""`.
-  - `SiteLogin { host, user, password }` em `~/.config/ldm/logins.json` (0600), pedidos
+  - `SiteLogin { host, user, password }` em `~/.config/fisga/logins.json` (0600), pedidos
     `GetLogins`/`SetLogins`, nunca no `Settings` (que é logado e transmitido). `Manager::headers`
     acrescenta `Authorization: Basic` aos links diretos do host exato (`*.host` cobre os
     subdomínios; o exato vence), só por https ou para o próprio computador, a não ser que o
@@ -163,15 +169,15 @@ Dados no Linux:
 - **Filas na GUI**: seção "Filas" na barra lateral (reconstruída em `MainWindow::set_queues`
   quando as configurações mudam), lista ordenada por `order`, e no clique direito "Mover para
   cima/baixo" e "Mover para a fila ▸". A janela Novo download tem o campo Fila.
-- Atalho `io.ldm.Ldm.desktop` no menu de aplicativos, com caminho absoluto no `Exec`.
+- Atalho `io.fisga.Fisga.desktop` no menu de aplicativos, com caminho absoluto no `Exec`.
 - **Bandeja** (pacote 2): `Settings.tray`, ligada por padrão. O ícone só existe numa instância
   "persistente" (janela principal aberta ou `--background`), nunca no `--pending`. Com o ícone
   ativo, fechar a janela mantém o app (um `hold` do GApplication). Sem bandeja (o `spawn` do
   `ksni` falha), fechar a janela fecha o app, como antes. Menu: resumo, Abrir, Adicionar URL,
   Retomar todos, Pausar todos, Sair (só a interface).
-- **Iniciar com a sessão** (pacote 2): `~/.config/autostart/io.ldm.Ldm.desktop` com
-  `ldm-gui --background`. Nesse modo o `ksni` usa `assume_sni_available(true)`: o ícone aparece
-  quando o waybar/noctalia subir, mesmo que depois do LDM. Com "iniciar com a sessão" ligado e a
+- **Iniciar com a sessão** (pacote 2): `~/.config/autostart/io.fisga.Fisga.desktop` com
+  `fisga-gui --background`. Nesse modo o `ksni` usa `assume_sni_available(true)`: o ícone aparece
+  quando o waybar/noctalia subir, mesmo que depois do Fisga. Com "iniciar com a sessão" ligado e a
   bandeja desligada, o `--background` roda sem nada visível (só confirma os downloads do
   navegador); talvez valha avisar disso nas Preferências.
 
@@ -182,7 +188,7 @@ Dados no Linux:
   Cobre pausar e retomar, confirmação, fallback, configurações, limite de velocidade, arquivo
   existente, link copiado e o agendador (fila esperando, abrindo e "suspendendo" no fim).
 - `scripts/ci/gui-smoke.sh`: a GUI sob Xvfb com xdotool. Os screenshots ficam no artifact
-  `gui-screenshots` de cada execução. Inclui uma segunda fila, a aba Filas e o `ldm-gui --background`
+  `gui-screenshots` de cada execução. Inclui uma segunda fila, a aba Filas e o `fisga-gui --background`
   confirmando um download sem abrir outro `--pending`. Não há bandeja no Xvfb, então o ícone
   em si só é testado de verdade no Arch.
 - `extension/test/real-clicks.mjs`: Chrome de verdade via CDP pela pipe, com native messaging
@@ -214,13 +220,13 @@ a sessão e o agendador do pacote 2 (ok em 23/10). **Ainda não testou as vária
 Mudanças só de documentação podem ir direto para o `main`.
 
 ### Compilar no Windows (não há Rust nativo aqui)
-- Use Docker: `scripts/docker-cargo.sh test --workspace` (ou `clippy ...`). A imagem `ldm-build` é
+- Use Docker: `scripts/docker-cargo.sh test --workspace` (ou `clippy ...`). A imagem `fisga-build` é
   rust:1-slim-trixie com GTK4.
 - Para rodar o e2e no container:
   ```bash
   root="$(pwd -W)"; MSYS_NO_PATHCONV=1 docker run --rm -v "$root:/src" -w /src \
-    -v ldm-cargo-registry:/usr/local/cargo/registry -v ldm-target:/target -e CARGO_TARGET_DIR=/target \
-    ldm-build bash -c "cargo build -q --workspace --bins --examples && bash scripts/e2e.sh /target/debug"
+    -v fisga-cargo-registry:/usr/local/cargo/registry -v fisga-target:/target -e CARGO_TARGET_DIR=/target \
+    fisga-build bash -c "cargo build -q --workspace --bins --examples && bash scripts/e2e.sh /target/debug"
   ```
 - **Docker Desktop costuma travar aqui.** O erro aparece no log como
   `listening on unix://.../Docker/run/dockerInference`: sobra um socket antigo que não se apaga.
@@ -246,9 +252,9 @@ Mudanças só de documentação podem ir direto para o `main`.
   `filename` (o nome do `Content-Disposition` vem depois, no `onChanged`). Por isso o `takeOver`
   olha de novo quando o nome aparece; o conjunto `judged` impede decidir duas vezes.
 - Os tipos de arquivo e a tecla de forçar ficam nas configurações do app (`Settings::browser`).
-  A extensão pede com `{"type":"settings"}` ao host, que não inicia o `ldmd` para isso, e copia
+  A extensão pede com `{"type":"settings"}` ao host, que não inicia o `fisgad` para isso, e copia
   para `storage.local` (o `content.js` lê `forceKey` de lá). A lista padrão existe em dois lugares,
-  `DEFAULT_FILE_TYPES` (ldm-ipc) e `DEFAULT_SETTINGS.fileTypes` (background.js): mantenha iguais.
+  `DEFAULT_FILE_TYPES` (fisga-ipc) e `DEFAULT_SETTINGS.fileTypes` (background.js): mantenha iguais.
 
 ## Próximos passos (em ordem de prioridade)
 
@@ -264,7 +270,7 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   limitadores (`DownloadOptions::limiters`: o global e o do download) e respeita todos; o
   yt-dlp recebe o menor (`combined_limit`) e só no próximo início. Na GUI, fica na janela de
   progresso ("No máximo ... KB/s"); "Limitar velocidade…" no clique direito abre essa janela.
-- ~~Download em lote~~ (feito): `ldm_ipc::expand_batch` (um `*`, números com zeros à
+- ~~Download em lote~~ (feito): `fisga_ipc::expand_batch` (um `*`, números com zeros à
   esquerda ou letras, no máximo `MAX_BATCH`) e `parse_url_list`; `Request::AddBatch` confere
   todos os endereços antes e cria tudo com um salvamento só (`Manager::insert` sem salvar,
   usado por `add` e `add_batch`); sem a janela Novo download. GUI em `batch.rs`.
@@ -275,40 +281,40 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   `SearchEntry` no lugar do título (`format::matches_search`; enquanto ela tem foco, os atalhos
   Delete e Ctrl+C da janela ficam desligados), `window::COLUMNS` com ações `win.column-<id>` e
   `Settings.hidden_columns`, coluna "Adicionado em" (`format::added`). Exportar = os endereços
-  da vista atual num `.txt`; importar abre esse texto na janela de lote. CLI: `ldm export`.
+  da vista atual num `.txt`; importar abre esse texto na janela de lote. CLI: `fisga export`.
 - ~~Som, comando e ClamAV ao concluir~~ (feito, `manager/complete.rs`, `Settings.on_complete`):
   `after_complete` roda depois de `finish` (também para os vídeos do yt-dlp): ClamAV (infectado
   = `info.error` num download concluído, e para aí), o comando do usuário em `sh -c` com
-  `$LDM_FILE`... no ambiente (nunca no texto), e o som. Nos testes, `LDM_CLAMSCAN_CMD` e
-  `LDM_SOUND_CMD` trocam o ClamAV e o tocador.
-- ~~Conferir a soma (SHA-256)~~ (feito, `manager/verify.rs`): `Checksum::parse` (no `ldm-ipc`)
+  `$FISGA_FILE`... no ambiente (nunca no texto), e o som. Nos testes, `FISGA_CLAMSCAN_CMD` e
+  `FISGA_SOUND_CMD` trocam o ClamAV e o tocador.
+- ~~Conferir a soma (SHA-256)~~ (feito, `manager/verify.rs`): `Checksum::parse` (no `fisga-ipc`)
   aceita os dígitos sozinhos (o algoritmo pelo tamanho: SHA-1/256/384/512), `sha256:…`, e linhas
   de `SHA256SUMS` (GNU e BSD). `DownloadInfo.checksum` = a esperada; `DownloadInfo.hash` = a
   última leitura (`Hashing::Running/Done/Failed`), e `checksum_matches()` compara. Com soma,
   `after_complete` confere antes do ClamAV; diferente = avisa e para (sem comando nem som).
-  `Request::Verify` (menu da linha, `ldm verify`) lê de novo, com progresso a cada 250 ms.
+  `Request::Verify` (menu da linha, `fisga verify`) lê de novo, com progresso a cada 250 ms.
   O hash é o do `ring` (já vinha com o rustls, com SHA-NI), sem dependência nova. MD5 não.
 - ~~Grabber~~ (feito, `manager/grab.rs`): `Request::Grab { url, depth }` lê a página e, até
   `depth` (máximo `MAX_GRAB_DEPTH` = 3), as páginas do mesmo host abaixo da pasta inicial;
   `extract_links` pega `href`/`src` sem parser de HTML; limites de 100 páginas, 5 MB e 15 s por
-  página. Os filtros (`grab_filter`, `glob_matches`) ficam no `ldm-ipc`, usados pela GUI
-  (`grabber.rs`) e pela CLI (`ldm grab`); adicionar é um `AddBatch`. Ainda sem filtro por
+  página. Os filtros (`grab_filter`, `glob_matches`) ficam no `fisga-ipc`, usados pela GUI
+  (`grabber.rs`) e pela CLI (`fisga grab`); adicionar é um `AddBatch`. Ainda sem filtro por
   tamanho (precisaria de uma sondagem por arquivo).
-- ~~Pacote para o Arch~~ (feito): `packaging/arch/PKGBUILD` (`ldm-git`), fonte em `$LDM_GIT`
-  (o checkout local enquanto o repositório é privado). `ldm install-hosts --system $pkgdir
-  --host-path /usr/bin/ldm-native-host` grava os manifestos do sistema. O job `arch-package`
+- ~~Pacote para o Arch~~ (feito): `packaging/arch/PKGBUILD` (`fisga-git`), fonte em `$FISGA_GIT`
+  (o checkout local enquanto o repositório é privado). `fisga install-hosts --system $pkgdir
+  --host-path /usr/bin/fisga-native-host` grava os manifestos do sistema. O job `arch-package`
   do CI roda o `makepkg` num container `archlinux`, instala o pacote e confere os arquivos.
   Para publicar no AUR: tornar o repositório público, gerar o `.SRCINFO`
   (`makepkg --printsrcinfo`) e escolher uma licença (hoje `custom`, sem arquivo LICENSE).
 - Flatpak, .deb e .rpm.
 
-### Visual novo (proposta E do canvas "LDM — novo visual")
-- ~~Feito~~ (`ldm-gui/src/theme.rs`, `speed.rs`, `cards.rs`): tema escuro com CSS próprio (o tema
+### Visual novo (proposta E do canvas "Fisga — novo visual")
+- ~~Feito~~ (`fisga-gui/src/theme.rs`, `speed.rs`, `cards.rs`): tema escuro com CSS próprio (o tema
   padrão em modo escuro por baixo; `theme::load` no `App::start`), gráfico de velocidade em
   `DrawingArea` (amostra por segundo, desliza a cada quadro), `GridView` de cartões sobre a mesma
   `SingleSelection` da lista (menu e clique duplo iguais, `open_item`), `Stack` cartões/lista,
   chips sincronizados com a barra lateral e a vista nova *Com erro* (`View::Failed`). O mapa do
-  arquivo vem do daemon (`DownloadInfo.map`, `ldm_ipc::file_map` sobre os segmentos do motor); sem
+  arquivo vem do daemon (`DownloadInfo.map`, `fisga_ipc::file_map` sobre os segmentos do motor); sem
   ele (yt-dlp), `format::file_map` enche da esquerda pelo progresso. Cuidado: o tema padrão dá
   margem a todo `box` dentro de `gridview > child` (vista de ícones); o CSS zera isso nos cartões.
 - ~~Feito~~: cartões/lista e a ordem (mais recentes no topo, o padrão, ou mais antigos) ficam nas
@@ -321,7 +327,7 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   mudança e volta para o topo com `scroll_to` (GTK 4.12, por isso a feature `v4_12`).
 
 ### Motor: estabilidade e banda (de `docs/ANALISE-IDM-DOWNLOAD.md`)
-- ~~Feito~~ (`ldm-core/src/engine.rs`, `lib.rs`, `control.rs`):
+- ~~Feito~~ (`fisga-core/src/engine.rs`, `lib.rs`, `control.rs`):
   - o cliente é `http1_only()`: com HTTP/2 os segmentos viravam streams de um único TCP;
   - conexão parada: a cada `TICK` (1 s) sem dados o dono grava o buffer; quem está ocioso assume o
     resto de um segmento que já recebia dados e parou há `STALL` (3 s); antes da resposta, só o timeout
@@ -333,17 +339,17 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
     `Error::Throttled`: a conexão sai (`Ctx::leave`, menos a última), e a última espera o `Retry-After`;
     se as outras falharem nesse meio-tempo, uma das que saíram volta (`Ctx::rejoin`); 200 em vez de 206
     (`Error::RangeIgnored`) também é definitivo;
-  - durabilidade: `persist` faz o `fdatasync` dos dados antes de gravar o `.ldm-part.json` (a cada 2 s), e
+  - durabilidade: `persist` faz o `fdatasync` dos dados antes de gravar o `.fisga-part.json` (a cada 2 s), e
     `control::save` faz `fsync` do tmp e da pasta;
   - a espera pela resposta tem timeout; sem Range, o tempo sem dados tolerado é 10× maior (300 s).
 - ~~yt-dlp e links expirados (o "HTTP Error 410: Gone")~~ (`ytdlp.rs`): um stream capturado que falha com
   401/403/410 é tentado de novo pelo frame onde ele tocava (`page_of`; não pela aba, que pode ter outros vídeos), e a mensagem explica que o
   link expirou. Um manifesto em outro site recebe o `Origin` do player (`origin_for`, `--add-header`).
-- ~~Velocidade dos vídeos de sites~~ (`ytdlp.rs`, `Rate`): a velocidade é medida pelo LDM a partir dos
+- ~~Velocidade dos vídeos de sites~~ (`ytdlp.rs`, `Rate`): a velocidade é medida pelo Fisga a partir dos
   bytes que o yt-dlp informa, numa janela de 5 s e de novo a cada segundo. O número do yt-dlp vale só
   para o pedaço em andamento (o YouTube entrega em rajadas, e o começo de cada pedaço passava de 100 MB/s
   numa linha de 600 Mbit/s) e ficava parado quando nada chegava, congelando o "termina em".
-- ~~Daemon antigo depois de atualizar~~ (`ldmd`, `replaced_binary`): o pacote troca o `/usr/bin/ldmd`,
+- ~~Daemon antigo depois de atualizar~~ (`fisgad`, `replaced_binary`): o pacote troca o `/usr/bin/fisgad`,
   mas o processo antigo continuava rodando. Uma GUI nova falando com ele perdia as configurações que o
   daemon antigo não conhece (o botão de lista voltava para os cartões). A cada 30 s o daemon vê se o
   próprio arquivo foi substituído (`/proc/self/exe` termina em ` (deleted)`) e, sem nada em andamento,

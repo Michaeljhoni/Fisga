@@ -1,0 +1,229 @@
+//! Launching `fisga-gui` for pending downloads ("Novo download" window).
+//!
+//! The GUI subscribes with `confirmer: true`; while one is connected it receives
+//! the pending download as a normal `Update`. Otherwise the daemon starts
+//! `fisga-gui --pending`, which shows only the confirmation window. If the GUI
+//! cannot be started, or does not connect in time (no display, crash), the
+//! download is queued anyway so the click in the browser is never lost.
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use fisga_ipc::State;
+
+use crate::manager::{Answer, Manager};
+use crate::notify;
+
+/// How long a freshly launched GUI has to connect before the download is
+/// queued without confirmation.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// A GUI launched this recently is assumed to be starting up: do not launch another.
+const RELAUNCH_AFTER: Duration = Duration::from_secs(10);
+
+/// What happens to a pending download when no window can ask the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unanswered {
+    /// Queue it: the user clicked "download" in the browser.
+    Queue,
+    /// Forget it: it only came from a copied link.
+    Drop,
+}
+
+pub struct Gui {
+    confirmers: AtomicUsize,
+    last_launch: Mutex<Option<Instant>>,
+    /// `$FISGA_GUI`, else `fisga-gui` next to `fisgad`. Empty = never launch.
+    program: Option<PathBuf>,
+    connect_timeout: Duration,
+}
+
+/// Keeps a confirmer counted while its subscription is open.
+pub struct ConfirmerGuard(Arc<Gui>);
+
+impl Drop for ConfirmerGuard {
+    fn drop(&mut self) {
+        self.0.confirmers.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl Gui {
+    pub fn from_env() -> Arc<Self> {
+        let program = match std::env::var_os("FISGA_GUI") {
+            Some(value) if value.is_empty() => None,
+            Some(value) => Some(PathBuf::from(value)),
+            None => Some(fisga_ipc::sibling_executable("fisga-gui")),
+        };
+        Self::new(program, CONNECT_TIMEOUT)
+    }
+
+    pub fn new(program: Option<PathBuf>, connect_timeout: Duration) -> Arc<Self> {
+        Arc::new(Self { confirmers: AtomicUsize::new(0), last_launch: Mutex::new(None), program, connect_timeout })
+    }
+
+    pub fn attach(self: &Arc<Self>) -> ConfirmerGuard {
+        self.confirmers.fetch_add(1, Ordering::SeqCst);
+        // The launched GUI is up: if it quits, the next pending download launches it again.
+        *self.last_launch.lock().unwrap() = None;
+        ConfirmerGuard(self.clone())
+    }
+
+    pub fn has_confirmer(&self) -> bool {
+        self.confirmers.load(Ordering::SeqCst) > 0
+    }
+
+    /// Makes sure someone will show the confirmation window for `id`.
+    pub fn request_confirmation(self: &Arc<Self>, manager: &Arc<Manager>, id: u64, unanswered: Unanswered) {
+        if self.has_confirmer() {
+            return;
+        }
+        let recently = self.last_launch.lock().unwrap().is_some_and(|t| t.elapsed() < RELAUNCH_AFTER);
+        if !recently {
+            if let Err(e) = self.launch() {
+                tracing::warn!(error = %e, "não foi possível abrir o fisga-gui");
+                give_up(manager, id, unanswered);
+                return;
+            }
+        }
+        tokio::spawn(self.clone().fallback(manager.clone(), id, unanswered));
+    }
+
+    /// Starts `fisga-gui --pending` unless a GUI is connected (or starting): it
+    /// shows whatever needs an answer, such as a planned power off.
+    pub fn show_window(&self) {
+        let recently = self.last_launch.lock().unwrap().is_some_and(|t| t.elapsed() < RELAUNCH_AFTER);
+        if self.has_confirmer() || recently {
+            return;
+        }
+        if let Err(e) = self.launch() {
+            tracing::warn!(error = %e, "não foi possível abrir o fisga-gui");
+        }
+    }
+
+    fn launch(&self) -> anyhow::Result<()> {
+        let program = self.program.as_ref().ok_or_else(|| anyhow::anyhow!("FISGA_GUI vazio"))?;
+        let mut command = tokio::process::Command::new(program);
+        command
+            .arg("--pending")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            // Ctrl+C on a fisgad started from a terminal must not close the window.
+            .process_group(0);
+        let mut child = command.spawn()?;
+        *self.last_launch.lock().unwrap() = Some(Instant::now());
+        tracing::info!(program = %program.display(), "fisga-gui iniciado");
+        tokio::spawn(async move {
+            let _ = child.wait().await;
+        });
+        Ok(())
+    }
+
+    /// Gives up on asking if no GUI connected in time.
+    async fn fallback(self: Arc<Self>, manager: Arc<Manager>, id: u64, unanswered: Unanswered) {
+        let deadline = Instant::now() + self.connect_timeout;
+        while Instant::now() < deadline {
+            if self.has_confirmer() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        if !self.has_confirmer() && manager.state(id) == Some(State::Pending) {
+            tracing::warn!(id, "o fisga-gui não se conectou a tempo");
+            give_up(&manager, id, unanswered);
+        }
+    }
+}
+
+fn give_up(manager: &Arc<Manager>, id: u64, unanswered: Unanswered) {
+    match unanswered {
+        Unanswered::Queue => {
+            tracing::info!(id, "o download começa sem confirmação");
+            if manager.confirm(id, Answer::default()).is_ok() {
+                notify::send(
+                    "Download adicionado",
+                    "A janela de confirmação não pôde ser aberta; o download foi para a fila.",
+                );
+            }
+        }
+        Unanswered::Drop => {
+            tracing::info!(id, "link copiado descartado");
+            let manager = manager.clone();
+            tokio::spawn(async move { manager.remove(id, false).await });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fisga_ipc::AddRequest;
+
+    fn pending(manager: &Arc<Manager>) -> u64 {
+        // Unreachable port: the queued job fails fast instead of downloading.
+        let request = AddRequest { url: "http://127.0.0.1:9/a.iso".into(), confirm: true, ..Default::default() };
+        manager.add(request).unwrap()
+    }
+
+    fn manager() -> Arc<Manager> {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("fisgad-gui-test-{}-{nanos}", std::process::id()));
+        Manager::load(dir.join("downloads.json"), dir.join("settings.json")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn missing_gui_starts_the_download_right_away() {
+        let manager = manager();
+        let gui = Gui::new(Some("/nonexistent/fisga-gui".into()), Duration::from_secs(60));
+        let id = pending(&manager);
+        gui.request_confirmation(&manager, id, Unanswered::Queue);
+        assert_ne!(manager.state(id), Some(State::Pending));
+    }
+
+    #[tokio::test]
+    async fn copied_link_is_dropped_when_nobody_can_ask() {
+        let manager = manager();
+        let gui = Gui::new(Some("true".into()), Duration::from_millis(200));
+        let id = pending(&manager);
+        gui.request_confirmation(&manager, id, Unanswered::Drop);
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert_eq!(manager.state(id), None);
+    }
+
+    #[tokio::test]
+    async fn gui_that_never_connects_falls_back_to_the_queue() {
+        let manager = manager();
+        let gui = Gui::new(Some("true".into()), Duration::from_millis(200));
+        let id = pending(&manager);
+        gui.request_confirmation(&manager, id, Unanswered::Queue);
+        assert_eq!(manager.state(id), Some(State::Pending));
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert_ne!(manager.state(id), Some(State::Pending));
+    }
+
+    #[tokio::test]
+    async fn connected_gui_keeps_the_download_pending() {
+        let manager = manager();
+        let gui = Gui::new(Some("/nonexistent/fisga-gui".into()), Duration::from_millis(200));
+        let guard = gui.attach();
+        let id = pending(&manager);
+        gui.request_confirmation(&manager, id, Unanswered::Queue);
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(manager.state(id), Some(State::Pending));
+        drop(guard);
+        assert!(!gui.has_confirmer());
+    }
+
+    #[tokio::test]
+    async fn gui_that_connects_late_but_in_time_keeps_it_pending() {
+        let manager = manager();
+        let gui = Gui::new(Some("true".into()), Duration::from_millis(500));
+        let id = pending(&manager);
+        gui.request_confirmation(&manager, id, Unanswered::Queue);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _guard = gui.attach();
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        assert_eq!(manager.state(id), Some(State::Pending));
+    }
+}

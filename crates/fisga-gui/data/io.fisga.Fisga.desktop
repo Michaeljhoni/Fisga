@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Fisga
+GenericName=Gerenciador de downloads
+Comment=Baixe arquivos, vídeos e músicas com várias conexões
+Exec=fisga-gui
+Icon=io.fisga.Fisga
+Terminal=false
+Categories=Network;FileTransfer;GTK;
+Keywords=download;downloads;idm;gerenciador;
+StartupNotify=true
+DBusActivatable=false

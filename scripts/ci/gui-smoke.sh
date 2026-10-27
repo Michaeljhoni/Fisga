@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GUI smoke test under Xvfb: daemon launches `ldm-gui --pending`, the "Novo download"
+# GUI smoke test under Xvfb: daemon launches `fisga-gui --pending`, the "Novo download"
 # window appears, Enter = "Baixar agora" opens the progress window, which turns
 # into "Download concluído"; Escape = "Cancelar"; then the main window
 # (sidebar with categories) and Preferências.
@@ -25,9 +25,9 @@ Type=Application
 Name=Abridor de teste
 Exec=%s %%f
 MimeType=application/octet-stream;
-'   "$SANDBOX/fake-open" > "$XDG_DATA_HOME/applications/ldm-test-open.desktop"
+'   "$SANDBOX/fake-open" > "$XDG_DATA_HOME/applications/fisga-test-open.desktop"
 printf '[Default Applications]
-application/octet-stream=ldm-test-open.desktop
+application/octet-stream=fisga-test-open.desktop
 ' > "$XDG_CONFIG_HOME/mimeapps.list"
 export DISPLAY=:99 GDK_BACKEND=x11 GSK_RENDERER=cairo LIBGL_ALWAYS_SOFTWARE=1 NO_AT_BRIDGE=1
 Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
@@ -36,7 +36,7 @@ sleep 1
 
 "$BIN/examples/range_server" 0 20 > "$SANDBOX/server.url" &
 SERVER=$!
-trap 'kill $XVFB $SERVER 2>/dev/null; "$BIN/ldm" stop >/dev/null 2>&1 || true' EXIT
+trap 'kill $XVFB $SERVER 2>/dev/null; "$BIN/fisga" stop >/dev/null 2>&1 || true' EXIT
 for _ in $(seq 1 50); do [ -s "$SANDBOX/server.url" ] && break; sleep 0.1; done
 BASE="$(cat "$SANDBOX/server.url")"
 URL="$BASE/files/52428800.bin"
@@ -46,18 +46,18 @@ frame() {
   local n; n=$(printf %s "$1" | wc -c)
   printf "\x$(printf %02x $((n & 255)))\x$(printf %02x $(((n >> 8) & 255)))\x00\x00%s" "$1"
 }
-host() { frame "$1" | "$BIN/ldm-native-host" | tail -c +5; echo; }
-state_of() { "$BIN/ldm" list | awk -v id="$1" '$1 == id { print $2 }'; }
+host() { frame "$1" | "$BIN/fisga-native-host" | tail -c +5; echo; }
+state_of() { "$BIN/fisga" list | awk -v id="$1" '$1 == id { print $2 }'; }
 find_window() { for _ in $(seq 1 75); do w="$(xdotool search --name "$1" 2>/dev/null | head -1)"; [ -n "$w" ] && { echo "$w"; return 0; }; sleep 0.2; done; echo "window '$1' not found" >&2; return 1; }
 shot() { import -window root "$OUT/$1.png"; echo "screenshot $1"; }
 
 # A second queue: the "Fila" field shows in "Novo download", and "Filas" in the sidebar.
-"$BIN/ldm" queue add Noite >/dev/null
+"$BIN/fisga" queue add Noite >/dev/null
 
-echo "== extension click -> pending + ldm-gui --pending"
+echo "== extension click -> pending + fisga-gui --pending"
 host "{\"type\":\"download\",\"url\":\"$URL\",\"kind\":\"direct\",\"title\":\"Vídeo de teste\"}"
 win="$(find_window "^Novo download$")"
-pgrep -af "ldm-gui --pending"
+pgrep -af "fisga-gui --pending"
 sleep 1.5   # let the probe fill in the size
 shot 1-novo-download
 test "$(state_of 1)" = aguardando
@@ -91,29 +91,29 @@ xdotool windowfocus --sync "$win" key Escape
 for _ in $(seq 1 30); do [ -z "$(state_of 2)" ] && break; sleep 0.2; done
 test -z "$(state_of 2)"; echo "download 2 removed"
 sleep 4.5
-if pgrep -f "ldm-gui --pending" >/dev/null; then echo "ldm-gui still running"; xdotool search --name . getwindowname %@ 2>/dev/null || true; exit 1; fi
-echo "ldm-gui --pending quit after the windows closed"
+if pgrep -f "fisga-gui --pending" >/dev/null; then echo "fisga-gui still running"; xdotool search --name . getwindowname %@ 2>/dev/null || true; exit 1; fi
+echo "fisga-gui --pending quit after the windows closed"
 
 echo "== main window"
-"$BIN/ldm" add "$BASE/files/2097152.bin" -n foto.png --wait >/dev/null
+"$BIN/fisga" add "$BASE/files/2097152.bin" -n foto.png --wait >/dev/null
 # Checked against its SHA-256: the list says so, and so does "Conferir soma".
 foto="$(find "$HOME/Downloads" -name foto.png)"
-"$BIN/ldm" verify "$("$BIN/ldm" list | awk '/foto.png/ { print $1 }')" "$(sha256sum "$foto")" | grep "confere"
+"$BIN/fisga" verify "$("$BIN/fisga" list | awk '/foto.png/ { print $1 }')" "$(sha256sum "$foto")" | grep "confere"
 host "{\"type\":\"download\",\"url\":\"$BASE/files/4194304.bin\",\"kind\":\"direct\"}"
 sleep 2
-"$BIN/ldm-gui" &
-main="$(find_window "^LDM$")"
+"$BIN/fisga-gui" &
+main="$(find_window "^Fisga$")"
 pending_count="$(xdotool search --name "^Novo download$" | wc -l)"
 test "$pending_count" -eq 1; echo "pending window for #4 is open too"
 xdotool windowfocus --sync "$(xdotool search --name '^Novo download$' | head -1)" key Escape
 sleep 1
 xdotool windowfocus --sync "$main"
 # A download running while the window is shot: the speed graph and the card's animations.
-"$BIN/ldm" add "$BASE/files/104857600.bin" -o "$SANDBOX/running" >/dev/null
-running="$("$BIN/ldm" list | awk '$1 ~ /^[0-9]+$/ && $1 > max { max = $1 } END { print max + 0 }')"
+"$BIN/fisga" add "$BASE/files/104857600.bin" -o "$SANDBOX/running" >/dev/null
+running="$("$BIN/fisga" list | awk '$1 ~ /^[0-9]+$/ && $1 > max { max = $1 } END { print max + 0 }')"
 sleep 5
 shot 4-janela-principal
-"$BIN/ldm" pause "$running"
+"$BIN/fisga" pause "$running"
 sleep 1
 # Search: Ctrl+F, type, and only the matching row is left.
 xdotool windowfocus --sync "$main" key ctrl+f
@@ -172,21 +172,21 @@ shot 5e-grabber
 xdotool windowfocus --sync "$grabber" key Escape
 
 echo "== background mode (session autostart): no window, but it answers the browser"
-pkill -f "$BIN/ldm-gui" || true
-for _ in $(seq 1 25); do pgrep -f "$BIN/ldm-gui" >/dev/null || break; sleep 0.2; done
-"$BIN/ldm-gui" --background &
+pkill -f "$BIN/fisga-gui" || true
+for _ in $(seq 1 25); do pgrep -f "$BIN/fisga-gui" >/dev/null || break; sleep 0.2; done
+"$BIN/fisga-gui" --background &
 sleep 3
-if xdotool search --name "^LDM$" >/dev/null 2>&1; then echo "main window opened"; exit 1; fi
+if xdotool search --name "^Fisga$" >/dev/null 2>&1; then echo "main window opened"; exit 1; fi
 host "{\"type\":\"download\",\"url\":\"$BASE/files/6291456.bin\",\"kind\":\"direct\"}"
 win="$(find_window "^Novo download$")"
-if pgrep -f "ldm-gui --pending" >/dev/null; then echo "a --pending GUI was launched"; exit 1; fi
+if pgrep -f "fisga-gui --pending" >/dev/null; then echo "a --pending GUI was launched"; exit 1; fi
 sleep 1
 shot 6-segundo-plano
 xdotool windowfocus --sync "$win" key Escape
 sleep 4.5
-pgrep -f "ldm-gui --background" >/dev/null; echo "still running after the window closed"
-grep -i "bandeja" "${XDG_STATE_HOME:-$HOME/.local/state}/ldm/ldm-gui.log" 2>/dev/null || true
+pgrep -f "fisga-gui --background" >/dev/null; echo "still running after the window closed"
+grep -i "bandeja" "${XDG_STATE_HOME:-$HOME/.local/state}/fisga/fisga-gui.log" 2>/dev/null || true
 
-"$BIN/ldm" list
+"$BIN/fisga" list
 ls -R "$HOME/Downloads"
 echo "GUI SMOKE OK"

@@ -1,4 +1,6 @@
 # makepkg output
+/fisga/
+# the clone from when the package was ldm-git
 /ldm/
 /src/
 /pkg/

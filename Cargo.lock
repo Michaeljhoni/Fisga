@@ -1113,22 +1113,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
-name = "ldm-cli"
+name = "fisga-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
  "dirs",
  "indicatif",
- "ldm-core",
- "ldm-ipc",
+ "fisga-core",
+ "fisga-ipc",
  "serde_json",
  "tokio",
  "tokio-util",
 ]
 
 [[package]]
-name = "ldm-core"
+name = "fisga-core"
 version = "0.1.0"
 dependencies = [
  "futures-util",
@@ -1144,13 +1144,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "ldm-daemon"
+name = "fisga-daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "dirs",
- "ldm-core",
- "ldm-ipc",
+ "fisga-core",
+ "fisga-ipc",
  "reqwest",
  "ring",
  "serde",
@@ -1163,19 +1163,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "ldm-gui"
+name = "fisga-gui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "gtk4",
  "ksni",
- "ldm-ipc",
+ "fisga-ipc",
  "libc",
  "tokio",
 ]
 
 [[package]]
-name = "ldm-ipc"
+name = "fisga-ipc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1187,11 +1187,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "ldm-native-host"
+name = "fisga-native-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ldm-ipc",
+ "fisga-ipc",
  "serde",
  "serde_json",
  "tokio",

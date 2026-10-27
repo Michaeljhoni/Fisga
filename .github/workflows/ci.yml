@@ -64,18 +64,21 @@ jobs:
         run: |
           useradd -m builder
           chown -R builder "$PWD"
-          su builder -c "git config --global --add safe.directory '$PWD' && cd packaging/arch && LDM_GIT='git+file://$PWD' makepkg --noconfirm --nocheck"
+          su builder -c "git config --global --add safe.directory '$PWD' && cd packaging/arch && FISGA_GIT='git+file://$PWD' makepkg --noconfirm --nocheck"
 
       - name: Install and check the package
         run: |
-          # Not ldm-git-debug-*, which makepkg also builds.
-          pkg="$(ls packaging/arch/ldm-git-r*.pkg.tar.zst)"
+          # Not fisga-git-debug-*, which makepkg also builds.
+          pkg="$(ls packaging/arch/fisga-git-r*.pkg.tar.zst)"
           pacman -Qlp "$pkg"
           pacman -U --noconfirm "$pkg"
-          ldm --version
-          test -x /usr/bin/ldmd && test -x /usr/bin/ldm-gui && test -x /usr/bin/ldm-native-host
-          grep -q '"path": "/usr/bin/ldm-native-host"' /usr/lib/mozilla/native-messaging-hosts/io.ldm.native.json
-          grep -q '"path": "/usr/bin/ldm-native-host"' /etc/chromium/native-messaging-hosts/io.ldm.native.json
-          test -f /usr/share/ldm/extension/chrome/manifest.json && test -f /usr/share/ldm/extension/firefox/manifest.json
-          grep -q '^Exec=ldm-gui' /usr/share/applications/io.ldm.Ldm.desktop
+          fisga --version
+          test -x /usr/bin/fisgad && test -x /usr/bin/fisga-gui && test -x /usr/bin/fisga-native-host
+          grep -q '"path": "/usr/bin/fisga-native-host"' /usr/lib/mozilla/native-messaging-hosts/io.fisga.native.json
+          grep -q '"path": "/usr/bin/fisga-native-host"' /etc/chromium/native-messaging-hosts/io.fisga.native.json
+          test -f /usr/share/fisga/extension/chrome/manifest.json && test -f /usr/share/fisga/extension/firefox/manifest.json
+          grep -q '^Exec=fisga-gui' /usr/share/applications/io.fisga.Fisga.desktop
+          grep -q '^Icon=io.fisga.Fisga$' /usr/share/applications/io.fisga.Fisga.desktop
+          test -f /usr/share/icons/hicolor/scalable/apps/io.fisga.Fisga.svg
+          pacman -Qip "$pkg" | grep -E '^(Replaces|Conflicts With) .*ldm-git'
           echo "PACKAGE OK"

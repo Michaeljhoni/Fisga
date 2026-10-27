@@ -1,7 +1,7 @@
 /target
 /extension/dist
 .omc/
-*.ldm-part
-*.ldm-part.json
+*.fisga-part
+*.fisga-part.json
 /extension/test/out/
 /extension/test/profile-*/

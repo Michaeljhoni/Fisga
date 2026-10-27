@@ -29,6 +29,8 @@ MimeType=application/octet-stream;
 printf '[Default Applications]
 application/octet-stream=fisga-test-open.desktop
 ' > "$XDG_CONFIG_HOME/mimeapps.list"
+# The app's icon, as the package installs it: the window shows it in the header.
+install -Dm644 "$(dirname "$0")/../../crates/fisga-gui/data/io.fisga.Fisga.svg" -t "$XDG_DATA_HOME/icons/hicolor/scalable/apps"
 export DISPLAY=:99 GDK_BACKEND=x11 GSK_RENDERER=cairo LIBGL_ALWAYS_SOFTWARE=1 NO_AT_BRIDGE=1
 Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
 XVFB=$!

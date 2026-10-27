@@ -9,7 +9,7 @@ pkgver=r0
 pkgrel=1
 pkgdesc='Gerenciador de downloads para Linux inspirado no IDM: várias conexões, filas, agendador e extensão para o navegador'
 arch=('x86_64' 'aarch64')
-url='https://github.com/Michaeljhoni/ldm'
+url='https://github.com/Michaeljhoni/Fisga'
 license=('custom')
 depends=('gtk4' 'gcc-libs' 'glibc')
 makedepends=('cargo' 'git')
@@ -28,7 +28,7 @@ replaces=('ldm-git')
 # makepkg's GCC LTO turns ring's C code (TLS) into objects the Rust linker cannot
 # read; the Rust side keeps its own LTO (Cargo.toml, profile.release).
 options=('!lto')
-source=("fisga::${FISGA_GIT:-git+https://github.com/Michaeljhoni/ldm.git}")
+source=("fisga::${FISGA_GIT:-git+https://github.com/Michaeljhoni/Fisga.git}")
 sha256sums=('SKIP')
 
 pkgver() {
@@ -66,5 +66,5 @@ package() {
   # The extension, to load unpacked: chrome://extensions or about:debugging.
   install -d "$pkgdir/usr/share/fisga"
   cp -r extension/dist "$pkgdir/usr/share/fisga/extension"
-  install -Dm644 README.md docs/CONTINUAR.md -t "$pkgdir/usr/share/doc/fisga"
+  install -Dm644 README.md docs/GUIA.md docs/CONTINUAR.md -t "$pkgdir/usr/share/doc/fisga"
 }

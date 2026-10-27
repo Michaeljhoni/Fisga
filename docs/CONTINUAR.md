@@ -9,10 +9,10 @@ completo (bandeja, iniciar com a sessão, agendador e várias filas).
 **Fisga** é um gerenciador de downloads para Linux inspirado no Internet Download Manager (IDM),
 escrito em Rust do zero (clean-room). Inclui uma extensão para Chrome e Firefox que captura
 downloads e vídeos, e uma interface GTK4 com os textos em português.
-Repositório privado: <https://github.com/Michaeljhoni/ldm>. Até 27/10/2026 o projeto se chamava
-**LDM**: o repositório e o clone do dono (`~/ldm`) ainda têm esse nome. O que o Fisga faz para quem
-vinha do LDM (pastas, `.ldm-part`, autostart, host nativo, `$LDM_FILE`) está no README, em
-"Vindo do LDM"; o código fica em `fisga_ipc::migrate_legacy_dirs`, `control::adopt_legacy`,
+Repositório privado: <https://github.com/Michaeljhoni/Fisga>. Até 27/10/2026 o projeto se chamava
+**LDM**: o clone do dono (`~/ldm`) ainda tem esse nome. O que o Fisga faz para quem vinha do LDM
+(pastas, `.ldm-part`, autostart, host nativo, `$LDM_FILE`) está em `docs/GUIA.md`, em "Vindo do
+LDM"; o código fica em `fisga_ipc::migrate_legacy_dirs`, `control::adopt_legacy`,
 `autostart::migrate_legacy` e `hosts::install`.
 
 ## Quem usa e como
@@ -359,4 +359,4 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
 
 A análise do IDM que originou o roadmap está em `docs/ANALISE-IDM.md`, com o catálogo de
 funcionalidades e a arquitetura. A análise mais funda do arquivo durante o download e das conexões
-está em `docs/ANALISE-IDM-DOWNLOAD.md`. O README tem o uso, a regra do niri e a seção de problemas.
+está em `docs/ANALISE-IDM-DOWNLOAD.md`. O `docs/GUIA.md` tem o uso, a regra do niri e a seção de problemas.

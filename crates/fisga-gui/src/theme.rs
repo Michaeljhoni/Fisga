@@ -47,12 +47,6 @@ window.fisga headerbar entry, window.fisga searchbar entry {
   border-radius: 9px;
   color: #e6e9ef;
 }
-.fisga-logo {
-  background: #f59e0b;
-  color: #111;
-  border-radius: 8px;
-  padding: 5px;
-}
 .fisga-title { font-weight: 800; letter-spacing: 1px; }
 
 .fisga-sidebar, .fisga-sidebar list {

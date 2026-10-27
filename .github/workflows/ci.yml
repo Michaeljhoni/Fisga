@@ -80,5 +80,6 @@ jobs:
           grep -q '^Exec=fisga-gui' /usr/share/applications/io.fisga.Fisga.desktop
           grep -q '^Icon=io.fisga.Fisga$' /usr/share/applications/io.fisga.Fisga.desktop
           test -f /usr/share/icons/hicolor/scalable/apps/io.fisga.Fisga.svg
+          test -f /usr/share/icons/hicolor/256x256/apps/io.fisga.Fisga.png
           pacman -Qip "$pkg" | grep -E '^(Replaces|Conflicts With) .*ldm-git'
           echo "PACKAGE OK"

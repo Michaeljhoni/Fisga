@@ -61,6 +61,9 @@ package() {
     -t "$pkgdir/usr/bin"
   install -Dm644 crates/fisga-gui/data/io.fisga.Fisga.desktop -t "$pkgdir/usr/share/applications"
   install -Dm644 crates/fisga-gui/data/io.fisga.Fisga.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
+  for size in 32 48 64 128 256; do
+    install -Dm644 "crates/fisga-gui/data/icons/$size/io.fisga.Fisga.png" -t "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps"
+  done
   # The browser host for every user (Firefox, Chromium, Chrome, Brave, Edge, Vivaldi, LibreWolf).
   target/release/fisga install-hosts --system "$pkgdir" --host-path /usr/bin/fisga-native-host
   # The extension, to load unpacked: chrome://extensions or about:debugging.

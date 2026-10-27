@@ -12,6 +12,9 @@ install -Dm755 target/release/fisga target/release/fisgad target/release/fisga-n
 mkdir -p "$PREFIX/share/applications"
 sed "s|^Exec=fisga-gui|Exec=$PREFIX/bin/fisga-gui|" crates/fisga-gui/data/io.fisga.Fisga.desktop > "$PREFIX/share/applications/io.fisga.Fisga.desktop"
 install -Dm644 crates/fisga-gui/data/io.fisga.Fisga.svg -t "$PREFIX/share/icons/hicolor/scalable/apps"
+for size in 32 48 64 128 256; do
+  install -Dm644 "crates/fisga-gui/data/icons/$size/io.fisga.Fisga.png" -t "$PREFIX/share/icons/hicolor/${size}x${size}/apps"
+done
 command -v update-desktop-database >/dev/null && update-desktop-database "$PREFIX/share/applications" || true
 "$PREFIX/bin/fisga" install-hosts
 bash extension/build.sh

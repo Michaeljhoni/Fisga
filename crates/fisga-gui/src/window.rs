@@ -319,15 +319,13 @@ impl MainWindow {
         window.add_css_class("fisga");
 
         let header = gtk::HeaderBar::new();
-        // The app's icon once installed (hicolor); a generic one from a bare build.
-        let logo = match gtk::IconTheme::for_display(&WidgetExt::display(&window)).has_icon(crate::APP_ID) {
-            true => gtk::Image::builder().icon_name(crate::APP_ID).pixel_size(30).valign(gtk::Align::Center).build(),
-            false => {
-                let logo = gtk::Image::builder().icon_name("folder-download-symbolic").valign(gtk::Align::Center).build();
-                logo.add_css_class("fisga-logo");
-                logo
-            }
-        };
+        // The app's icon, embedded as PNG: it shows without an install, and
+        // without the SVG loader (librsvg) some systems lack.
+        let logo = gtk::Image::builder().pixel_size(30).valign(gtk::Align::Center).build();
+        let icon = glib::Bytes::from_static(include_bytes!("../data/icons/64/io.fisga.Fisga.png"));
+        if let Ok(texture) = gdk::Texture::from_bytes(&icon) {
+            logo.set_paintable(Some(&texture));
+        }
         let title = gtk::Label::new(Some("Fisga"));
         title.add_css_class("fisga-title");
         let brand = gtk::Box::builder().spacing(10).margin_end(10).build();

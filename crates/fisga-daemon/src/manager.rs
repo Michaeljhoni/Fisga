@@ -977,7 +977,6 @@ impl Manager {
 /// Atomic write (temporary file + rename).
 fn write_json(path: &Path, value: &impl Serialize, mode: u32) -> anyhow::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -986,7 +985,14 @@ fn write_json(path: &Path, value: &impl Serialize, mode: u32) -> anyhow::Result<
     static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = WRITES.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_extension(format!("json.{}.{n}.tmp", std::process::id()));
-    let mut file = std::fs::OpenOptions::new().create(true).write(true).truncate(true).mode(mode).open(&tmp)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    // On Windows the file takes the access of its folder, private to the user.
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
+    #[cfg(not(unix))]
+    let _ = mode;
+    let mut file = options.open(&tmp)?;
     file.write_all(&serde_json::to_vec_pretty(value)?)?;
     std::fs::rename(tmp, path)?;
     Ok(())

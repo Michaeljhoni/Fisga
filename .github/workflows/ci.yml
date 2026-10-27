@@ -48,6 +48,30 @@ jobs:
           path: target/gui-shots
           if-no-files-found: ignore
 
+  # Windows and macOS: the daemon, the CLI and the native host (the GUI is
+  # still Linux only).
+  portable:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Unit and integration tests
+        run: cargo test --workspace --exclude fisga-gui --locked
+
+      - name: Clippy
+        run: cargo clippy --workspace --exclude fisga-gui --all-targets
+
   # The Arch package (packaging/arch/PKGBUILD), built as the owner would: makepkg
   # from this checkout, then installed and checked.
   arch-package:

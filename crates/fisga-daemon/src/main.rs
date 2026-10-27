@@ -1,21 +1,19 @@
 //! `fisgad`: owns the download list and runs the downloads. Clients (CLI, GUI,
-//! browser host) talk to it over a Unix socket; see `fisga-ipc`.
+//! browser host) talk to it over a local connection; see `fisga_ipc::transport`.
 
 mod clipboard;
 mod gui;
 mod manager;
 mod notify;
+mod shell;
 mod ytdlp;
 
 use std::io::IsTerminal;
-use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
-use anyhow::Context;
+use fisga_ipc::transport::{BoxStream, Listener, WriteHalf};
 use fisga_ipc::{Request, Response};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
-use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
 
 use crate::gui::{Gui, Unanswered};
@@ -43,37 +41,31 @@ async fn main() -> anyhow::Result<()> {
     fisga_ipc::migrate_legacy_dirs();
     init_logging();
 
-    let runtime_dir = fisga_ipc::runtime_dir();
-    std::fs::create_dir_all(&runtime_dir)?;
-    std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))?;
-    let socket = fisga_ipc::socket_path();
-    if UnixStream::connect(&socket).await.is_ok() {
+    let Some(mut listener) = Listener::bind().await? else {
         tracing::info!("fisgad já está rodando");
         return Ok(());
-    }
-    let _ = std::fs::remove_file(&socket);
-    let listener = UnixListener::bind(&socket).with_context(|| format!("bind {}", socket.display()))?;
+    };
 
     let store = dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("fisga").join("downloads.json");
     let settings = dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("fisga").join("settings.json");
     let manager = Manager::load(store, settings)?;
     let gui = Gui::from_env();
     let shutdown = CancellationToken::new();
-    tracing::info!(socket = %socket.display(), "fisgad {} pronto", fisga_ipc::VERSION);
+    tracing::info!(address = listener.address(), "fisgad {} pronto", fisga_ipc::VERSION);
 
     tokio::spawn(manager.clone().autosave(shutdown.clone()));
     tokio::spawn(scheduler(manager.clone(), gui.clone(), shutdown.clone()));
     clipboard::spawn(manager.clone(), gui.clone());
     manager.schedule();
 
-    let mut sigterm = signal(SignalKind::terminate())?;
-    let mut sigint = signal(SignalKind::interrupt())?;
+    let stop = stop_requested()?;
+    tokio::pin!(stop);
     let mut update_check = tokio::time::interval(UPDATE_CHECK);
     let mut restart = None;
     loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
-                Ok((stream, _)) => {
+                Ok(stream) => {
                     tokio::spawn(serve_client(manager.clone(), gui.clone(), stream, shutdown.clone()));
                 }
                 Err(e) => tracing::warn!(error = %e, "accept falhou"),
@@ -85,8 +77,7 @@ async fn main() -> anyhow::Result<()> {
                     break;
                 }
             }
-            _ = sigterm.recv() => break,
-            _ = sigint.recv() => break,
+            _ = &mut stop => break,
             _ = shutdown.cancelled() => break,
         }
     }
@@ -94,20 +85,53 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("encerrando");
     shutdown.cancel();
     manager.shutdown().await;
-    let _ = std::fs::remove_file(&socket);
+    listener.remove();
+    #[cfg(unix)]
     if let Some(path) = restart {
         use std::os::unix::process::CommandExt;
         // Only returns on failure; the clients start an fisgad again anyway.
         let error = std::process::Command::new(&path).args(std::env::args_os().skip(1)).exec();
         tracing::warn!(%error, "não foi possível reiniciar o fisgad");
     }
+    #[cfg(not(unix))]
+    let _ = restart;
     Ok(())
+}
+
+/// Resolves when the system asks the daemon to stop: SIGTERM or SIGINT.
+#[cfg(unix)]
+fn stop_requested() -> std::io::Result<impl std::future::Future<Output = ()>> {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    Ok(async move {
+        tokio::select! {
+            _ = terminate.recv() => {}
+            _ = interrupt.recv() => {}
+        }
+    })
+}
+
+/// Ctrl+C, Ctrl+Break or its console closing, when it runs in one; started
+/// in the background it has none and stops through `Request::Shutdown`.
+#[cfg(windows)]
+fn stop_requested() -> std::io::Result<impl std::future::Future<Output = ()>> {
+    use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close};
+    let (mut c, mut brk, mut close) = (ctrl_c()?, ctrl_break()?, ctrl_close()?);
+    Ok(async move {
+        tokio::select! {
+            _ = c.recv() => {}
+            _ = brk.recv() => {}
+            _ = close.recv() => {}
+        }
+    })
 }
 
 /// How often the daemon looks for a newer version of itself.
 const UPDATE_CHECK: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// This program's file, once an update replaced it: what runs is still the
+/// This program's file, once an update replaced it (Linux, where a running
+/// program's file can be replaced): what runs is still the
 /// old version, which a newer GUI cannot fully talk to (settings it does not
 /// know are dropped). Clients reconnect on their own after the restart.
 fn replaced_binary() -> Option<std::path::PathBuf> {
@@ -134,14 +158,14 @@ async fn scheduler(manager: Arc<Manager>, gui: Arc<Gui>, shutdown: CancellationT
     }
 }
 
-async fn write(writer:&mut tokio::net::unix::OwnedWriteHalf, response: &Response) -> std::io::Result<()> {
+async fn write(writer: &mut WriteHalf, response: &Response) -> std::io::Result<()> {
     let mut line = serde_json::to_vec(response)?;
     line.push(b'\n');
     writer.write_all(&line).await
 }
 
-async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: UnixStream, shutdown: CancellationToken) {
-    let (reader, mut writer) = stream.into_split();
+async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: BoxStream, shutdown: CancellationToken) {
+    let (reader, mut writer) = tokio::io::split(stream);
     let mut lines = BufReader::new(reader).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let request = match serde_json::from_str::<Request>(&line) {

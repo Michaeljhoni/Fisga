@@ -3,8 +3,9 @@
 //! then `Settings::on_complete`: the ClamAV scan (an infected file is
 //! flagged and nothing else runs), the user's command, and the "complete" sound.
 //!
-//! The user's command runs in `sh -c` with the file in environment variables
-//! (`$FISGA_FILE`...), never pasted into the command text: a file name sent by
+//! The user's command runs in the system's shell (`sh -c`, `cmd /C` on
+//! Windows) with the file in environment variables (`$FISGA_FILE`,
+//! `%FISGA_FILE%`...), never pasted into the command text: a file name sent by
 //! a website must not become shell code.
 
 use std::path::{Path, PathBuf};
@@ -15,7 +16,7 @@ use fisga_ipc::DownloadInfo;
 use tokio::process::Command;
 
 use super::Manager;
-use crate::notify;
+use crate::{notify, shell};
 
 const SOUND_FILE: &str = "/usr/share/sounds/freedesktop/stereo/complete.oga";
 
@@ -82,8 +83,13 @@ impl Manager {
         let output = match &self.scan_command {
             // Tests: the file goes as "$1", as for the real scanners.
             Some(custom) => {
-                let mut command = Command::new("sh");
-                command.arg("-c").arg(format!("{custom} \"$1\"")).arg("sh").arg(path).stdin(Stdio::null());
+                #[cfg(unix)]
+                let mut command = shell::command(&format!("{custom} \"$1\""));
+                #[cfg(unix)]
+                command.arg("sh").arg(path);
+                #[cfg(windows)]
+                let mut command = shell::command(&format!("{custom} \"{}\"", path.display()));
+                command.stdin(Stdio::null());
                 command.output().await
             }
             None => match run("clamdscan", &["--no-summary", "--fdpass"]).output().await {
@@ -108,10 +114,8 @@ impl Manager {
 
     async fn run_command(&self, command: &str, info: &DownloadInfo, path: &Path) {
         let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        let mut shell = Command::new("sh");
-        shell
-            .arg("-c")
-            .arg(command)
+        let mut child = shell::command(command);
+        child
             .env("FISGA_FILE", path)
             .env("FISGA_NAME", &info.name)
             .env("FISGA_URL", &info.url)
@@ -125,9 +129,9 @@ impl Manager {
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
         if dir.is_dir() {
-            shell.current_dir(&dir);
+            child.current_dir(&dir);
         }
-        let result = shell.output().await;
+        let result = child.output().await;
         match result {
             Ok(output) if output.status.success() => tracing::info!(id = info.id, "comando ao concluir executado"),
             Ok(output) => {
@@ -144,8 +148,7 @@ impl Manager {
             command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         };
         if let Some(custom) = &self.sound_command {
-            let mut command = Command::new("sh");
-            command.arg("-c").arg(custom);
+            let mut command = shell::command(custom);
             quiet(&mut command);
             let _ = command.status().await;
             return;
@@ -187,6 +190,8 @@ mod tests {
         Arc::new(manager)
     }
 
+    // The commands here are sh scripts.
+    #[cfg(unix)]
     #[tokio::test]
     async fn clean_file_runs_the_command_with_its_path_then_the_sound() {
         let dir = std::env::temp_dir().join(format!("fisga-complete-{}-a", std::process::id()));
@@ -209,6 +214,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn infected_file_is_flagged_and_nothing_else_runs() {
         let dir = std::env::temp_dir().join(format!("fisga-complete-{}-b", std::process::id()));

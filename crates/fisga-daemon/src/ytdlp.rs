@@ -25,9 +25,13 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Netscape cookies.txt, readable only by the user, deleted after the run.
 fn write_cookies_file(name: &str, cookies: &[Cookie]) -> std::io::Result<PathBuf> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     let path = fisga_ipc::runtime_dir().join(format!("cookies-{name}.txt"));
-    let mut file = std::fs::OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).open(&path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    // On Windows the runtime folder is already private to the user.
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(&path)?;
     writeln!(file, "# Netscape HTTP Cookie File")?;
     for c in cookies {
         let domain = if !c.host_only && !c.domain.starts_with('.') { format!(".{}", c.domain) } else { c.domain.clone() };

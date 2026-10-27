@@ -780,21 +780,46 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
 fn read_secret(prompt: &str) -> anyhow::Result<String> {
     use std::io::{BufRead, IsTerminal};
     let terminal = std::io::stdin().is_terminal();
-    let stty = |arg: &str| {
-        let _ = std::process::Command::new("stty").arg(arg).stdin(std::process::Stdio::inherit()).status();
-    };
     if terminal {
         eprint!("{prompt}: ");
-        stty("-echo");
+        set_echo(false);
     }
     let mut line = String::new();
     let read = std::io::stdin().lock().read_line(&mut line);
     if terminal {
-        stty("echo");
+        set_echo(true);
         eprintln!();
     }
     read?;
     Ok(line.trim_end_matches(['\r', '\n']).to_string())
+}
+
+/// Whether the terminal shows what is typed.
+#[cfg(unix)]
+fn set_echo(on: bool) {
+    let arg = if on { "echo" } else { "-echo" };
+    let _ = std::process::Command::new("stty").arg(arg).stdin(std::process::Stdio::inherit()).status();
+}
+
+#[cfg(windows)]
+fn set_echo(on: bool) {
+    use std::ffi::c_void;
+    const STD_INPUT_HANDLE: u32 = -10i32 as u32;
+    const ENABLE_ECHO_INPUT: u32 = 0x0004;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetStdHandle(which: u32) -> *mut c_void;
+        fn GetConsoleMode(console: *mut c_void, mode: *mut u32) -> i32;
+        fn SetConsoleMode(console: *mut c_void, mode: u32) -> i32;
+    }
+    // SAFETY: the handle is the process's own console input; failures are ignored.
+    unsafe {
+        let console = GetStdHandle(STD_INPUT_HANDLE);
+        let mut mode = 0;
+        if GetConsoleMode(console, &mut mode) != 0 {
+            SetConsoleMode(console, if on { mode | ENABLE_ECHO_INPUT } else { mode & !ENABLE_ECHO_INPUT });
+        }
+    }
 }
 
 async fn logins(command: LoginCommand) -> anyhow::Result<()> {

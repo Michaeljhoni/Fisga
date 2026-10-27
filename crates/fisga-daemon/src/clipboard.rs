@@ -27,10 +27,8 @@ const RESTART_AFTER: Duration = Duration::from_secs(10);
 const WL_PASTE_HANDLER: &str = "tr '\\r\\n' '  '; echo";
 
 fn watch_command() -> Option<Command> {
-    if let Some(custom) = std::env::var_os("FISGA_CLIPBOARD_CMD").filter(|c| !c.is_empty()) {
-        let mut command = Command::new("sh");
-        command.arg("-c").arg(custom);
-        return Some(command);
+    if let Some(custom) = std::env::var("FISGA_CLIPBOARD_CMD").ok().filter(|c| !c.is_empty()) {
+        return Some(crate::shell::command(&custom));
     }
     std::env::var_os("WAYLAND_DISPLAY").filter(|d| !d.is_empty())?;
     let mut command = Command::new("wl-paste");

@@ -1,5 +1,7 @@
 //! Protocol between `fisgad` (daemon) and its clients: one JSON object per line over
-//! the Unix socket `$XDG_RUNTIME_DIR/fisga/fisgad.sock`.
+//! a local connection (see [`transport`]).
+
+pub mod transport;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -7,8 +9,6 @@ use std::time::Duration;
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::net::unix::OwnedReadHalf;
-use tokio::net::UnixStream;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -794,6 +794,7 @@ pub struct LocalTime {
 }
 
 impl LocalTime {
+    #[cfg(unix)]
     pub fn now() -> Self {
         // SAFETY: time and localtime_r only write to the values we pass.
         let (time, tm) = unsafe {
@@ -809,6 +810,39 @@ impl LocalTime {
             day: local.div_euclid(86_400),
             weekday: tm.tm_wday as u8,
             minutes: (tm.tm_hour * 60 + tm.tm_min) as u16,
+        }
+    }
+
+    /// The system clock turned into local time by Windows, which knows the
+    /// time zone and its daylight saving rules.
+    #[cfg(windows)]
+    pub fn now() -> Self {
+        #[repr(C)]
+        #[derive(Default)]
+        struct FileTime {
+            low: u32,
+            high: u32,
+        }
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetSystemTimeAsFileTime(time: *mut FileTime);
+            fn FileTimeToLocalFileTime(utc: *const FileTime, local: *mut FileTime) -> i32;
+        }
+        let (mut utc, mut local) = (FileTime::default(), FileTime::default());
+        // SAFETY: both only write to the values we pass.
+        unsafe {
+            GetSystemTimeAsFileTime(&mut utc);
+            FileTimeToLocalFileTime(&utc, &mut local);
+        }
+        // 100 ns ticks since 1601-01-01.
+        let ticks = (u64::from(local.high) << 32) | u64::from(local.low);
+        let local = (ticks / 10_000_000) as i64 - 11_644_473_600;
+        let day = local.div_euclid(86_400);
+        Self {
+            day,
+            // 1970-01-01 was a Thursday.
+            weekday: (day + 4).rem_euclid(7) as u8,
+            minutes: (local.rem_euclid(86_400) / 60) as u16,
         }
     }
 }
@@ -1279,7 +1313,10 @@ pub enum Response {
     Error { message: String },
 }
 
-/// `$XDG_RUNTIME_DIR/fisga`, or `/tmp/fisga-<uid>` when the variable is unset.
+/// The daemon's private folder for its socket and temporary files:
+/// `$XDG_RUNTIME_DIR/fisga`, or `fisga-<uid>` in the temporary folder when the
+/// variable is unset (macOS, where that folder is already per user).
+#[cfg(unix)]
 pub fn runtime_dir() -> PathBuf {
     match std::env::var_os("XDG_RUNTIME_DIR") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir).join("fisga"),
@@ -1288,6 +1325,18 @@ pub fn runtime_dir() -> PathBuf {
     }
 }
 
+/// `%LOCALAPPDATA%\fisga\run`, which only the user can open.
+#[cfg(windows)]
+pub fn runtime_dir() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("fisga")
+        .join("run")
+}
+
+#[cfg(unix)]
 pub fn socket_path() -> PathBuf {
     runtime_dir().join("fisgad.sock")
 }
@@ -1310,16 +1359,14 @@ pub fn migrate_legacy_dirs() {
 }
 
 pub struct Connection {
-    lines: Lines<BufReader<OwnedReadHalf>>,
-    writer: tokio::net::unix::OwnedWriteHalf,
+    lines: Lines<BufReader<transport::ReadHalf>>,
+    writer: transport::WriteHalf,
 }
 
 impl Connection {
     pub async fn open() -> anyhow::Result<Self> {
-        let stream = UnixStream::connect(socket_path())
-            .await
-            .context("o daemon fisgad não está rodando")?;
-        let (reader, writer) = stream.into_split();
+        let stream = transport::connect().await.context("o daemon fisgad não está rodando")?;
+        let (reader, writer) = tokio::io::split(stream);
         Ok(Self { lines: BufReader::new(reader).lines(), writer })
     }
 
@@ -1362,7 +1409,7 @@ async fn is_running() -> bool {
 pub fn sibling_executable(name: &str) -> PathBuf {
     std::env::current_exe()
         .ok()
-        .map(|exe| exe.with_file_name(name))
+        .map(|exe| exe.with_file_name(format!("{name}{}", std::env::consts::EXE_SUFFIX)))
         .filter(|path| path.exists())
         .unwrap_or_else(|| PathBuf::from(name))
 }
@@ -1390,6 +1437,22 @@ pub async fn ensure_daemon() -> anyhow::Result<()> {
             });
         }
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        // No console window, and out of the browser's job object, which kills
+        // what the native host started when it closes; a job that forbids
+        // leaving it makes the first try fail.
+        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
+        if command.spawn().is_err() {
+            command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+            command.spawn().context("não foi possível iniciar o fisgad")?;
+        }
+    }
+    #[cfg(not(windows))]
     command.spawn().context("não foi possível iniciar o fisgad")?;
     for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(100)).await;

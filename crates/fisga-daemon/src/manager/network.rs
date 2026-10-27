@@ -126,6 +126,7 @@ mod tests {
 
     #[tokio::test]
     async fn logins_go_to_their_host_and_are_kept_private() {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
         let manager = manager();
         let login = |host: &str, user: &str| SiteLogin { host: host.into(), user: user.into(), password: "segredo".into() };
@@ -133,8 +134,11 @@ mod tests {
             .set_logins(vec![login("https://Arquivos.Exemplo.com/x", "velho"), login("arquivos.exemplo.com", "ana"), login(" ", "x")])
             .unwrap();
         assert_eq!(manager.logins(), vec![login("arquivos.exemplo.com", "ana")]);
-        let mode = std::fs::metadata(&manager.logins_path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
+        #[cfg(unix)]
+        {
+            let mode = std::fs::metadata(&manager.logins_path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
         assert_eq!(load_logins(&manager.logins_path), manager.logins());
 
         let request = |url: &str| AddRequest { url: url.into(), ..Default::default() };

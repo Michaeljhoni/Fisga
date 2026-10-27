@@ -317,11 +317,7 @@ impl Manager {
         };
         self.save();
         let mut command = match &self.power_command {
-            Some(custom) => {
-                let mut command = tokio::process::Command::new("sh");
-                command.arg("-c").arg(format!("{custom} {verb}"));
-                command
-            }
+            Some(custom) => crate::shell::command(&format!("{custom} {verb}")),
             None => {
                 let mut command = tokio::process::Command::new("systemctl");
                 command.arg(verb);

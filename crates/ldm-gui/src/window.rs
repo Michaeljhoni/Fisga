@@ -507,14 +507,25 @@ impl MainWindow {
             .child(&fab_box)
             .tooltip_text("Adicionar um endereço (Ctrl+N)")
             .action_name("win.add")
+            .build();
+        fab.add_css_class("ldm-fab");
+        // Its glow is a layer of its own, behind it and of its size: the
+        // shadow stays put and only the layer's opacity pulses. GTK caches
+        // blurred shadows by size, and a shadow that grows every frame drew
+        // as stretched strips.
+        let glow = gtk::Box::builder().can_target(false).build();
+        glow.add_css_class("ldm-fab-glow");
+        let fab_layer = gtk::Overlay::builder()
+            .child(&glow)
             .halign(gtk::Align::End)
             .valign(gtk::Align::End)
             .margin_end(24)
             .margin_bottom(22)
             .build();
-        fab.add_css_class("ldm-fab");
+        fab_layer.add_overlay(&fab);
+        fab_layer.set_measure_overlay(&fab, true);
         let downloads = gtk::Overlay::builder().child(&stack).build();
-        downloads.add_overlay(&fab);
+        downloads.add_overlay(&fab_layer);
 
         // Quick filters: the first sidebar entries, as chips.
         let chips_row = gtk::Box::builder().spacing(8).margin_top(16).margin_bottom(6).margin_start(24).margin_end(24).build();

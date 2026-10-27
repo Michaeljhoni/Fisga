@@ -180,14 +180,19 @@ columnview.ldm-list, columnview.ldm-list listview {
   background: #f59e0b;
   color: #111;
   font-weight: 700;
-  box-shadow: 0 8px 22px alpha(#f59e0b, 0.25);
-  animation: ldm-glow 2.4s ease-in-out infinite;
+  box-shadow: none;
 }
 .ldm-fab:hover { background: #fbbf24; }
+.ldm-fab-glow {
+  border-radius: 25px;
+  box-shadow: 0 8px 30px alpha(#f59e0b, 0.45);
+  opacity: 0.55;
+  animation: ldm-glow 2.4s ease-in-out infinite;
+}
 @keyframes ldm-glow {
-  0% { box-shadow: 0 8px 22px alpha(#f59e0b, 0.25); }
-  50% { box-shadow: 0 8px 34px alpha(#f59e0b, 0.45); }
-  100% { box-shadow: 0 8px 22px alpha(#f59e0b, 0.25); }
+  0% { opacity: 0.55; }
+  50% { opacity: 1; }
+  100% { opacity: 0.55; }
 }
 
 .ldm-statusbar {

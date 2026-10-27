@@ -318,6 +318,20 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
      `wip/release*`) é um ensaio que não publica;
   4. o artefato `aur-fisga-bin` traz o `PKGBUILD` e o `.SRCINFO` com as somas da versão: copiar
      para `packaging/arch-bin`, commit, e enviar ao AUR (`fisga-bin`).
+  5. extensão: o artefato `extension-stores` da CI (ou `extension/build.sh`, em
+     `extension/dist-store/`) traz o zip da Chrome Web Store (manifesto sem `key`, que a loja
+     recusa) e o do addons.mozilla.org; enviar cada um como versão nova na sua loja. Os textos e
+     as imagens das lojas estão em `extension/store/`, a política de privacidade em `PRIVACY.md`.
+- Lojas de extensão: a Chrome Web Store dá à extensão um ID próprio (não temos a chave privada do
+  `ocifdbhjaijkdgcnpigjlemkmahkojcm`, que segue valendo para a extensão carregada sem compactação);
+  quando ele existir, entra nos `allowed_origins` dos manifestos do native host (`hosts.rs`). No
+  Firefox o ID continua `fisga@fisga.local`; o manifesto declara `data_collection_permissions:
+  none` (exigido do AMO para extensões novas), por isso pede Firefox 140+.
+- Windows e macOS: fase 1 feita (daemon, CLI e native host compilam e passam nos testes; o job
+  `portable` do CI). O daemon fala por `fisga_ipc::transport`: socket Unix, ou no Windows um named
+  pipe de nome aleatório guardado em `%LOCALAPPDATA%\fisga\run\pipe`. Fase 2: notificações,
+  bandeja, iniciar com a sessão, suspender/desligar, área de transferência, som e o registro do
+  native host (registro do Windows, pastas do macOS). Fase 3: GUI e instaladores (.exe/.msi, .dmg).
 - Flatpak, .deb e .rpm.
 
 ### Visual novo (proposta E do canvas "Fisga — novo visual")

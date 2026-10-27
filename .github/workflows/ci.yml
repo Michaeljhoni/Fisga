@@ -72,6 +72,37 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --exclude fisga-gui --all-targets
 
+  # The packages sent to the Chrome Web Store and addons.mozilla.org, checked
+  # with Mozilla's own linter; the artifact is what gets uploaded.
+  extension:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Store packages
+        run: |
+          bash extension/build.sh
+          cd extension/dist-store
+          version="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' ../manifest.chrome.json)"
+          unzip -l "fisga-chrome-$version.zip"
+          unzip -p "fisga-chrome-$version.zip" manifest.json \
+            | python3 -c 'import json, sys; m = json.load(sys.stdin); assert "key" not in m, "key in the store manifest"'
+          unzip -p "fisga-firefox-$version.zip" manifest.json | python3 -m json.tool > /dev/null
+
+      - name: addons.mozilla.org linter
+        run: npx --yes web-ext@8 lint --source-dir extension/dist/firefox
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension-stores
+          path: extension/dist-store/*.zip
+          if-no-files-found: error
+
   # The Arch package (packaging/arch/PKGBUILD), built as the owner would: makepkg
   # from this checkout, then installed and checked.
   arch-package:

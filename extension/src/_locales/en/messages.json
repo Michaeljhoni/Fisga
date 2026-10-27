@@ -1,6 +1,6 @@
 {
   "extName": { "message": "Fisga Integration" },
-  "extDesc": { "message": "Download videos, music and files with Fisga, the Linux download manager." },
+  "extDesc": { "message": "Download videos, music and files with Fisga, the free download manager." },
   "btnDownload": { "message": "Download" },
   "btnDownloadTitle": { "message": "Download with Fisga" },
   "btnMore": { "message": "Choose what to download" },

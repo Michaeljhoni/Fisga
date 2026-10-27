@@ -1,6 +1,6 @@
 {
   "extName": { "message": "Integração Fisga" },
-  "extDesc": { "message": "Baixe vídeos, músicas e arquivos com o Fisga, o gerenciador de downloads para Linux." },
+  "extDesc": { "message": "Baixe vídeos, músicas e arquivos com o Fisga, o gerenciador de downloads livre." },
   "btnDownload": { "message": "Baixar" },
   "btnDownloadTitle": { "message": "Baixar com o Fisga" },
   "btnMore": { "message": "Escolher o que baixar" },

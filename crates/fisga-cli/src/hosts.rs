@@ -125,12 +125,11 @@ pub fn install(extra_chrome_ids: &[String], uninstall: bool) -> anyhow::Result<(
     Ok(())
 }
 
-#[cfg(test)]
+// Linux packages: the paths are Unix ones.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    // Linux packages: the paths are Unix ones.
-    #[cfg(unix)]
     #[test]
     fn system_manifests_for_packages() {
         let root = std::env::temp_dir().join(format!("fisga-hosts-{}", std::process::id()));

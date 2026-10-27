@@ -1,5 +1,6 @@
 /target
 /extension/dist
+/extension/dist-store
 .omc/
 *.fisga-part
 *.fisga-part.json

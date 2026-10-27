@@ -108,9 +108,12 @@ impl Gui {
             .arg("--pending")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            // Ctrl+C on a fisgad started from a terminal must not close the window.
-            .process_group(0);
+            .stderr(std::process::Stdio::null());
+        // Ctrl+C on a fisgad started from a terminal must not close the window.
+        #[cfg(unix)]
+        command.process_group(0);
+        #[cfg(windows)]
+        command.creation_flags(0x0000_0200); // CREATE_NEW_PROCESS_GROUP
         let mut child = command.spawn()?;
         *self.last_launch.lock().unwrap() = Some(Instant::now());
         tracing::info!(program = %program.display(), "fisga-gui iniciado");

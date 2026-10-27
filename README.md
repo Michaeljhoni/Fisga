@@ -29,12 +29,15 @@
 
 ## Instalar
 
-**Arch Linux** (pacote `fisga-git`):
+**Arch Linux**, com os binários prontos da [última versão](https://github.com/Michaeljhoni/Fisga/releases/latest)
+(pacote `fisga-bin`, instala em segundos):
 
 ```bash
 git clone https://github.com/Michaeljhoni/Fisga.git
-cd Fisga/packaging/arch && makepkg -si
+cd Fisga/packaging/arch-bin && makepkg -si
 ```
+
+Para compilar o último commit em vez da versão lançada, use `packaging/arch` (pacote `fisga-git`).
 
 **Outras distros** (precisa de Rust e do GTK ≥ 4.12 com os cabeçalhos):
 

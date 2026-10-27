@@ -1,0 +1,152 @@
+name: Release
+
+# A tag vX.Y.Z on main publishes the GitHub release: a tarball of the installed
+# files per architecture (what fisga-bin unpacks), SHA256SUMS, and CHANGELOG.md's
+# section as the notes. Run by hand (workflow_dispatch) or by a push to a
+# wip/release* branch it is a rehearsal: it builds and checks everything and
+# publishes nothing.
+on:
+  push:
+    tags: ['v*']
+    branches: ['wip/release*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        run: |
+          test "$(uname -m)" = "${{ matrix.arch }}"
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "the tag is $GITHUB_REF_NAME but Cargo.toml says $version"; exit 1
+          fi
+          grep -qx "pkgver=$version" packaging/arch-bin/PKGBUILD || { echo "packaging/arch-bin/PKGBUILD is not at $version"; exit 1; }
+          grep -qx "## $version" CHANGELOG.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      # Built on Ubuntu 24.04 (glibc 2.39, GTK 4.14): runs on Arch and on anything as new.
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev pkg-config zip
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: |
+          cargo build --release --locked --workspace --bins
+          bash extension/build.sh
+
+      - name: Tarball
+        run: |
+          name="fisga-$VERSION-${{ matrix.arch }}"
+          bash scripts/stage.sh "dist/$name"
+          "dist/$name/usr/bin/fisga" --version
+          tar -C dist --owner=0 --group=0 --numeric-owner -czf "dist/$name.tar.gz" "$name"
+          tar -tzf "dist/$name.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fisga-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # fisga-bin built from these tarballs and installed in a clean Arch: proves the
+  # binaries run there, and gives the AUR files with this version's sums.
+  arch-bin:
+    needs: build
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    timeout-minutes: 20
+    steps:
+      - name: Tools
+        run: pacman -Syu --noconfirm --needed base-devel gtk4
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fisga-*
+          path: packaging/arch-bin
+          merge-multiple: true
+
+      - name: Sums and .SRCINFO
+        working-directory: packaging/arch-bin
+        run: |
+          version="$(sed -n 's/^pkgver=//p' PKGBUILD)"
+          for arch in x86_64 aarch64; do
+            sum="$(sha256sum "fisga-$version-$arch.tar.gz" | cut -d' ' -f1)"
+            sed -i "s/^sha256sums_$arch=.*/sha256sums_$arch=('$sum')/" PKGBUILD
+          done
+          useradd -m builder
+          chown -R builder .
+          su builder -c "makepkg --printsrcinfo > .SRCINFO"
+          cat PKGBUILD .SRCINFO
+
+      # The tarball is already here under its source name, so makepkg does not download it.
+      - name: makepkg, install and check
+        working-directory: packaging/arch-bin
+        run: |
+          su builder -c "makepkg --noconfirm"
+          pkg="$(ls fisga-bin-*.pkg.tar.zst)"
+          pacman -Qlp "$pkg"
+          pacman -U --noconfirm "$pkg"
+          fisga --version
+          for bin in fisga fisgad fisga-gui fisga-native-host; do
+            if ldd "/usr/bin/$bin" | grep 'not found'; then exit 1; fi
+          done
+          grep -q '"path": "/usr/bin/fisga-native-host"' /usr/lib/mozilla/native-messaging-hosts/io.fisga.native.json
+          grep -q '"path": "/usr/bin/fisga-native-host"' /etc/chromium/native-messaging-hosts/io.fisga.native.json
+          test -f /usr/share/fisga/extension/chrome/manifest.json && test -f /usr/share/fisga/extension/firefox/manifest.json
+          grep -q '^Icon=io.fisga.Fisga$' /usr/share/applications/io.fisga.Fisga.desktop
+          test -f /usr/share/icons/hicolor/256x256/apps/io.fisga.Fisga.png
+          pacman -Qip "$pkg" | grep -E '^Licenses +: GPL-3.0-or-later$'
+          echo "PACKAGE OK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aur-fisga-bin
+          path: |
+            packaging/arch-bin/PKGBUILD
+            packaging/arch-bin/.SRCINFO
+          include-hidden-files: true
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [build, arch-bin]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fisga-*
+          path: dist
+          merge-multiple: true
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v head="## $version" '$0 == head { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > notes.md
+          (cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS \
+            --verify-tag --title "Fisga $version" --notes-file notes.md

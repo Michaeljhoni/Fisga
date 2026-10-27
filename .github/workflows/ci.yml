@@ -60,12 +60,13 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      # The AUR takes the PKGBUILD and .SRCINFO together; a stale .SRCINFO fails here.
+      # The AUR takes each PKGBUILD with its .SRCINFO; a stale .SRCINFO fails here.
       - name: .SRCINFO matches the PKGBUILD
         run: |
           useradd -m builder
           chown -R builder "$PWD"
           su builder -c "cd packaging/arch && makepkg --printsrcinfo | diff -u .SRCINFO -"
+          su builder -c "cd packaging/arch-bin && makepkg --printsrcinfo | diff -u .SRCINFO -"
 
       - name: makepkg
         run: |

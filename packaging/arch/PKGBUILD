@@ -31,9 +31,14 @@ options=('!lto')
 source=("fisga::${FISGA_GIT:-git+https://github.com/Michaeljhoni/Fisga.git}")
 sha256sums=('SKIP')
 
+# 1.0.0.r3.gabc1234 past a release tag; r62.abc1234 in a clone without tags.
 pkgver() {
   cd fisga
-  printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+  if git describe --tags --abbrev=0 >/dev/null 2>&1; then
+    git describe --long --tags --abbrev=7 | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+  else
+    printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+  fi
 }
 
 prepare() {
@@ -57,17 +62,5 @@ check() {
 
 package() {
   cd fisga
-  install -Dm755 target/release/fisga target/release/fisgad target/release/fisga-native-host target/release/fisga-gui \
-    -t "$pkgdir/usr/bin"
-  install -Dm644 crates/fisga-gui/data/io.fisga.Fisga.desktop -t "$pkgdir/usr/share/applications"
-  install -Dm644 crates/fisga-gui/data/io.fisga.Fisga.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
-  for size in 32 48 64 128 256; do
-    install -Dm644 "crates/fisga-gui/data/icons/$size/io.fisga.Fisga.png" -t "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps"
-  done
-  # The browser host for every user (Firefox, Chromium, Chrome, Brave, Edge, Vivaldi, LibreWolf).
-  target/release/fisga install-hosts --system "$pkgdir" --host-path /usr/bin/fisga-native-host
-  # The extension, to load unpacked: chrome://extensions or about:debugging.
-  install -d "$pkgdir/usr/share/fisga"
-  cp -r extension/dist "$pkgdir/usr/share/fisga/extension"
-  install -Dm644 README.md docs/GUIA.md docs/CONTINUAR.md -t "$pkgdir/usr/share/doc/fisga"
+  bash scripts/stage.sh "$pkgdir"
 }

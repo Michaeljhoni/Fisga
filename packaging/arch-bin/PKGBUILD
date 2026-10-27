@@ -1,0 +1,35 @@
+# Maintainer: Michaeljhoni <desenvolvimento@gbonline.com.br>
+#
+# The AUR package fisga-bin: the binaries of a GitHub release, nothing to compile.
+# The release workflow (.github/workflows/release.yml) fills in the sums for each
+# version, checks the package installs and leaves this file and its .SRCINFO in the
+# aur-fisga-bin artifact; commit those here and push them to the AUR.
+
+pkgname=fisga-bin
+pkgver=1.0.0
+pkgrel=1
+pkgdesc='Download manager with multiple connections, queues, a scheduler and a browser extension (prebuilt)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/Michaeljhoni/Fisga'
+license=('GPL-3.0-or-later')
+depends=('gtk4' 'gcc-libs' 'glibc')
+optdepends=(
+  'yt-dlp: videos from sites (YouTube and others)'
+  'ffmpeg: merge audio and video from sites'
+  'libnotify: notifications'
+  'wl-clipboard: catch copied links on Wayland'
+  'clamav: scan downloads with an antivirus'
+  'libcanberra: sound when a download finishes'
+)
+provides=('fisga')
+conflicts=('fisga' 'fisga-git')
+# Already stripped by cargo: no debug package to split off.
+options=('!debug')
+source_x86_64=("https://github.com/Michaeljhoni/Fisga/releases/download/v$pkgver/fisga-$pkgver-x86_64.tar.gz")
+source_aarch64=("https://github.com/Michaeljhoni/Fisga/releases/download/v$pkgver/fisga-$pkgver-aarch64.tar.gz")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+  cp -a --no-preserve=ownership "fisga-$pkgver-$CARCH/." "$pkgdir/"
+}

@@ -307,7 +307,17 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   `archlinux`, instala o pacote e confere os arquivos. Ao mudar o PKGBUILD:
   `makepkg --printsrcinfo > .SRCINFO`. Publicar no AUR (com o repositório público e a chave SSH
   na conta): clonar `ssh://aur@aur.archlinux.org/fisga-git.git`, copiar o `PKGBUILD` e o
-  `.SRCINFO`, commit e push.
+  `.SRCINFO`, commit e push. Os dois pacotes montam os arquivos com `scripts/stage.sh`.
+- ~~Versões e `fisga-bin`~~ (feito): para lançar a versão X.Y.Z:
+  1. `bash scripts/bump-version.sh X.Y.Z` (Cargo.toml, Cargo.lock, manifestos da extensão e
+     `packaging/arch-bin/PKGBUILD`) e a seção `## X.Y.Z` no `CHANGELOG.md`;
+  2. no main, `git tag vX.Y.Z && git push origin vX.Y.Z`;
+  3. o workflow `release.yml` compila em Ubuntu 24.04 (x86_64 e aarch64), monta o tarball com o
+     `stage.sh`, instala o `fisga-bin` num Arch limpo e publica a release com o `SHA256SUMS` e o
+     texto do CHANGELOG. Sem tag (Actions → Release → Run workflow, ou um push num branch
+     `wip/release*`) é um ensaio que não publica;
+  4. o artefato `aur-fisga-bin` traz o `PKGBUILD` e o `.SRCINFO` com as somas da versão: copiar
+     para `packaging/arch-bin`, commit, e enviar ao AUR (`fisga-bin`).
 - Flatpak, .deb e .rpm.
 
 ### Visual novo (proposta E do canvas "Fisga — novo visual")

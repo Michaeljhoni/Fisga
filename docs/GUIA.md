@@ -4,7 +4,7 @@ Tudo o que o [README](../README.md) resume: as peças, a instalação em detalhe
 interface e do terminal, e como resolver problemas.
 
 > De *fisgar*: pegar o download no ar. Inspirado no comportamento do Internet Download Manager, mas
-> escrito do zero (veja [ANALISE-IDM.md](ANALISE-IDM.md)). Até outubro de 2026 se chamava LDM.
+> escrito do zero, sem nada do código dele. Até outubro de 2026 se chamava LDM.
 
 O destaque é a **extensão do navegador**: ao passar o mouse sobre um vídeo ou música em qualquer
 site, aparece um botão **Baixar** no canto do player. Um clique abre a janela **Novo download** do

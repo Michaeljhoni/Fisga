@@ -328,7 +328,7 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   fim, e inverter a ordem também levava ao fim). `refresh` lê se a vista estava no topo antes da
   mudança e volta para o topo com `scroll_to` (GTK 4.12, por isso a feature `v4_12`).
 
-### Motor: estabilidade e banda (de `docs/ANALISE-IDM-DOWNLOAD.md`)
+### Motor: estabilidade e banda
 - ~~Feito~~ (`fisga-core/src/engine.rs`, `lib.rs`, `control.rs`):
   - o cliente é `http1_only()`: com HTTP/2 os segmentos viravam streams de um único TCP;
   - conexão parada: a cada `TICK` (1 s) sem dados o dono grava o buffer; quem está ocioso assume o
@@ -359,6 +359,4 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
 - Ainda não: conferir 64 bytes no resume (detecta arquivo trocado no servidor sem ETag), `fallocate` em vez
   de arquivo esparso, limitador que divide a taxa entre as conexões, a extensão descartar manifestos antigos.
 
-A análise do IDM que originou o roadmap está em `docs/ANALISE-IDM.md`, com o catálogo de
-funcionalidades e a arquitetura. A análise mais funda do arquivo durante o download e das conexões
-está em `docs/ANALISE-IDM-DOWNLOAD.md`. O `docs/GUIA.md` tem o uso, a regra do niri e a seção de problemas.
+O `docs/GUIA.md` tem o uso, a regra do niri e a seção de problemas.

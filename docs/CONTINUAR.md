@@ -186,7 +186,10 @@ Dados no Linux:
   confirmando um download sem abrir outro `--pending`. Não há bandeja no Xvfb, então o ícone
   em si só é testado de verdade no Arch.
 - `extension/test/real-clicks.mjs`: Chrome de verdade via CDP pela pipe, com native messaging
-  simulado. Roda manualmente, no Windows, com `CHROME=...`.
+  simulado. Roda manualmente, no Windows, com `CHROME=...`. Precisa da extensão montada
+  (`src/` + `manifest.chrome.json` como `manifest.json`). Os cenários `takeover` e `force` usam
+  um site local: um download no estilo do Civitai (endereço sem extensão, nome `.safetensors` só
+  no `Content-Disposition`) e Alt+clique num link comum.
 
 O dono testou no Arch: 5 downloads do YouTube corretos, o pacote 1 (ok em 22/10) e a bandeja,
 a sessão e o agendador do pacote 2 (ok em 23/10). **Ainda não testou as várias filas.**
@@ -239,6 +242,13 @@ Mudanças só de documentação podem ir direto para o `main`.
 - No glib 0.21 não existe `@strong` no `clone!`: use clones manuais.
 - Ao chamar `GtkWindowExt::set_focus`, qualifique o trait.
 - Clippy novo (rust 1.99) reclama de `filter().next_back()` e de `map` que deveria ser `inspect`.
+- Captura de downloads na extensão: no Chrome, o `downloads.onCreated` muitas vezes chega sem
+  `filename` (o nome do `Content-Disposition` vem depois, no `onChanged`). Por isso o `takeOver`
+  olha de novo quando o nome aparece; o conjunto `judged` impede decidir duas vezes.
+- Os tipos de arquivo e a tecla de forçar ficam nas configurações do app (`Settings::browser`).
+  A extensão pede com `{"type":"settings"}` ao host, que não inicia o `ldmd` para isso, e copia
+  para `storage.local` (o `content.js` lê `forceKey` de lá). A lista padrão existe em dois lugares,
+  `DEFAULT_FILE_TYPES` (ldm-ipc) e `DEFAULT_SETTINGS.fileTypes` (background.js): mantenha iguais.
 
 ## Próximos passos (em ordem de prioridade)
 

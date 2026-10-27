@@ -291,6 +291,73 @@ pub struct Settings {
     /// The main window shows the newest downloads on top.
     pub newest_first: bool,
     pub on_complete: OnComplete,
+    pub browser: BrowserSettings,
+}
+
+/// The browser downloads LDM takes over (IDM's "Tipos de arquivo") and the
+/// key that sends a clicked link to LDM whatever it is. The extension reads
+/// them through the native host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BrowserSettings {
+    /// Extensions, lowercase and without the dot.
+    pub file_types: Vec<String>,
+    pub force_key: ForceKey,
+}
+
+/// The extension's own copy of this list (`extension/src/background.js`)
+/// serves until it hears from the app: keep them alike.
+pub const DEFAULT_FILE_TYPES: &str = "3gp 7z aac apk appimage avi bin bz2 ckpt deb dmg epub exe flac flatpak flv \
+     gguf gz img iso jar m4a m4v mkv mov mp3 mp4 mpeg mpg msi ogg ogv onnx opus pkg pt pth rar rpm run \
+     safetensors tar tgz wav webm wma wmv xz zip zst";
+
+impl Default for BrowserSettings {
+    fn default() -> Self {
+        Self { file_types: Self::parse_file_types(DEFAULT_FILE_TYPES), force_key: ForceKey::default() }
+    }
+}
+
+impl BrowserSettings {
+    /// `"MP4, .zip *.Safetensors"` → `["mp4", "zip", "safetensors"]`: lowercase,
+    /// without dots, each once.
+    pub fn parse_file_types(text: &str) -> Vec<String> {
+        let mut types: Vec<String> = Vec::new();
+        for word in text.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
+            let word = word.trim_start_matches(['*', '.']).to_ascii_lowercase();
+            let valid = !word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+            if valid && !types.contains(&word) {
+                types.push(word);
+            }
+        }
+        types
+    }
+}
+
+/// Held while clicking a link in the browser: the link goes to LDM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForceKey {
+    None,
+    /// As in IDM. Alt+click otherwise saves the link with the browser.
+    #[default]
+    Alt,
+    CtrlAlt,
+    ShiftAlt,
+    CtrlShift,
+}
+
+impl ForceKey {
+    pub const ALL: [ForceKey; 5] = [ForceKey::None, ForceKey::Alt, ForceKey::CtrlAlt, ForceKey::ShiftAlt, ForceKey::CtrlShift];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ForceKey::None => "Nenhuma",
+            ForceKey::Alt => "Alt",
+            ForceKey::CtrlAlt => "Ctrl+Alt",
+            ForceKey::ShiftAlt => "Shift+Alt",
+            ForceKey::CtrlShift => "Ctrl+Shift",
+        }
+    }
 }
 
 /// What happens when a download finishes, in this order: the antivirus
@@ -504,6 +571,7 @@ impl Default for Settings {
             list_view: false,
             newest_first: true,
             on_complete: OnComplete::default(),
+            browser: BrowserSettings::default(),
         }
     }
 }
@@ -519,6 +587,7 @@ impl Settings {
     pub fn sanitized(mut self) -> Self {
         self.max_parallel = self.max_parallel.clamp(1, 20);
         self.connections = self.connections.clamp(1, 32);
+        self.browser.file_types = BrowserSettings::parse_file_types(&self.browser.file_types.join(" "));
         sanitize_days(&mut self.schedule.days);
         let mut seen = vec![MAIN_QUEUE];
         self.queues.retain(|queue| {
@@ -1481,6 +1550,19 @@ mod tests {
         assert_eq!(settings.sanitized().max_parallel, 20);
         let request: Request = serde_json::from_str(r#"{"type":"set_settings","settings":{"connections":4}}"#).unwrap();
         assert!(matches!(request, Request::SetSettings { settings } if settings.connections == 4));
+    }
+
+    #[test]
+    fn browser_file_types_and_force_key() {
+        // A settings.json from before: the default types (models included) and Alt.
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(settings.browser.file_types.iter().any(|t| t == "safetensors"));
+        assert_eq!(settings.browser.force_key, ForceKey::Alt);
+        assert_eq!(BrowserSettings::parse_file_types("MP4, .zip *.Safetensors;mp4  x/y"), ["mp4", "zip", "safetensors"]);
+        let settings: Settings =
+            serde_json::from_str(r#"{"browser":{"fileTypes":["GGUF",".pt"],"forceKey":"ctrl_alt"}}"#).unwrap();
+        assert_eq!(settings.browser.force_key, ForceKey::CtrlAlt);
+        assert_eq!(settings.sanitized().browser.file_types, ["gguf", "pt"]);
     }
 
     #[test]

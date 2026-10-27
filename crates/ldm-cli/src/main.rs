@@ -8,8 +8,9 @@ use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use ldm_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
 use ldm_ipc::{
-    AddRequest, Category, Checksum, Conflict, Connection, Direction, DownloadInfo, Hashing, ProxyMode, ProxySettings, Queue,
-    Request, Response, Settings, SiteLogin, State, TimeOfDay, WhenDone, MAIN_QUEUE, WEEKDAYS,
+    AddRequest, BrowserSettings, Category, Checksum, Conflict, Connection, Direction, DownloadInfo, ForceKey, Hashing,
+    ProxyMode, ProxySettings, Queue, Request, Response, Settings, SiteLogin, State, TimeOfDay, WhenDone, MAIN_QUEUE,
+    WEEKDAYS,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -94,6 +95,12 @@ struct SettingsArgs {
     /// Comando a rodar ao concluir (no shell, com o arquivo em "$LDM_FILE"; "" = nenhum)
     #[arg(long)]
     on_complete: Option<String>,
+    /// Extensões que o navegador entrega ao LDM, separadas por espaço ("padrao" = a lista padrão)
+    #[arg(long)]
+    file_types: Option<String>,
+    /// Tecla que, segurada ao clicar num link, manda o link ao LDM: nenhuma, alt, ctrl+alt, shift+alt ou ctrl+shift
+    #[arg(long, value_parser = parse_force_key)]
+    force_key: Option<ForceKey>,
 }
 
 #[derive(Subcommand)]
@@ -658,6 +665,14 @@ async fn add(
     Ok(())
 }
 
+fn parse_force_key(value: &str) -> Result<ForceKey, String> {
+    let value = value.to_ascii_lowercase().replace([' ', '-', '_'], "+");
+    ForceKey::ALL
+        .into_iter()
+        .find(|key| key.label().to_ascii_lowercase() == value)
+        .ok_or_else(|| "use nenhuma, alt, ctrl+alt, shift+alt ou ctrl+shift".into())
+}
+
 fn parse_conflict(value: &str) -> Result<Conflict, String> {
     match value {
         "rename" => Ok(Conflict::Rename),
@@ -681,6 +696,8 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         sound,
         antivirus,
         on_complete,
+        file_types,
+        force_key,
     } = args;
     let mut current = get_settings().await?;
     if let Some(proxy) = &proxy {
@@ -705,7 +722,16 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         || proxy.is_some()
         || sound.is_some()
         || antivirus.is_some()
-        || on_complete.is_some();
+        || on_complete.is_some()
+        || file_types.is_some()
+        || force_key.is_some();
+    if let Some(types) = file_types {
+        current.browser.file_types = match types.trim() {
+            "padrao" | "padrão" | "default" => BrowserSettings::default().file_types,
+            types => BrowserSettings::parse_file_types(types),
+        };
+    }
+    current.browser.force_key = force_key.unwrap_or(current.browser.force_key);
     current.on_complete.sound = sound.unwrap_or(current.on_complete.sound);
     current.on_complete.antivirus = antivirus.unwrap_or(current.on_complete.antivirus);
     if let Some(command) = on_complete {
@@ -745,6 +771,8 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         "" => println!("ao concluir, comando:    nenhum"),
         command => println!("ao concluir, comando:    {command}"),
     }
+    println!("tipos do navegador:      {}", current.browser.file_types.join(" "));
+    println!("tecla do navegador:      {}", current.browser.force_key.label());
     Ok(())
 }
 

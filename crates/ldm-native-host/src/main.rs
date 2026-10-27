@@ -16,6 +16,8 @@ const MAX_MESSAGE: usize = 8 * 1024 * 1024;
 #[allow(clippy::large_enum_variant)] // one short-lived value per message
 enum Incoming {
     Ping,
+    /// The file types and the force key of the "Navegador" preferences.
+    Settings,
     Download(AddRequest),
 }
 
@@ -48,6 +50,14 @@ async fn handle(message: Incoming) -> Value {
             let daemon = matches!(ldm_ipc::call(&Request::Ping).await, Ok(Response::Pong { .. }));
             json!({ "type": "pong", "version": ldm_ipc::VERSION, "daemon": daemon })
         }
+        // Not worth starting ldmd: the extension keeps what it read last.
+        Incoming::Settings => match ldm_ipc::call(&Request::GetSettings).await {
+            Ok(Response::Settings { settings }) => {
+                json!({ "type": "settings", "fileTypes": settings.browser.file_types, "forceKey": settings.browser.force_key })
+            }
+            Ok(other) => json!({ "type": "error", "message": format!("resposta inesperada: {other:?}") }),
+            Err(e) => json!({ "type": "error", "message": e.to_string() }),
+        },
         Incoming::Download(request) => {
             let pending = request.confirm;
             let result = async {
@@ -100,7 +110,7 @@ mod tests {
     fn download(body: &str) -> AddRequest {
         match parse(body.as_bytes()).unwrap() {
             Incoming::Download(request) => request,
-            Incoming::Ping => panic!("expected a download"),
+            _ => panic!("expected a download"),
         }
     }
 
@@ -120,6 +130,7 @@ mod tests {
     #[test]
     fn ping_and_invalid_messages() {
         assert!(matches!(parse(br#"{"type":"ping"}"#).unwrap(), Incoming::Ping));
+        assert!(matches!(parse(br#"{"type":"settings"}"#).unwrap(), Incoming::Settings));
         assert!(parse(br#"{"type":"nope"}"#).is_err());
         assert!(parse(b"[1,2]").is_err());
     }

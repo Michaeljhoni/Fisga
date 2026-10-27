@@ -43,11 +43,44 @@
     .catch(() => {});
   api.storage?.onChanged?.addListener((changes, area) => {
     if (area === "local" && changes.overlay) setEnabled(changes.overlay.newValue !== false);
+    if (area === "local" && changes.forceKey) forceKey = FORCE_KEYS[changes.forceKey.newValue] ?? null;
   });
   function setEnabled(value) {
     enabled = value;
     if (!enabled) hide(true);
   }
+
+  // --------------------------------------------------------------- force key
+  // Held while clicking a link, it sends the link to LDM whatever it is (the
+  // app's "Navegador" preferences). Alt+click would save it with the browser.
+  const FORCE_KEYS = {
+    alt: { alt: true, ctrl: false, shift: false },
+    ctrl_alt: { alt: true, ctrl: true, shift: false },
+    shift_alt: { alt: true, ctrl: false, shift: true },
+    ctrl_shift: { alt: false, ctrl: true, shift: true },
+  };
+  let forceKey = FORCE_KEYS.alt;
+  api.storage?.local
+    ?.get({ forceKey: "alt" })
+    .then((s) => (forceKey = FORCE_KEYS[s.forceKey] ?? null))
+    .catch(() => {});
+  window.addEventListener(
+    "click",
+    (e) => {
+      const keys = forceKey;
+      if (!keys || e.button !== 0 || e.metaKey) return;
+      if (e.altKey !== keys.alt || e.ctrlKey !== keys.ctrl || e.shiftKey !== keys.shift) return;
+      const link = e.composedPath().find((el) => el instanceof HTMLAnchorElement || el instanceof HTMLAreaElement);
+      if (!link || !/^https?:/i.test(link.href)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      api.runtime
+        .sendMessage({ type: "force-link", url: link.href, pageUrl: location.href, linkTitle: link.textContent?.trim() || link.title })
+        .then((res) => res?.ok || console.warn("LDM:", res?.error))
+        .catch(() => {});
+    },
+    true,
+  );
 
   // ------------------------------------------------------- media discovery
   function track(el) {

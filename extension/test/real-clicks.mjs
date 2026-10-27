@@ -6,7 +6,8 @@
 // downloaded.
 //
 // Usage: node extension/test/real-clicks.mjs <extension-dir> <label> [scenario...]
-//   scenarios: search, menu-search, watch, spa (search -> click a video -> button), home
+//   scenarios: search, menu-search, watch, spa (search -> click a video -> button), home,
+//   takeover (a .safetensors download, named only by Content-Disposition), force (Alt+click on a link)
 //   CHROME=/path/to/chrome overrides the browser; results go to extension/test/out/<label>/.
 import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -86,6 +87,7 @@ const STUB = `(() => {
   const fake = async (host, msg) => {
     globalThis.__ldmSent.push(msg);
     if (msg.type === "ping") return { type: "pong", version: "stub", daemon: true };
+    if (msg.type === "settings") return { type: "settings", fileTypes: ["zip", "safetensors"], forceKey: "alt" };
     return { type: "added", id: globalThis.__ldmSent.length, pending: msg.confirm !== false };
   };
   try { chrome.runtime.sendNativeMessage = fake; } catch {}
@@ -109,7 +111,7 @@ async function worker() {
 }
 
 async function sent(sw) {
-  return evaluate(sw, "JSON.stringify(globalThis.__ldmSent.filter(m => m.type !== 'ping').map(m => ({url: m.url, kind: m.kind, title: m.title, confirm: m.confirm})))").then(JSON.parse);
+  return evaluate(sw, "JSON.stringify(globalThis.__ldmSent.filter(m => m.type === 'download').map(m => ({url: m.url, kind: m.kind, title: m.title, fileName: m.fileName, confirm: m.confirm})))").then(JSON.parse);
 }
 
 async function shot(page, name) {
@@ -322,6 +324,83 @@ async function spaScenario(sw) {
   return { name: "spa", results: [{ expected: url, sent: msg }] };
 }
 
+// A local site for the takeover and the force key: a link like Civitai's,
+// whose address has no extension and whose name only comes in the
+// Content-Disposition of the redirect's target, and a link to a plain page.
+async function localSite() {
+  const { createServer } = await import("node:http");
+  const server = createServer((req, res) => {
+    if (req.url === "/") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(`<!doctype html><body style="font:20px sans-serif;padding:40px">
+        <p><a id="model" href="/api/download/models/1">Baixar modelo</a></p>
+        <p><a id="page" href="/outra-pagina">Uma página qualquer</a></p></body>`);
+    } else if (req.url === "/api/download/models/1") {
+      res.writeHead(307, { location: "/storage/a1b2c3?X-Amz-Signature=abc" });
+      res.end();
+    } else if (req.url.startsWith("/storage/")) {
+      res.writeHead(200, {
+        "content-type": "binary/octet-stream",
+        "content-disposition": 'attachment; filename="lora_estilo.safetensors"',
+        "content-length": String(64 * 1024 * 80),
+      });
+      // Slow, like a real model: the download must still be running when the extension looks.
+      let chunks = 0;
+      const timer = setInterval(() => {
+        if (res.destroyed || ++chunks > 80) return clearInterval(timer), res.end();
+        res.write(Buffer.alloc(64 * 1024));
+      }, 50);
+    } else {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<p>outra página</p>");
+    }
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  return { server, base: `http://127.0.0.1:${server.address().port}` };
+}
+
+async function linkBox(page, id) {
+  return evaluate(page, `(() => { const r = document.getElementById(${JSON.stringify(id)}).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+}
+
+// A plain click on a link to a .safetensors goes to LDM, not to the browser.
+async function takeoverScenario(sw, base) {
+  log(`--- takeover: ${base}`);
+  const page = await openPage(base + "/");
+  // Whatever the browser keeps lands here, not in the user's Downloads.
+  await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: out, eventsEnabled: true });
+  const before = (await sent(sw)).length;
+  const box = await linkBox(page, "model");
+  await click(page, box.x, box.y);
+  await sleep(4000);
+  const msg = (await sent(sw)).slice(before)[0] ?? null;
+  const left = await evaluate(sw, "chrome.downloads.search({}).then(list => list.map(d => d.state + ' ' + d.filename))");
+  log(`sent: ${JSON.stringify(msg)}; browser downloads: ${JSON.stringify(left)}`);
+  return { name: "takeover", results: [{ expected: base + "/storage/a1b2c3?X-Amz-Signature=abc", sent: msg, browserDownloads: left }] };
+}
+
+// Alt+click on a link to a page: to LDM, and the tab stays where it was.
+async function forceScenario(sw, base) {
+  log(`--- force: ${base}`);
+  const page = await openPage(base + "/");
+  const before = (await sent(sw)).length;
+  const box = await linkBox(page, "page");
+  await mouse(page, "mouseMoved", box.x, box.y);
+  await mouse(page, "mousePressed", box.x, box.y, { button: "left", clickCount: 1, modifiers: 1 });
+  await mouse(page, "mouseReleased", box.x, box.y, { button: "left", clickCount: 1, modifiers: 1 });
+  await sleep(2000);
+  const msg = (await sent(sw)).slice(before)[0] ?? null;
+  const at = await evaluate(page, "location.pathname");
+  const plain = await (async () => {
+    const n = (await sent(sw)).length;
+    await click(page, box.x, box.y);
+    await sleep(1500);
+    return { sentToLdm: (await sent(sw)).length > n, at: await evaluate(page, "location.pathname") };
+  })();
+  log(`sent: ${JSON.stringify(msg)}; stayed at ${at}; plain click: ${JSON.stringify(plain)}`);
+  return { name: "force", results: [{ expected: base + "/outra-pagina", sent: msg, stayedAt: at, plainClick: plain }] };
+}
+
 try {
   ({ id: extId } = await cdp.send("Extensions.loadUnpacked", { path: resolve(extDir) }));
   log(`extension loaded: ${extId}`);
@@ -336,6 +415,11 @@ try {
     if (s === "search") report.push(await feedScenario(sw, "search", "https://www.youtube.com/results?search_query=palworld+breeding"));
     if (s === "watch") report.push(await watchScenario(sw));
     if (s === "spa") report.push(await spaScenario(sw));
+    if (s === "takeover" || s === "force") {
+      const { server, base } = await localSite();
+      report.push(await (s === "takeover" ? takeoverScenario : forceScenario)(sw, base));
+      server.close();
+    }
   }
   writeFileSync(join(out, "report.json"), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report, null, 2));

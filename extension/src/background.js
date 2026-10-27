@@ -3,7 +3,8 @@
 // - Sniffs media responses per tab, so a click on the overlay button can send
 //   the real file or stream even when the <video> only shows a blob: URL.
 // - Resolves what to download and hands it to the LDM app via native messaging.
-// - Optionally takes over regular browser downloads, like IDM does.
+// - Optionally takes over regular browser downloads, like IDM does: the file
+//   types and the force key come from the app's "Navegador" preferences.
 
 const api = globalThis.browser ?? globalThis.chrome;
 const HOST = "io.ldm.native";
@@ -13,9 +14,13 @@ const DEFAULT_SETTINGS = {
   overlay: true,
   // Open the "Novo download" window in the app before starting (like IDM).
   confirm: true,
-  extensions:
-    "3gp 7z aac apk appimage avi bin bz2 deb dmg epub exe flac flatpak flv gz img iso jar m4a m4v mkv " +
-    "mov mp3 mp4 mpeg mpg msi ogg ogv opus pkg rar rpm run tar tgz wav webm wma wmv xz zip zst",
+  // The app's "Navegador" preferences (copied by syncWithApp); these serve
+  // until the app answers. Keep them like DEFAULT_FILE_TYPES in ldm-ipc.
+  fileTypes: (
+    "3gp 7z aac apk appimage avi bin bz2 ckpt deb dmg epub exe flac flatpak flv gguf gz img iso jar m4a m4v mkv " +
+    "mov mp3 mp4 mpeg mpg msi ogg ogv onnx opus pkg pt pth rar rpm run safetensors tar tgz wav webm wma wmv xz zip zst"
+  ).split(" "),
+  forceKey: "alt",
 };
 
 // Sites where the media is best extracted from the page by yt-dlp (signed or
@@ -82,6 +87,30 @@ async function settings() {
     return DEFAULT_SETTINGS;
   }
 }
+
+// Asks the app for its "Navegador" preferences at most this often; the
+// content scripts read the force key from storage.
+const SYNC_EVERY_MS = 5000;
+let lastSync = 0;
+let syncing = null;
+
+/** Copies the app's file types and force key; without the app, keeps the last ones. */
+function syncWithApp() {
+  if (syncing || Date.now() - lastSync < SYNC_EVERY_MS) return syncing ?? Promise.resolve();
+  lastSync = Date.now();
+  syncing = (async () => {
+    try {
+      const reply = await api.runtime.sendNativeMessage(HOST, { type: "settings" });
+      if (reply?.type === "settings" && Array.isArray(reply.fileTypes)) {
+        await api.storage.local.set({ fileTypes: reply.fileTypes, forceKey: reply.forceKey ?? "none" });
+      }
+    } catch {}
+  })().finally(() => (syncing = null));
+  return syncing;
+}
+
+api.runtime.onStartup?.addListener(() => syncWithApp());
+api.tabs.onActivated.addListener(() => syncWithApp());
 
 // ------------------------------------------------------------ media sniffing
 // tabId -> [{ url, kind, contentType, size, frameId, ts }]
@@ -354,7 +383,10 @@ async function handle(msg, sender) {
       const { id, pending } = await sendMedia(msg.item, { referrer: tab.url, pageUrl: tab.url, title: tab.title });
       return { ok: true, id, pending };
     }
+    case "force-link":
+      return forceLink(msg, sender);
     case "ping":
+      syncWithApp();
       return ping();
     default:
       return { ok: false, error: "mensagem desconhecida" };
@@ -376,7 +408,7 @@ function extensionOf(name) {
 }
 
 function shouldIntercept(item, prefs) {
-  const allowed = new Set(prefs.extensions.split(/\s+/).filter(Boolean));
+  const allowed = new Set((prefs.fileTypes ?? []).map((type) => String(type).toLowerCase()));
   const url = item.finalUrl || item.url;
   const ext = extensionOf(item.filename) || extensionOf(parseUrl(url)?.pathname);
   if (ext && allowed.has(ext)) return true;
@@ -384,12 +416,27 @@ function shouldIntercept(item, prefs) {
   return /^(video|audio)\//.test(mime) || /^application\/(zip|x-7z|x-rar|vnd\.rar|x-tar|gzip|x-xz|zstd|x-iso9660|x-msdownload|x-debian|x-rpm|x-apple-diskimage|octet-stream)/.test(mime);
 }
 
-api.downloads.onCreated.addListener(async (item) => {
+// Downloads already judged (taken over or left to the browser), by id.
+const judged = new Set();
+
+async function takeOver(item) {
   const url = item.finalUrl || item.url;
-  if (!/^https?:/i.test(url)) return;
+  if (judged.has(item.id) || !/^https?:/i.test(url)) return;
+  judged.add(item.id);
   if (passThrough.delete(url) || item.byExtensionId === api.runtime.id) return;
+  await syncWithApp();
   const prefs = await settings();
-  if (!prefs.intercept || item.state !== "in_progress" || !shouldIntercept(item, prefs)) return;
+  if (!prefs.intercept || item.state !== "in_progress") return;
+  if (!shouldIntercept(item, prefs)) {
+    // Chrome names the file (Content-Disposition) after creating the item: the
+    // name may have come while waiting, or gets its own look in onChanged.
+    const [named] = await api.downloads.search({ id: item.id }).catch(() => []);
+    if (!named || !shouldIntercept(named, prefs)) {
+      if (!extensionOf(named?.filename)) judged.delete(item.id);
+      return;
+    }
+    item = named;
+  }
 
   try {
     await api.downloads.cancel(item.id);
@@ -411,10 +458,37 @@ api.downloads.onCreated.addListener(async (item) => {
     passThrough.add(url);
     api.downloads.download({ url }).catch(() => passThrough.delete(url));
   }
+}
+
+api.downloads.onCreated.addListener((item) => takeOver(item));
+api.downloads.onChanged.addListener(async (delta) => {
+  if (!delta.filename?.current) return;
+  const [item] = await api.downloads.search({ id: delta.id }).catch(() => []);
+  if (item) takeOver(item);
 });
+api.downloads.onErased.addListener((id) => judged.delete(id));
+
+// -------------------------------------------------------------- force key
+/** A link clicked with the force key held: to LDM, whatever it is. */
+async function forceLink(msg, sender) {
+  const url = msg.url;
+  if (!/^https?:/i.test(url ?? "")) throw new Error("link sem endereço http(s)");
+  const kind = isExtractorPage(url) && isSingleVideoPage(url) ? "page" : MANIFEST_EXT.test(parseUrl(url)?.pathname ?? "") ? "stream" : "direct";
+  const { id, pending } = await sendToApp({
+    url,
+    kind,
+    referrer: frameUrlOf(msg, sender),
+    pageUrl: sender.tab?.url || msg.pageUrl,
+    title: kind === "page" ? msg.linkTitle : undefined,
+    userAgent: navigator.userAgent,
+    cookies: await cookiesFor(url),
+  });
+  return { ok: true, id, pending };
+}
 
 // ------------------------------------------------------------ context menus
 api.runtime.onInstalled.addListener(async () => {
+  syncWithApp();
   await Promise.resolve(api.contextMenus.removeAll()).catch(() => {});
   api.contextMenus.create({ id: "ldm-link", title: message("menuLink", "Baixar link com o LDM"), contexts: ["link"] });
   api.contextMenus.create({ id: "ldm-media", title: message("menuMedia", "Baixar esta mídia com o LDM"), contexts: ["video", "audio"] });

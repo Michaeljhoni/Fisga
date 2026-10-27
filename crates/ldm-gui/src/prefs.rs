@@ -2,7 +2,8 @@
 //! connections per file, the progress window, the speed limit, the clipboard
 //! monitor, the tray icon and session autostart. Filas: the queues, each with
 //! its downloads at the same time, its schedule and what to do when it is
-//! done. The settings live in the daemon (`~/.config/ldm/settings.json`);
+//! done. Navegador: the file types the browser hands to LDM and the key that
+//! sends a link to it. The settings live in the daemon (`~/.config/ldm/settings.json`);
 //! autostart is a file in `~/.config/autostart`.
 
 use std::cell::{Cell, RefCell};
@@ -12,8 +13,8 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{gio, glib, pango};
 use ldm_ipc::{
-    Category, ProxyMode, ProxySettings, Queue, Request, Schedule, Settings, SiteLogin, TimeOfDay, WhenDone, MAIN_QUEUE,
-    WEEKDAYS,
+    BrowserSettings, Category, ForceKey, ProxyMode, ProxySettings, Queue, Request, Schedule, Settings, SiteLogin, TimeOfDay,
+    WhenDone, MAIN_QUEUE, WEEKDAYS,
 };
 
 use crate::window::show_error;
@@ -185,6 +186,77 @@ fn network_page(proxy: &ProxySettings) -> (gtk::Box, ReadProxy, ReadLogins) {
 
 type ReadProxy = Box<dyn Fn() -> Result<ProxySettings, String>>;
 type ReadLogins = Box<dyn Fn() -> Option<Vec<SiteLogin>>>;
+
+/// The "Navegador" tab (IDM's "Tipos de arquivo" and "Teclas"): what the
+/// browser extension hands to LDM. Returns the tab and a function that reads
+/// it back.
+fn browser_page(browser: &BrowserSettings) -> (gtk::Box, Box<dyn Fn() -> BrowserSettings>) {
+    let types = gtk::TextView::builder()
+        .wrap_mode(gtk::WrapMode::Word)
+        .accepts_tab(false)
+        .top_margin(8)
+        .bottom_margin(8)
+        .left_margin(8)
+        .right_margin(8)
+        .build();
+    types.buffer().set_text(&browser.file_types.join(" "));
+    let types_frame = gtk::Frame::builder().child(&types).height_request(110).build();
+    let reset = gtk::Button::builder().label("Restaurar a lista padrão").halign(gtk::Align::Start).build();
+    let t = types.clone();
+    reset.connect_clicked(move |_| t.buffer().set_text(&BrowserSettings::default().file_types.join(" ")));
+
+    let types_title = gtk::Label::builder().label("Tipos de arquivo").xalign(0.0).build();
+    types_title.add_css_class("heading");
+    let types_hint = gtk::Label::builder()
+        .label("Os downloads do navegador com estas extensões vão para o LDM. Separe com espaços, sem ponto (safetensors, gguf, pdf...). Vídeos, músicas e arquivos compactados também são reconhecidos pelo tipo que o site informa.")
+        .xalign(0.0)
+        .wrap(true)
+        .width_chars(34)
+        .max_width_chars(60)
+        .build();
+    types_hint.add_css_class("dim-label");
+    types_hint.add_css_class("caption");
+
+    let labels: Vec<&str> = ForceKey::ALL.iter().map(|key| key.label()).collect();
+    let key = gtk::DropDown::from_strings(&labels);
+    key.set_selected(ForceKey::ALL.iter().position(|k| *k == browser.force_key).unwrap_or(0) as u32);
+    let grid = gtk::Grid::builder().column_spacing(18).row_spacing(14).build();
+    row(
+        &grid,
+        0,
+        "Tecla para baixar com o LDM",
+        &key,
+        Some("Segure ao clicar num link: ele vai para o LDM, seja qual for o tipo de arquivo. Para os casos que escapam da lista acima."),
+    );
+
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    page.append(&types_title);
+    page.append(&types_hint);
+    page.append(&types_frame);
+    page.append(&reset);
+    page.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    page.append(&grid);
+    let note = gtk::Label::builder()
+        .label("Vale para a extensão do LDM no navegador; ela recebe as mudanças em alguns segundos.")
+        .xalign(0.0)
+        .wrap(true)
+        .width_chars(34)
+        .max_width_chars(60)
+        .build();
+    note.add_css_class("dim-label");
+    note.add_css_class("caption");
+    page.append(&note);
+
+    let read = move || {
+        let buffer = types.buffer();
+        let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+        BrowserSettings {
+            file_types: BrowserSettings::parse_file_types(&text),
+            force_key: ForceKey::ALL.get(key.selected() as usize).copied().unwrap_or_default(),
+        }
+    };
+    (page, Box::new(read))
+}
 
 /// The settings of one queue, in the "Filas" tab.
 struct QueueEditor {
@@ -483,6 +555,7 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
 
     let (queues_box, read_queues) = queues_page(window.upcast_ref(), settings.all_queues(), settings.new_queue_id());
     let (network_box, read_proxy, read_logins) = network_page(&settings.proxy);
+    let (browser_box, read_browser) = browser_page(&settings.browser);
 
     // "Ao concluir".
     let done = &settings.on_complete;
@@ -511,11 +584,12 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
     );
 
     let notebook = gtk::Notebook::new();
-    let pages: [(&gtk::Widget, &str); 4] = [
+    let pages: [(&gtk::Widget, &str); 5] = [
         (grid.upcast_ref(), "Geral"),
         (queues_box.upcast_ref(), "Filas"),
         (network_box.upcast_ref(), "Rede"),
         (done_grid.upcast_ref(), "Ao concluir"),
+        (browser_box.upcast_ref(), "Navegador"),
     ];
     for (page, title) in pages {
         page.set_margin_top(14);
@@ -620,6 +694,7 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
             list_view: settings.list_view,
             newest_first: settings.newest_first,
             on_complete,
+            browser: read_browser(),
         };
         for queue in queues {
             new.set_queue(queue);

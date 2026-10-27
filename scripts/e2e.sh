@@ -232,6 +232,14 @@ if "$BIN/ldm" settings --proxy "ftp://proxy:21" 2>"$SANDBOX/err"; then echo "acc
 grep "não suportado" "$SANDBOX/err"
 "$BIN/ldm" settings --proxy sistema | grep "proxy:.*sistema"
 
+step "browser settings: file types and force key reach the extension"
+host '{"type":"settings"}' | tee "$SANDBOX/browser" | grep '"forceKey":"alt"'
+grep -q '"safetensors"' "$SANDBOX/browser"
+"$BIN/ldm" settings --file-types ".ZIP, *.gguf zip" --force-key ctrl+alt | grep "tecla do navegador:      Ctrl+Alt"
+host '{"type":"settings"}' | grep '"fileTypes":\["zip","gguf"\],"forceKey":"ctrl_alt"'
+if "$BIN/ldm" settings --force-key super 2>"$SANDBOX/err"; then echo "accepted a bad key"; exit 1; fi
+"$BIN/ldm" settings --file-types padrao --force-key alt | grep "tipos do navegador:.*safetensors"
+
 step "native host: invalid message"
 host '{"type":"nope"}'
 

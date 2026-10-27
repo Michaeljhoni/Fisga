@@ -183,6 +183,19 @@ troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O b
     texto do comando, só nas variáveis: use-as entre aspas.
   - **Tocar um som** (ligado por padrão): o "concluído" do tema de sons, com `canberra-gtk-play`,
     `paplay` ou `pw-play`.
+- **Navegador** (aba *Navegador* das Preferências), como *Tipos de arquivo* e *Teclas* do IDM:
+  - **Tipos de arquivo**: as extensões dos downloads do navegador que vão para o LDM, separadas
+    por espaço (a lista padrão já traz vídeos, músicas, compactados, programas e modelos de IA:
+    `safetensors`, `ckpt`, `gguf`, `pt`, `pth`, `onnx`). Vídeos, músicas e compactados também são
+    reconhecidos pelo tipo que o site informa. O nome que só chega no `Content-Disposition` (como
+    nos links do Civitai, `/api/download/models/…`) também conta.
+  - **Tecla para baixar com o LDM** (padrão: Alt): segurada ao clicar num link, manda o link ao
+    LDM, seja qual for o tipo; o navegador não abre nem baixa. Também Ctrl+Alt, Shift+Alt,
+    Ctrl+Shift ou nenhuma.
+  - A extensão pede essas opções ao app pelo `ldm-native-host` (ao iniciar, ao trocar de aba e a
+    cada download, no máximo a cada 5 s) e guarda as últimas; com o `ldmd` parado, valem as
+    guardadas. No terminal: `ldm settings --file-types "zip safetensors gguf"` (`padrao` volta à
+    lista padrão) e `ldm settings --force-key ctrl+alt`.
 - **Agendador** (por fila, como o *Scheduler* do IDM): a fila só roda das HH:MM às HH:MM nos
   dias escolhidos. Fora desse horário os downloads ficam *na fila*; *Baixar agora* e retomar um
   download à mão começam na hora mesmo assim. No horário de parada, os downloads da fila voltam

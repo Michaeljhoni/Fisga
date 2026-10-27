@@ -551,10 +551,9 @@ mod tests {
     fn single_video_with_separate_audio_and_video() {
         let video = json!({"id": "abc", "title": "Meu vídeo: parte 1/2", "ext": "webm",
             "requested_formats": [{"filesize": 1000}, {"filesize_approx": 500}]});
-        assert_eq!(
-            parse_probe(&video),
-            PageProbe::Video { name: Some("Meu vídeo: parte 1_2.webm".into()), size: Some(1500), formats: vec![] }
-        );
+        // Windows file names cannot have ':' either.
+        let name = if cfg!(windows) { "Meu vídeo_ parte 1_2.webm" } else { "Meu vídeo: parte 1_2.webm" };
+        assert_eq!(parse_probe(&video), PageProbe::Video { name: Some(name.into()), size: Some(1500), formats: vec![] });
     }
 
     #[test]

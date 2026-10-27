@@ -172,6 +172,7 @@ impl Manager {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::super::tests::manager;
     use super::*;
 
@@ -183,6 +184,7 @@ mod tests {
     }
 
     /// A manager whose scanner and sound are shell commands writing to `dir`.
+    #[cfg(unix)]
     fn with_commands(scanner: &str, sound: &str) -> Arc<Manager> {
         let mut manager = Arc::try_unwrap(manager()).ok().expect("only reference");
         manager.scan_command = Some(scanner.into());

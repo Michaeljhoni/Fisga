@@ -72,6 +72,56 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --exclude fisga-gui --all-targets
 
+  # The GTK interface on Windows: GTK 4 and the Rust toolchain from MSYS2
+  # (UCRT64), as the Windows installer is built.
+  gui-windows:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-librsvg
+            mingw-w64-ucrt-x86_64-adwaita-icon-theme
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-rust
+
+      - name: Tests
+        run: cargo test -p fisga-gui --locked
+
+      - name: Clippy
+        run: cargo clippy -p fisga-gui --all-targets
+
+  # The GTK interface on macOS, with GTK 4 from Homebrew.
+  gui-macos:
+    runs-on: macos-14
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GTK 4
+        run: brew install gtk4 librsvg adwaita-icon-theme pkgconf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test -p fisga-gui --locked
+
+      - name: Clippy
+        run: cargo clippy -p fisga-gui --all-targets
+
   # The packages sent to the Chrome Web Store and addons.mozilla.org, checked
   # with Mozilla's own linter; the artifact is what gets uploaded.
   extension:

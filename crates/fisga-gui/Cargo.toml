@@ -13,8 +13,14 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 gtk = { package = "gtk4", version = "0.10", features = ["v4_12"] }
-# Tray icon (StatusNotifierItem over D-Bus), on the tokio runtime of ipc.rs.
-ksni = "0.3"
 fisga-ipc.workspace = true
 libc.workspace = true
 tokio.workspace = true
+
+# Tray icon on Linux (StatusNotifierItem over D-Bus), on the tokio runtime of ipc.rs.
+[target.'cfg(not(any(windows, target_os = "macos")))'.dependencies]
+ksni = "0.3"
+
+# Tray icon in Windows' notification area and macOS's menu bar.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+tray-icon = "0.26"

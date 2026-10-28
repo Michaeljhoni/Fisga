@@ -1,0 +1,18 @@
+name: Lockfile (temporary)
+
+on:
+  push:
+    branches: [wip/fase3]
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Adds the new dependencies, leaves the others as they are.
+      - run: cargo update --workspace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock
+          path: Cargo.lock

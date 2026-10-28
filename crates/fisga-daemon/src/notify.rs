@@ -1,10 +1,49 @@
-//! Desktop notifications through `notify-send` (libnotify), which works with any
-//! notification daemon (mako, dunst, GNOME, KDE...). Missing tool = silently skipped.
+//! Desktop notifications. Linux: `notify-send` (libnotify), which works with
+//! any notification daemon (mako, dunst, GNOME, KDE...). Windows: a toast
+//! through PowerShell. macOS: `osascript`. Missing tool = silently skipped.
+
+use crate::shell;
+
+/// Windows only shows toasts of a registered app; until the installer
+/// registers Fisga's, they go under PowerShell's.
+#[cfg(windows)]
+const TOAST: &str = r#"
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+$text = $xml.GetElementsByTagName('text')
+$text.Item(0).AppendChild($xml.CreateTextNode("Fisga: $env:FISGA_SUMMARY")) > $null
+$text.Item(1).AppendChild($xml.CreateTextNode($env:FISGA_BODY)) > $null
+$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($xml))
+"#;
+
+#[cfg(windows)]
+fn command(summary: &str, body: &str) -> tokio::process::Command {
+    let mut command = shell::powershell(TOAST);
+    command.env("FISGA_SUMMARY", summary).env("FISGA_BODY", body);
+    command
+}
+
+#[cfg(target_os = "macos")]
+fn command(summary: &str, body: &str) -> tokio::process::Command {
+    let mut command = shell::program("osascript");
+    // The texts are the script's arguments, not part of its source.
+    command
+        .args(["-e", "on run argv", "-e", "display notification (item 2 of argv) with title \"Fisga\" subtitle (item 1 of argv)"])
+        .args(["-e", "end run", summary, body]);
+    command
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn command(summary: &str, body: &str) -> tokio::process::Command {
+    let mut command = shell::program("notify-send");
+    command.args(["--app-name=Fisga", "--icon=folder-download", summary, body]);
+    command
+}
 
 pub fn send(summary: &str, body: &str) {
-    let mut command = tokio::process::Command::new("notify-send");
+    let mut command = command(summary, body);
     command
-        .args(["--app-name=Fisga", "--icon=folder-download", summary, body])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());

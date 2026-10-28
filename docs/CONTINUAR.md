@@ -329,9 +329,17 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   none` (exigido do AMO para extensões novas), por isso pede Firefox 140+.
 - Windows e macOS: fase 1 feita (daemon, CLI e native host compilam e passam nos testes; o job
   `portable` do CI). O daemon fala por `fisga_ipc::transport`: socket Unix, ou no Windows um named
-  pipe de nome aleatório guardado em `%LOCALAPPDATA%\fisga\run\pipe`. Fase 2: notificações,
-  bandeja, iniciar com a sessão, suspender/desligar, área de transferência, som e o registro do
-  native host (registro do Windows, pastas do macOS). Fase 3: GUI e instaladores (.exe/.msi, .dmg).
+  pipe de nome aleatório guardado em `%LOCALAPPDATA%\fisga\run\pipe`. Fase 2, a parte do daemon e
+  da CLI, feita: notificação (toast pelo PowerShell; `osascript`), som (`SoundPlayer`; `afplay`),
+  suspender/desligar (`SetSuspendState`/`shutdown /s`; `pmset sleepnow`/System Events), área de
+  transferência (laço do PowerShell ou do `sh` + `pbpaste` lendo a cada segundo) e `fisga
+  install-hosts` (Windows: manifestos em `%LOCALAPPDATA%\fisga\native-messaging-hosts` e chaves em
+  `HKCU\Software\...\NativeMessagingHosts` pelo `reg.exe`; macOS: pastas em `~/Library/Application
+  Support`). Todo programa que o daemon abre no Windows vai com `CREATE_NO_WINDOW`
+  (`shell::program`). Os toasts saem com o nome do PowerShell até o instalador registrar um
+  AppUserModelID do Fisga. Ficam para a fase 3, junto com a GUI: bandeja (`ksni` é só D-Bus;
+  `tray-icon` fora do Linux) e iniciar com a sessão (chave `Run`; LaunchAgent). Fase 3: GUI e
+  instaladores (.exe/.msi, .dmg).
 - Flatpak, .deb e .rpm.
 
 ### Visual novo (proposta E do canvas "Fisga — novo visual")

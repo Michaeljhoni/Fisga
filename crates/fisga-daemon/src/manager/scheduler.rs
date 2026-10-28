@@ -318,19 +318,60 @@ impl Manager {
         self.save();
         let mut command = match &self.power_command {
             Some(custom) => crate::shell::command(&format!("{custom} {verb}")),
-            None => {
-                let mut command = tokio::process::Command::new("systemctl");
-                command.arg(verb);
-                command
-            }
+            None => power_command(action),
         };
         tracing::info!(verb, "agendador: executando");
         match command.stdin(std::process::Stdio::null()).status().await {
             Ok(status) if status.success() => {}
             result => {
                 tracing::warn!(?result, verb, "não foi possível suspender/desligar");
-                notify::send("Agendador", &format!("Não foi possível executar \u{201c}systemctl {verb}\u{201d}."));
+                let what = match action {
+                    WhenDone::Suspend => "suspender",
+                    _ => "desligar",
+                };
+                notify::send("Agendador", &format!("Não foi possível {what} o computador."));
             }
+        }
+    }
+}
+
+/// The system's own way to suspend or power off; `action` is not `Nothing`.
+#[cfg(not(any(windows, target_os = "macos")))]
+fn power_command(action: WhenDone) -> tokio::process::Command {
+    let mut command = crate::shell::program("systemctl");
+    command.arg(if action == WhenDone::Suspend { "suspend" } else { "poweroff" });
+    command
+}
+
+#[cfg(windows)]
+fn power_command(action: WhenDone) -> tokio::process::Command {
+    match action {
+        // Sleep, not hibernation (rundll32's SetSuspendState hibernates when it is on).
+        WhenDone::Suspend => crate::shell::powershell(
+            "Add-Type -AssemblyName System.Windows.Forms\n\
+             if (-not [System.Windows.Forms.Application]::SetSuspendState('Suspend', $false, $false)) { exit 1 }",
+        ),
+        _ => {
+            let mut command = crate::shell::program("shutdown");
+            command.args(["/s", "/t", "0"]);
+            command
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn power_command(action: WhenDone) -> tokio::process::Command {
+    match action {
+        WhenDone::Suspend => {
+            let mut command = crate::shell::program("pmset");
+            command.arg("sleepnow");
+            command
+        }
+        // As the Apple menu does: apps get to close (`shutdown` needs root).
+        _ => {
+            let mut command = crate::shell::program("osascript");
+            command.args(["-e", "tell application \"System Events\" to shut down"]);
+            command
         }
     }
 }

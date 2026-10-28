@@ -2,8 +2,10 @@
 //! program, archive, PDF...) anywhere opens the "Novo download" window.
 //!
 //! On Wayland it runs `wl-paste --watch` (wl-clipboard), which needs the
-//! data-control protocol (niri, Sway, Hyprland, KDE...). `FISGA_CLIPBOARD_CMD`
-//! replaces the command: it must print one line per clipboard change.
+//! data-control protocol (niri, Sway, Hyprland, KDE...). Windows and macOS
+//! have no such tool: a small PowerShell or `sh` loop looks at the clipboard
+//! every second and prints what changed. `FISGA_CLIPBOARD_CMD` replaces the
+//! command: it must print one line per clipboard change.
 
 use std::process::Stdio;
 use std::sync::Arc;
@@ -24,16 +26,58 @@ const SETTLE: Duration = Duration::from_millis(1500);
 const RESTART_AFTER: Duration = Duration::from_secs(10);
 
 /// One line per change: line breaks inside the copied text become spaces.
+#[cfg(not(any(windows, target_os = "macos")))]
 const WL_PASTE_HANDLER: &str = "tr '\\r\\n' '  '; echo";
+
+/// Clipboard.GetText needs a single-threaded apartment, PowerShell 5's default.
+/// What was copied before it started is not printed (PowerShell may take
+/// longer than `SETTLE` to start).
+#[cfg(windows)]
+const POWERSHELL_WATCHER: &str = r"
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$last = try { [System.Windows.Forms.Clipboard]::GetText() } catch { $null }
+while ($true) {
+    try { $text = [System.Windows.Forms.Clipboard]::GetText() } catch { $text = $last }
+    if ($text -ne $last) {
+        $last = $text
+        [Console]::Out.WriteLine(($text -replace '[\r\n]', ' '))
+        [Console]::Out.Flush()
+    }
+    Start-Sleep -Milliseconds 1000
+}";
+
+#[cfg(target_os = "macos")]
+const PBPASTE_WATCHER: &str = r#"last=$(pbpaste 2>/dev/null | tr '\r\n' '  ')
+while :; do
+    text=$(pbpaste 2>/dev/null | tr '\r\n' '  ')
+    if [ "$text" != "$last" ]; then last=$text; printf '%s\n' "$text"; fi
+    sleep 1
+done"#;
 
 fn watch_command() -> Option<Command> {
     if let Some(custom) = std::env::var("FISGA_CLIPBOARD_CMD").ok().filter(|c| !c.is_empty()) {
         return Some(crate::shell::command(&custom));
     }
+    system_watcher()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn system_watcher() -> Option<Command> {
     std::env::var_os("WAYLAND_DISPLAY").filter(|d| !d.is_empty())?;
-    let mut command = Command::new("wl-paste");
+    let mut command = crate::shell::program("wl-paste");
     command.args(["--type", "text", "--watch", "sh", "-c", WL_PASTE_HANDLER]);
     Some(command)
+}
+
+#[cfg(windows)]
+fn system_watcher() -> Option<Command> {
+    Some(crate::shell::powershell(POWERSHELL_WATCHER))
+}
+
+#[cfg(target_os = "macos")]
+fn system_watcher() -> Option<Command> {
+    Some(crate::shell::command(PBPASTE_WATCHER))
 }
 
 pub fn spawn(manager: Arc<Manager>, gui: Arc<Gui>) {

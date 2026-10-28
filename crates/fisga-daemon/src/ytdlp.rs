@@ -140,7 +140,7 @@ async fn run_once(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel:
         None => "%(title).150B [%(id)s].%(ext)s".to_string(),
     };
 
-    let mut command = Command::new("yt-dlp");
+    let mut command = crate::shell::program("yt-dlp");
     command
         .args(["--newline", "--no-colors", "--no-playlist", "--progress"])
         // One media file per download, always: a feed or channel URL that slips
@@ -343,7 +343,7 @@ pub fn parse_probe(json: &serde_json::Value) -> PageProbe {
 
 /// Asks yt-dlp what the URL is before the user confirms it.
 pub async fn probe(id: u64, request: &AddRequest, proxy: &fisga_ipc::ProxySettings) -> Result<PageProbe, String> {
-    let mut command = Command::new("yt-dlp");
+    let mut command = crate::shell::program("yt-dlp");
     command.args(["-J", "--flat-playlist", "--no-playlist", "--no-warnings", "--no-colors"]);
     apply_proxy(&mut command, proxy);
     let cookies_file = add_request_options(&mut command, &format!("{id}-probe"), request);
@@ -532,7 +532,7 @@ mod tests {
         assert_eq!(origin_for(&request).as_deref(), Some("https://player.example.com"));
         assert_eq!(origin_for(&stream(cdn, Some("https://cdn.example.net/page"), None)), None, "same site");
         assert_eq!(origin_for(&stream(cdn, None, None)), None);
-        let mut command = Command::new("yt-dlp");
+        let mut command = crate::shell::program("yt-dlp");
         add_request_options(&mut command, "test", &request);
         let args: Vec<_> = command.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert!(args.windows(2).any(|w| w == ["--add-header", "Origin:https://player.example.com"]), "{args:?}");

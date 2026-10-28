@@ -18,6 +18,7 @@ use tokio::process::Command;
 use super::Manager;
 use crate::{notify, shell};
 
+#[cfg(not(any(windows, target_os = "macos")))]
 const SOUND_FILE: &str = "/usr/share/sounds/freedesktop/stereo/complete.oga";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -76,7 +77,7 @@ impl Manager {
 
     async fn scan(&self, path: &Path) -> Scan {
         let run = |program: &str, args: &[&str]| {
-            let mut command = Command::new(program);
+            let mut command = shell::program(program);
             command.args(args).arg(path).stdin(Stdio::null());
             command
         };
@@ -153,21 +154,46 @@ impl Manager {
             let _ = command.status().await;
             return;
         }
-        // The desktop theme's sound, else the freedesktop file through PulseAudio or PipeWire.
-        let players: [(&str, &[&str]); 3] =
-            [("canberra-gtk-play", &["-i", "complete", "-d", "Fisga"]), ("paplay", &[SOUND_FILE]), ("pw-play", &[SOUND_FILE])];
-        for (program, args) in players {
-            if program != "canberra-gtk-play" && !Path::new(SOUND_FILE).exists() {
-                continue;
-            }
-            let mut command = Command::new(program);
-            command.args(args);
-            quiet(&mut command);
-            if matches!(command.status().await, Ok(status) if status.success()) {
-                return;
-            }
+        play_system_sound(quiet).await;
+    }
+}
+
+/// The desktop theme's sound, else the freedesktop file through PulseAudio or PipeWire.
+#[cfg(not(any(windows, target_os = "macos")))]
+async fn play_system_sound(quiet: impl Fn(&mut Command)) {
+    let players: [(&str, &[&str]); 3] =
+        [("canberra-gtk-play", &["-i", "complete", "-d", "Fisga"]), ("paplay", &[SOUND_FILE]), ("pw-play", &[SOUND_FILE])];
+    for (program, args) in players {
+        if program != "canberra-gtk-play" && !Path::new(SOUND_FILE).exists() {
+            continue;
+        }
+        let mut command = shell::program(program);
+        command.args(args);
+        quiet(&mut command);
+        if matches!(command.status().await, Ok(status) if status.success()) {
+            return;
         }
     }
+}
+
+/// Windows' own notification sound, played to the end.
+#[cfg(windows)]
+async fn play_system_sound(quiet: impl Fn(&mut Command)) {
+    let mut command = shell::powershell(
+        r"$file = Join-Path $env:SystemRoot 'Media\Windows Notify System Generic.wav'
+          if (-not (Test-Path $file)) { $file = Join-Path $env:SystemRoot 'Media\tada.wav' }
+          (New-Object System.Media.SoundPlayer $file).PlaySync()",
+    );
+    quiet(&mut command);
+    let _ = command.status().await;
+}
+
+#[cfg(target_os = "macos")]
+async fn play_system_sound(quiet: impl Fn(&mut Command)) {
+    let mut command = shell::program("afplay");
+    command.arg("/System/Library/Sounds/Glass.aiff");
+    quiet(&mut command);
+    let _ = command.status().await;
 }
 
 #[cfg(test)]

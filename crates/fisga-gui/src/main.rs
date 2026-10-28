@@ -116,6 +116,16 @@ fn use_bundle_resources() {
             std::env::set_var("GDK_PIXBUF_MODULE_FILE", file);
         }
     }
+    // A .dmg runs nothing when the app is installed: the browsers learn where
+    // the native host is here (each start, as the app may have moved).
+    let cli = fisga_ipc::sibling_executable("fisga");
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new(cli)
+            .arg("install-hosts")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    });
 }
 
 fn main() -> glib::ExitCode {

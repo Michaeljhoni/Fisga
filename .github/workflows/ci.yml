@@ -72,11 +72,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --exclude fisga-gui --all-targets
 
-  # The GTK interface on Windows: GTK 4 and the Rust toolchain from MSYS2
-  # (UCRT64), as the Windows installer is built.
+  # The GTK interface on Windows, then the installer: GTK 4 and the Rust
+  # toolchain from MSYS2 (UCRT64), Inno Setup for the installer.
   gui-windows:
     runs-on: windows-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     defaults:
       run:
         shell: msys2 {0}
@@ -88,6 +88,8 @@ jobs:
           msystem: UCRT64
           update: true
           install: >-
+            zip
+            mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-gtk4
             mingw-w64-ucrt-x86_64-librsvg
             mingw-w64-ucrt-x86_64-adwaita-icon-theme
@@ -100,15 +102,38 @@ jobs:
       - name: Clippy
         run: cargo clippy -p fisga-gui --all-targets
 
-  # The GTK interface on macOS, with GTK 4 from Homebrew.
+      - name: Build and lay out the programs with GTK
+        run: |
+          cargo build --release --workspace --locked
+          bash extension/build.sh
+          bash packaging/windows/bundle.sh
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            choco install innosetup --no-progress -y
+            $env:PATH += ";${env:ProgramFiles(x86)}\Inno Setup 6"
+          }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          iscc /Q "/DAppVersion=$version" packaging\windows\fisga.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fisga-windows
+          path: dist/windows/Fisga-*-setup.exe
+          if-no-files-found: error
+
+  # The GTK interface on macOS, then Fisga.app in a .dmg (Apple silicon), with
+  # GTK 4 from Homebrew.
   gui-macos:
     runs-on: macos-14
-    timeout-minutes: 50
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - name: GTK 4
-        run: brew install gtk4 librsvg adwaita-icon-theme pkgconf
+        run: brew install gtk4 librsvg adwaita-icon-theme pkgconf dylibbundler
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -121,6 +146,18 @@ jobs:
 
       - name: Clippy
         run: cargo clippy -p fisga-gui --all-targets
+
+      - name: Fisga.app and the .dmg
+        run: |
+          cargo build --release --workspace --locked
+          bash extension/build.sh
+          bash packaging/macos/bundle.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fisga-macos
+          path: dist/macos/Fisga-*.dmg
+          if-no-files-found: error
 
   # The packages sent to the Chrome Web Store and addons.mozilla.org, checked
   # with Mozilla's own linter; the artifact is what gets uploaded.

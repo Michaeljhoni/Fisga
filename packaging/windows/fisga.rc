@@ -1,0 +1,3 @@
+// fisga-gui.exe's icon (taskbar, Explorer, Start menu); built in by
+// crates/fisga-gui/build.rs.
+1 ICON "fisga.ico"

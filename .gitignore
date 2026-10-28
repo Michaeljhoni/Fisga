@@ -6,3 +6,4 @@
 *.fisga-part.json
 /extension/test/out/
 /extension/test/profile-*/
+/dist

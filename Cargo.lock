@@ -563,7 +563,7 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
 name = "fisga-cli"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "fisga-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "futures-util",
  "percent-encoding",
@@ -594,7 +594,7 @@ dependencies = [
 
 [[package]]
 name = "fisga-daemon"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "fisga-gui"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "fisga-ipc",
@@ -626,7 +626,7 @@ dependencies = [
 
 [[package]]
 name = "fisga-ipc"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "fisga-native-host"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "fisga-ipc",

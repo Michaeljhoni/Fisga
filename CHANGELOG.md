@@ -2,6 +2,21 @@
 
 Cada versão tem uma seção `## X.Y.Z`; o texto dela vira a descrição da release no GitHub.
 
+## 1.1.0
+
+O Fisga agora também roda no Windows e no macOS.
+
+- **Windows 10 e 11:** instalador `Fisga-1.1.0-setup.exe`. Instala só para o seu usuário, sem pedir
+  administrador, liga o Fisga aos navegadores (Chrome, Edge, Brave, Vivaldi, Firefox...) e oferece a
+  extensão do Firefox no final. Notificações do próprio Windows com o nome do Fisga, ícone na bandeja
+  e opção de iniciar com o Windows.
+- **macOS 12 ou mais novo (Apple silicon):** `Fisga-1.1.0.dmg`; é só arrastar para Aplicativos. Na
+  primeira vez, abra com o botão direito → **Abrir**, porque o app não tem assinatura da Apple.
+  Notificações, som, ícone na barra de menus e opção de iniciar com o sistema.
+- **Nos três sistemas:** suspender ou desligar ao terminar a fila, som ao concluir e captura de links
+  copiados.
+- **Extensão:** pacotes para a Chrome Web Store e para o addons.mozilla.org.
+
 ## 1.0.0
 
 Primeira versão pública.

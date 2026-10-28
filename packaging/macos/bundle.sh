@@ -34,12 +34,14 @@ sed 's#^"/[^"]*/loaders/\([^"/]*\)"$#"@RESOURCES@/'"$loaders"'/loaders/\1"#' "$o
 rm "$out/loaders.cache"
 
 # Every Homebrew library the programs and loaders use, into Frameworks, with
-# the references rewritten to point there.
+# the references rewritten to point there. Some are named by @rpath (librsvg,
+# from the SVG loader): they are in Homebrew's lib. A library it still cannot
+# find makes dylibbundler ask for its folder, over and over: "quit" ends it.
 args=()
 for file in "$contents"/MacOS/* "$resources/$loaders"/loaders/*; do
   args+=(-x "$file")
 done
-dylibbundler -of -b -cd "${args[@]}" -d "$contents/Frameworks" -p @executable_path/../Frameworks/
+dylibbundler -of -b -cd "${args[@]}" -s "$prefix/lib" -d "$contents/Frameworks" -p @executable_path/../Frameworks/ <<< quit
 
 # GTK's settings schemas, its icons (Adwaita) and Fisga's own.
 schemas="$resources/share/glib-2.0/schemas"

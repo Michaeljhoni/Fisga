@@ -1099,7 +1099,7 @@ fn about(parent: &gtk::ApplicationWindow) {
         .transient_for(parent)
         .modal(true)
         .program_name("Fisga")
-        .comments("Gerenciador de downloads para Linux, inspirado no Internet Download Manager.")
+        .comments("Gerenciador de downloads para Linux, Windows e macOS, inspirado no Internet Download Manager.")
         .version(env!("CARGO_PKG_VERSION"))
         .logo_icon_name("folder-download")
         .build()

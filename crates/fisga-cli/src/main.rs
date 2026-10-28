@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Parser)]
-#[command(name = "fisga", version, about = "Fisga: gerenciador de downloads para Linux")]
+#[command(name = "fisga", version, about = "Fisga: gerenciador de downloads para Linux, Windows e macOS")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

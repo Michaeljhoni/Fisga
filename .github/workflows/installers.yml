@@ -1,0 +1,97 @@
+name: Installers
+
+# The GTK interface on Windows and macOS, tested, then the installers: the
+# Windows setup (Inno Setup) and Fisga.app in a .dmg. Called by ci.yml on every
+# push and by release.yml, which attaches the artifacts to the release.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # GTK 4 and the Rust toolchain from MSYS2 (UCRT64), Inno Setup for the installer.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            zip
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-librsvg
+            mingw-w64-ucrt-x86_64-adwaita-icon-theme
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-rust
+
+      - name: Tests
+        run: cargo test -p fisga-gui --locked
+
+      - name: Clippy
+        run: cargo clippy -p fisga-gui --all-targets
+
+      - name: Build and lay out the programs with GTK
+        run: |
+          cargo build --release --workspace --locked
+          bash extension/build.sh
+          bash packaging/windows/bundle.sh
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            choco install innosetup --no-progress -y
+            $env:PATH += ";${env:ProgramFiles(x86)}\Inno Setup 6"
+          }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          iscc /Q "/DAppVersion=$version" packaging\windows\fisga.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: setup-windows
+          path: dist/windows/Fisga-*-setup.exe
+          if-no-files-found: error
+
+  # Apple silicon, with GTK 4 from Homebrew.
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GTK 4
+        run: brew install gtk4 librsvg adwaita-icon-theme pkgconf dylibbundler
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test -p fisga-gui --locked
+
+      - name: Clippy
+        run: cargo clippy -p fisga-gui --all-targets
+
+      - name: Fisga.app and the .dmg
+        timeout-minutes: 20
+        run: |
+          cargo build --release --workspace --locked
+          bash extension/build.sh
+          bash packaging/macos/bundle.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: setup-macos
+          path: dist/macos/Fisga-*.dmg
+          if-no-files-found: error

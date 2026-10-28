@@ -4,16 +4,24 @@
 
 use crate::shell;
 
-/// Windows only shows toasts of a registered app; until the installer
-/// registers Fisga's, they go under PowerShell's.
+/// Windows only shows toasts of an app with a Start menu shortcut: Fisga's,
+/// which the installer creates with the AppUserModelID `io.fisga.Fisga`, or
+/// else PowerShell's (built from the sources, say).
 #[cfg(windows)]
 const TOAST: &str = r#"
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+$installed = Test-Path (Join-Path ([Environment]::GetFolderPath('Programs')) 'Fisga.lnk')
 $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
 $text = $xml.GetElementsByTagName('text')
-$text.Item(0).AppendChild($xml.CreateTextNode("Fisga: $env:FISGA_SUMMARY")) > $null
+if ($installed) {
+  $app = 'io.fisga.Fisga'
+  $title = $env:FISGA_SUMMARY
+} else {
+  $app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+  $title = "Fisga: $env:FISGA_SUMMARY"
+}
+$text.Item(0).AppendChild($xml.CreateTextNode($title)) > $null
 $text.Item(1).AppendChild($xml.CreateTextNode($env:FISGA_BODY)) > $null
-$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($xml))
 "#;
 

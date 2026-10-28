@@ -1,8 +1,8 @@
 name: Release
 
 # A tag vX.Y.Z on main publishes the GitHub release: a tarball of the installed
-# files per architecture (what fisga-bin unpacks), SHA256SUMS, and CHANGELOG.md's
-# section as the notes. Run by hand (workflow_dispatch) or by a push to a
+# files per Linux architecture (what fisga-bin unpacks), the Windows installer,
+# the macOS .dmg, SHA256SUMS, and CHANGELOG.md's section as the notes. Run by hand (workflow_dispatch) or by a push to a
 # wip/release* branch it is a rehearsal: it builds and checks everything and
 # publishes nothing.
 on:
@@ -126,9 +126,13 @@ jobs:
             packaging/arch-bin/.SRCINFO
           include-hidden-files: true
 
+  # The Windows installer and the macOS .dmg (artifacts setup-windows, setup-macos).
+  installers:
+    uses: ./.github/workflows/installers.yml
+
   publish:
     if: github.ref_type == 'tag'
-    needs: [build, arch-bin]
+    needs: [build, arch-bin, installers]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -141,12 +145,18 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: setup-*
+          path: dist
+          merge-multiple: true
+
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           awk -v head="## $version" '$0 == head { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > notes.md
-          (cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS)
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS \
+          (cd dist && sha256sum *.tar.gz *.exe *.dmg > SHA256SUMS && cat SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.exe dist/*.dmg dist/SHA256SUMS \
             --verify-tag --title "Fisga $version" --notes-file notes.md

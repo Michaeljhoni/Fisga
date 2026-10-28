@@ -6,10 +6,10 @@ completo (bandeja, iniciar com a sessão, agendador e várias filas).
 
 ## O projeto em uma frase
 
-**Fisga** é um gerenciador de downloads para Linux inspirado no Internet Download Manager (IDM),
-escrito em Rust do zero (clean-room). Inclui uma extensão para Chrome e Firefox que captura
+**Fisga** é um gerenciador de downloads para Linux, Windows e macOS inspirado no Internet
+Download Manager (IDM), escrito em Rust do zero (clean-room). Inclui uma extensão para Chrome e Firefox que captura
 downloads e vídeos, e uma interface GTK4 com os textos em português.
-Repositório privado: <https://github.com/Michaeljhoni/Fisga>. Até 27/10/2026 o projeto se chamava
+Repositório público: <https://github.com/Michaeljhoni/Fisga>. Até 27/10/2026 o projeto se chamava
 **LDM**: o clone do dono (`~/ldm`) ainda tem esse nome. O que o Fisga faz para quem vinha do LDM
 (pastas, `.ldm-part`, autostart, host nativo, `$LDM_FILE`) está em `docs/GUIA.md`, em "Vindo do
 LDM"; o código fica em `fisga_ipc::migrate_legacy_dirs`, `control::adopt_legacy`,
@@ -46,7 +46,7 @@ navegador ──Native Messaging──▶ fisga-native-host ──socket Unix─
 | `crates/fisga-daemon` (`fisgad`) | Lista, fila e jobs (`manager.rs`); agendador e suspender/desligar (`manager/scheduler.rs`); yt-dlp para vídeos de sites (`ytdlp.rs`); abre o `fisga-gui --pending` para confirmar um download (`gui.rs`); monitor da área de transferência (`clipboard.rs`); notificações. |
 | `crates/fisga-cli` (`fisga`) | `add`, `get`, `list`, `confirm`, `pause`, `resume`, `rm`, `watch`, `settings`, `schedule`, `queue`, `move`, `install-hosts`, `stop`. |
 | `crates/fisga-native-host` | Ponte entre a extensão e o `fisgad`. |
-| `crates/fisga-gui` (`fisga-gui`, app-id `io.fisga.Fisga`) | GTK4 0.10 (feature `v4_10`), glib 0.21. Janelas: principal (`window.rs`), Novo download (`confirm.rs`), progresso / Download concluído (`progress.rs`), Preferências com abas Geral e Filas (`prefs.rs`, `queues_page`), contagem antes de suspender/desligar (`power.rs`). Bandeja com o crate `ksni` 0.3 (`tray.rs`, roda no runtime tokio do `ipc.rs`); autostart (`autostart.rs`). `app.rs` mantém o estado e decide quando o app fica vivo. |
+| `crates/fisga-gui` (`fisga-gui`, app-id `io.fisga.Fisga`) | GTK4 0.10 (feature `v4_10`), glib 0.21. Janelas: principal (`window.rs`), Novo download (`confirm.rs`), progresso / Download concluído (`progress.rs`), Preferências com abas Geral e Filas (`prefs.rs`, `queues_page`), contagem antes de suspender/desligar (`power.rs`). Bandeja (`tray.rs`): no Linux o crate `ksni` 0.3 (`tray/sni.rs`, roda no runtime tokio do `ipc.rs`); no Windows e no macOS o `tray-icon` 0.26 (`tray/native.rs`, na thread do GTK, eventos lidos a cada 150 ms). Autostart (`autostart.rs`): `.desktop` no XDG, valor `Fisga` na chave `Run` do HKCU, LaunchAgent no macOS. `app.rs` mantém o estado e decide quando o app fica vivo. |
 | `extension/` | Extensão MV3 para Chrome e Firefox. `src/background.js` e `src/content.js` colocam o botão "Baixar" sobre os players; `build.sh` gera `extension/dist/`. |
 
 Dados no Linux:
@@ -336,10 +336,24 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   install-hosts` (Windows: manifestos em `%LOCALAPPDATA%\fisga\native-messaging-hosts` e chaves em
   `HKCU\Software\...\NativeMessagingHosts` pelo `reg.exe`; macOS: pastas em `~/Library/Application
   Support`). Todo programa que o daemon abre no Windows vai com `CREATE_NO_WINDOW`
-  (`shell::program`). Os toasts saem com o nome do PowerShell até o instalador registrar um
-  AppUserModelID do Fisga. Ficam para a fase 3, junto com a GUI: bandeja (`ksni` é só D-Bus;
-  `tray-icon` fora do Linux) e iniciar com a sessão (chave `Run`; LaunchAgent). Fase 3: GUI e
-  instaladores (.exe/.msi, .dmg).
+  (`shell::program`). Fase 3, GUI e instaladores, feita: o workflow `installers.yml` (chamado pelo
+  CI e pelo release) testa a GUI e monta os instaladores.
+  - **Windows:** GTK do MSYS2 (UCRT64). `packaging/windows/bundle.sh` monta `bin`, `lib` e `share`
+    como o GTK espera, e `fisga.iss` (Inno Setup) faz o `Fisga-<versão>-setup.exe`. O instalador é por
+    usuário, sem administrador, e cria o atalho do menu Iniciar com o AppUserModelID `io.fisga.Fisga`;
+    havendo esse atalho, os toasts saem com o nome do Fisga (antes saíam com o do PowerShell). Ele
+    também roda `fisga install-hosts` e oferece a extensão do AMO. O ícone do .exe vem do
+    `fisga.rc`, pelo `windres` no `build.rs`. A GUI usa `windows_subsystem = "windows"` e grava o
+    log em `%LOCALAPPDATA%\fisga\log`.
+  - **macOS:** GTK do Homebrew. `packaging/macos/bundle.sh` faz o `Fisga.app`: as bibliotecas vão
+    para `Frameworks` pelo `dylibbundler`, com `-s $(brew --prefix)/lib` por causa do
+    `@rpath/librsvg`; sem o `<<< quit`, uma biblioteca que ele não acha vira um laço infinito. A
+    assinatura é ad hoc e o .dmg sai pelo `hdiutil`. O `use_bundle_resources` (main.rs da GUI)
+    aponta o GTK para `Resources` e roda `install-hosts` a cada início.
+  - **Testado** no Windows 11 do dono, pelo instalador: janela, ícones, download com 8 conexões,
+    bandeja registrada e toast do Fisga. Instalar num caminho muito longo falha pelo limite de 260
+    caracteres (os ícones do Adwaita são fundos); o caminho padrão não tem esse problema. O macOS
+    só foi testado no CI (compila, testa e monta o .dmg; ninguém abriu ainda).
 - Flatpak, .deb e .rpm.
 
 ### Visual novo (proposta E do canvas "Fisga — novo visual")

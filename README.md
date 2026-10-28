@@ -5,7 +5,7 @@
 <h1 align="center">Fisga</h1>
 
 <p align="center">
-  Gerenciador de downloads para Linux, inspirado no IDM.<br>
+  Gerenciador de downloads para Linux, Windows e macOS, inspirado no IDM.<br>
   Várias conexões por arquivo, filas, agendador e uma extensão que fisga downloads e vídeos do navegador.
 </p>
 
@@ -29,6 +29,15 @@
 
 ## Instalar
 
+**Windows 10 e 11:** baixe `Fisga-<versão>-setup.exe` da
+[última versão](https://github.com/Michaeljhoni/Fisga/releases/latest) e rode. Não pede administrador:
+instala para o seu usuário, liga o Fisga aos navegadores e oferece a extensão do Firefox. O instalador
+não é assinado, então o Windows avisa na primeira vez: **Mais informações → Executar assim mesmo**.
+
+**macOS 12 ou mais novo (Apple silicon):** baixe `Fisga-<versão>.dmg` e arraste o Fisga para
+Aplicativos. Ele também não tem assinatura da Apple: na primeira vez, abra com o botão direito → **Abrir**
+(ou permita em Ajustes do Sistema → Privacidade e Segurança).
+
 **Arch Linux**, com os binários prontos da [última versão](https://github.com/Michaeljhoni/Fisga/releases/latest)
 (pacote `fisga-bin`, instala em segundos):
 
@@ -47,7 +56,9 @@ scripts/install-dev.sh
 
 Opcionais: `yt-dlp` e `ffmpeg` (vídeos de sites), `libnotify`, `wl-clipboard` e `clamav`.
 
-Depois, carregue a extensão no navegador:
+Depois, carregue a extensão no navegador (no Windows ela fica em
+`%LOCALAPPDATA%\Programs\Fisga\share\fisga\extension`; no macOS, dentro de
+`Fisga.app/Contents/Resources/share/fisga/extension`):
 
 - **Chrome, Brave, Edge, Vivaldi:** `chrome://extensions` → Modo do desenvolvedor → Carregar sem
   compactação → `/usr/share/fisga/extension/chrome` (ou `extension/dist/chrome`, sem o pacote).

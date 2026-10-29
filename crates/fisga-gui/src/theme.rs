@@ -26,6 +26,8 @@ struct Palette {
     ground: &'static str,
     header: &'static str,
     pane: &'static str,
+    /// The speed panel, over the top of the scene.
+    panel: &'static str,
     card: &'static str,
     card_hover: &'static str,
     sheet: &'static str,
@@ -57,6 +59,7 @@ const DARK: Palette = Palette {
     ground: "#0f131a",
     header: "#141922",
     pane: "#11161e",
+    panel: "#11161e",
     card: "#151b25",
     card_hover: "#18202b",
     sheet: "#0f131a",
@@ -84,6 +87,7 @@ const LIGHT: Palette = Palette {
     ground: "#eef1f5",
     header: "#ffffff",
     pane: "#f7f8fa",
+    panel: "#f7f8fa",
     card: "#ffffff",
     card_hover: "#fbfcfd",
     sheet: "#eef1f5",
@@ -112,6 +116,7 @@ fn holiday(season: Season) -> Palette {
     Palette {
         ground: "transparent",
         pane: "rgba(12, 16, 23, 0.70)",
+        panel: "rgba(12, 16, 23, 0.42)",
         card: "rgba(20, 26, 36, 0.84)",
         card_hover: "rgba(26, 33, 45, 0.90)",
         sheet: "rgba(12, 16, 23, 0.78)",
@@ -193,7 +198,7 @@ window.fisga headerbar entry, window.fisga searchbar entry {
 .fisga-count { font-size: 0.85em; color: @fisga_muted; }
 
 .fisga-speed {
-  background: @fisga_pane;
+  background: @fisga_panel;
   border-bottom: 1px solid @fisga_border;
 }
 .fisga-live {
@@ -352,6 +357,7 @@ fn stylesheet() -> String {
         ("ground", p.ground),
         ("header", p.header),
         ("pane", p.pane),
+        ("panel", p.panel),
         ("card", p.card),
         ("card_hover", p.card_hover),
         ("sheet", p.sheet),

@@ -188,7 +188,7 @@ for season in carnaval pascoa namorados junina halloween natal anonovo; do
   pkill -f "$BIN/fisga-gui" || true
   for _ in $(seq 1 25); do pgrep -f "$BIN/fisga-gui" >/dev/null || break; sleep 0.2; done
   FISGA_SEASON="$season" "$BIN/fisga-gui" &
-  find_window "^Fisga$" >/dev/null
+  main="$(find_window "^Fisga$")"
   sleep 3
   shot "7-tema-$season"
 done

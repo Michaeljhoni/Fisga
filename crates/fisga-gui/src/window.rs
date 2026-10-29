@@ -612,6 +612,14 @@ impl MainWindow {
         layers.add_overlay(&content);
         layers.set_measure_overlay(&content, true);
         window.set_child(Some(&layers));
+        // It stands still while another app is in use: back in this one, it
+        // moves again at once.
+        let e = Rc::downgrade(&effects);
+        window.connect_is_active_notify(move |window| {
+            if let (true, Some(effects)) = (window.is_active(), e.upgrade()) {
+                effects.wake();
+            }
+        });
 
         let actions = Actions {
             resume: gio::SimpleAction::new("resume", None),

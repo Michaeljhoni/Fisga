@@ -223,8 +223,9 @@ troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O b
     à Páscoa), um coração neon no Dia dos Namorados (10 a 12 de junho), bandeirinhas e estrelas
     na festa junina (20 a 29 de junho), morcegos na névoa no Halloween (25 a 31 de outubro), neve
     e pisca-pisca no Natal (18 a 26 de dezembro) e fogos sobre a cidade no Ano-novo (27 de
-    dezembro a 2 de janeiro). A animação roda enquanto a janela está na tela e para com ela
-    minimizada ou na bandeja; com as animações do sistema desligadas, a cena fica parada. *Ver o
+    dezembro a 2 de janeiro). A animação roda enquanto você usa o Fisga; com outro programa em
+    foco a cena fica parada, e com a janela minimizada ou na bandeja ela nem é desenhada. Com as
+    animações do sistema desligadas, a cena fica sempre parada. *Ver o
     tema de uma data* mostra qualquer um deles enquanto as Preferências estiverem abertas. No
     terminal: `fisga settings --festive false`; para ver um tema fora da semana dele,
     `FISGA_SEASON=natal fisga-gui` (carnaval, pascoa, namorados, junina, halloween, natal,

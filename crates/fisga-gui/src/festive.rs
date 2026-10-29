@@ -1,12 +1,12 @@
 //! The holidays. In their weeks the main window takes the holiday's theme
 //! (see `theme`): a scene drawn with cairo behind the panels and the cards,
-//! moving for as long as the window is on screen (paused while it is
-//! minimized): confetti in Carnaval, eggs and a bunny at Easter, a neon
+//! moving while Fisga is in use (still while another app has the focus,
+//! not drawn while minimized): confetti in Carnaval, eggs and a bunny at Easter, a neon
 //! heart for Dia dos Namorados, bunting at festa junina, bats in the fog at
 //! Halloween, snow and fairy lights at Christmas, fireworks at New Year.
 //! "Mostrar" in the preferences shows any of them while they are open.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::f64::consts::PI;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
@@ -242,7 +242,7 @@ struct Scene {
     season: Season,
     particles: Vec<Particle>,
     random: Random,
-    /// Seconds of animation shown (not counting the time minimized).
+    /// Seconds of animation shown (not counting the time paused).
     t: f64,
     /// Monotonic time (µs) of the last frame; `None` after a pause.
     last: Option<i64>,
@@ -1041,9 +1041,10 @@ fn draw_bat(cr: &cairo::Context, s: f64, flap: f64) {
     let _ = cr.fill();
 }
 
-/// Whether the window is on screen: not minimized, hidden or (on Wayland)
-/// suspended.
-fn on_screen(area: &gtk::DrawingArea) -> bool {
+/// Whether the scene is worth moving: its window on screen (not minimized,
+/// hidden or, on Wayland, suspended) and Fisga the app in use (one of its
+/// windows has the focus, the preferences say). Otherwise it stays still.
+fn in_use(area: &gtk::DrawingArea) -> bool {
     let Some(window) = area.root().and_downcast::<gtk::Window>() else { return false };
     if !window.is_visible() || window.is_suspended() {
         return false;
@@ -1053,13 +1054,17 @@ fn on_screen(area: &gtk::DrawingArea) -> bool {
         .and_downcast::<gdk::Toplevel>()
         .is_some_and(|toplevel| toplevel.state().contains(gdk::ToplevelState::MINIMIZED));
     !minimized
+        && gtk::Window::list_toplevels()
+            .iter()
+            .any(|window| window.downcast_ref::<gtk::Window>().is_some_and(|window| window.is_active()))
 }
 
 /// The layer behind the main window's panels.
 pub struct Effects {
     pub area: gtk::DrawingArea,
     scene: Rc<RefCell<Option<Scene>>>,
-    ticking: Cell<bool>,
+    /// The next frame, while the scene moves (or waits to).
+    timer: RefCell<Option<glib::SourceId>>,
 }
 
 thread_local! {
@@ -1082,7 +1087,7 @@ impl Effects {
                 scene.draw(cr, width, height);
             }
         });
-        let effects = Rc::new(Self { area, scene, ticking: Cell::new(false) });
+        let effects = Rc::new(Self { area, scene, timer: RefCell::default() });
         LAYER.replace(Rc::downgrade(&effects));
         effects.set(theme::season());
         effects
@@ -1096,11 +1101,36 @@ impl Effects {
         self.scene.replace(season.map(|season| Scene::new(season, glib::real_time() as u64)));
         self.area.set_visible(season.is_some());
         self.area.queue_draw();
-        let animations = gtk::Settings::default().is_none_or(|settings| settings.is_gtk_enable_animations());
-        if season.is_none() || !animations || self.ticking.replace(true) {
-            return;
+        if self.timer.borrow().is_none() {
+            self.wake();
         }
-        next_frame(Rc::downgrade(self), FRAME);
+    }
+
+    /// Moves the scene on at once, when its window may have come back into
+    /// use (the paused scene looks only once a second).
+    pub fn wake(self: &Rc<Self>) {
+        let animations = gtk::Settings::default().is_none_or(|settings| settings.is_gtk_enable_animations());
+        if animations && self.scene.borrow().is_some() {
+            self.schedule(Duration::ZERO);
+        }
+    }
+
+    /// The scene moves on a timer, not a tick callback: one of those keeps
+    /// GTK making frames at the screen's rate for as long as it is there,
+    /// and each frame costs even when nothing changed.
+    fn schedule(self: &Rc<Self>, wait: Duration) {
+        let this = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(wait, move || {
+            let Some(this) = this.upgrade() else { return };
+            // Gone off: nothing left to cancel.
+            this.timer.take();
+            if let Some(wait) = this.frame() {
+                this.schedule(wait);
+            }
+        });
+        if let Some(pending) = self.timer.replace(Some(id)) {
+            pending.remove();
+        }
     }
 
     /// Moves the scene a frame on. Returns the wait until the next one, or
@@ -1108,7 +1138,7 @@ impl Effects {
     fn frame(&self) -> Option<Duration> {
         let mut scene = self.scene.borrow_mut();
         let scene = scene.as_mut()?;
-        if !on_screen(&self.area) {
+        if !in_use(&self.area) {
             // Paused: when it is back, it goes on from where it was.
             scene.last = None;
             return Some(PAUSED);
@@ -1120,19 +1150,6 @@ impl Effects {
         self.area.queue_draw();
         Some(FRAME)
     }
-}
-
-/// The scene moves on a timer, not a tick callback: one of those keeps GTK
-/// making frames at the screen's rate for as long as it is there, and each
-/// frame costs even when nothing changed.
-fn next_frame(effects: Weak<Effects>, wait: Duration) {
-    glib::timeout_add_local_once(wait, move || {
-        let Some(this) = effects.upgrade() else { return };
-        match this.frame() {
-            Some(wait) => next_frame(effects, wait),
-            None => this.ticking.set(false),
-        }
-    });
 }
 
 /// The holiday's scene behind the main window (if it is open), or none.

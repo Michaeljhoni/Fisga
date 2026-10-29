@@ -287,7 +287,7 @@ fn look_page(settings: &Settings) -> (gtk::Grid, Box<dyn Fn() -> (Theme, bool)>)
         Some(
             "Na semana da data, a janela principal ganha o fundo e as cores dela, com uma animação atrás dos downloads: \
              confete no Carnaval, ovos na Páscoa, um coração neon no Dia dos Namorados, bandeirinhas na festa junina, \
-             morcegos no Halloween, neve e pisca-pisca no Natal e fogos no Ano-novo. A animação para com a janela minimizada.",
+             morcegos no Halloween, neve e pisca-pisca no Natal e fogos no Ano-novo. A animação para quando o Fisga não está em uso.",
         ),
     );
     row(&grid, 2, "Ver o tema de uma data", &season, Some("Enquanto as Preferências estiverem abertas."));

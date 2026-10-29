@@ -9,6 +9,7 @@
 use std::cell::{Cell, RefCell};
 use std::f64::consts::PI;
 use std::rc::{Rc, Weak};
+use std::time::Duration;
 
 use gtk::prelude::*;
 use gtk::{cairo, gdk, glib};
@@ -149,8 +150,11 @@ fn day_number(year: i32, month: u32, day: u32) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
-/// The scene's frame rate: 30 per second is plenty behind a download list.
-const FRAME: i64 = 1_000_000 / 30;
+/// The time between two frames: 20 a second is plenty behind a download
+/// list, and each one draws the whole window again.
+const FRAME: Duration = Duration::from_millis(50);
+/// How often a scene off screen looks whether it is back.
+const PAUSED: Duration = Duration::from_secs(1);
 /// What pulls the rockets down, in pixels/s².
 const GRAVITY: f64 = 220.0;
 
@@ -213,6 +217,26 @@ impl Random {
     }
 }
 
+/// What is drawn once for a size of the window and then copied at every
+/// frame: gradients over large areas, drawn again at every frame, cost the
+/// most.
+struct Cache {
+    width: f64,
+    height: f64,
+    /// The still part behind everything: the sky, the moon, the tree...
+    backdrop: Option<cairo::ImageSurface>,
+    /// Halloween's banks of fog, behind the bats and in front of them: each
+    /// in a surface of its own, with where its corner is before it drifts.
+    fog_back: Vec<(cairo::ImageSurface, f64, f64)>,
+    fog_front: Vec<(cairo::ImageSurface, f64, f64)>,
+}
+
+/// Halloween's banks of fog: centre (x of a 960-wide window; y from the top,
+/// or from the bottom when negative), radii, strength and drift period.
+type Bank = (f64, f64, f64, f64, f64, f64);
+const FOG_BACK: [Bank; 1] = [(420.0, 200.0, 300.0, 60.0, 0.08, 50.0)];
+const FOG_FRONT: [Bank; 2] = [(280.0, -120.0, 380.0, 80.0, 0.13, 32.0), (670.0, -65.0, 410.0, 95.0, 0.16, 42.0)];
+
 /// One holiday's scene: its particles and the still parts placed at random.
 struct Scene {
     season: Season,
@@ -220,8 +244,10 @@ struct Scene {
     random: Random,
     /// Seconds of animation shown (not counting the time minimized).
     t: f64,
-    /// Frame clock time (µs) of the last frame drawn; `None` after a pause.
+    /// Monotonic time (µs) of the last frame; `None` after a pause.
     last: Option<i64>,
+    /// What is drawn once for the window's size and then copied.
+    cache: Option<Cache>,
     /// The first particles are spread over the window, not all entering at once.
     filled: bool,
     /// Rockets owed by their rate.
@@ -250,7 +276,18 @@ impl Scene {
             width += building.0 + 2.0;
             buildings.push(building);
         }
-        Scene { season, particles: Vec::new(), random, t: 0.0, last: None, filled: false, owed: 0.0, stars, buildings }
+        Scene {
+            season,
+            particles: Vec::new(),
+            random,
+            t: 0.0,
+            last: None,
+            cache: None,
+            filled: false,
+            owed: 0.0,
+            stars,
+            buildings,
+        }
     }
 
     /// How many particles keep the scene full, for a window of this size.
@@ -450,42 +487,30 @@ impl Scene {
         }
     }
 
-    fn draw(&self, cr: &cairo::Context, width: f64, height: f64) {
+    fn draw(&mut self, cr: &cairo::Context, width: f64, height: f64) {
+        self.prepare(cr, width, height);
         let t = self.t;
+        let cache = self.cache.as_ref();
+        match cache.and_then(|cache| cache.backdrop.as_ref()) {
+            Some(surface) => paint(cr, surface, 0.0, 0.0),
+            None => backdrop(cr, self.season, width, height),
+        }
         match self.season {
-            Season::Carnival => {
-                let radius = width.hypot(height);
-                radial(cr, width * 0.15, 0.0, radius, &[(0.0, "#5b21b6"), (0.45, "#2a0f4d"), (1.0, "#14061f")], width, height);
-                serpentines(cr, width);
-            }
-            Season::Easter => vertical(cr, width, height, &[(0.0, "#33200f"), (1.0, "#1a0f0a")]),
-            Season::Valentines => {
-                vertical(cr, width, height, &[(0.0, "#120a14"), (1.0, "#120a14")]);
-                neon_heart(cr, width, height, t);
-            }
+            Season::Valentines => neon_heart(cr, width, height, t),
             Season::June => {
-                vertical(cr, width, height, &[(0.0, "#0a1533"), (1.0, "#1d2f63")]);
                 self.draw_stars(cr, width, height, (1.0, 0.976, 0.765));
                 bunting(cr, width, t);
             }
-            Season::Halloween => {
-                vertical(cr, width, height, &[(0.0, "#34423c"), (1.0, "#18211d")]);
-                moon(cr, width - 275.0, 85.0, 45.0);
-                fog(cr, width, height, t, &[(420.0, 200.0, 300.0, 60.0, 0.08, 50.0)]);
-                tree(cr, width, height);
-            }
-            Season::Christmas => vertical(cr, width, height, &[(0.0, "#0a1730"), (0.65, "#12274a"), (1.0, "#1c3760")]),
-            Season::NewYear => {
-                vertical(cr, width, height, &[(0.0, "#04060d"), (0.7, "#0a0f22"), (1.0, "#161d3a")]);
-                self.draw_stars(cr, width, height, (1.0, 1.0, 1.0));
-            }
+            Season::Halloween => drift(cr, cache.map_or(&[][..], |cache| &cache.fog_back[..]), &FOG_BACK, t),
+            Season::NewYear => self.draw_stars(cr, width, height, (1.0, 1.0, 1.0)),
+            _ => {}
         }
         for p in &self.particles {
             draw_particle(cr, p, t);
         }
         match self.season {
             Season::Easter => bunny(cr, width, height, t),
-            Season::Halloween => fog(cr, width, height, t, &[(280.0, -120.0, 380.0, 80.0, 0.13, 32.0), (670.0, -65.0, 410.0, 95.0, 0.16, 42.0)]),
+            Season::Halloween => drift(cr, cache.map_or(&[][..], |cache| &cache.fog_front[..]), &FOG_FRONT, t),
             Season::Christmas => {
                 hills(cr, width, height);
                 fairy_lights(cr, width, t);
@@ -493,6 +518,23 @@ impl Scene {
             Season::NewYear => self.draw_skyline(cr, width, height),
             _ => {}
         }
+    }
+
+    /// Draws what is cached again when the window's size has changed.
+    fn prepare(&mut self, cr: &cairo::Context, width: f64, height: f64) {
+        if self.cache.as_ref().is_some_and(|cache| (cache.width, cache.height) == (width, height)) {
+            return;
+        }
+        let (sx, sy) = cr.target().device_scale();
+        let season = self.season;
+        let backdrop = sprite(sx, sy, width, height, cairo::Format::Rgb24, |cr| backdrop(cr, season, width, height));
+        let banks = |banks: &[Bank]| match season {
+            Season::Halloween => {
+                banks.iter().map(|&bank| fog_bank(sx, sy, width, height, bank)).collect::<Option<Vec<_>>>().unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+        self.cache = Some(Cache { width, height, backdrop, fog_back: banks(&FOG_BACK), fog_front: banks(&FOG_FRONT) });
     }
 
     fn draw_stars(&self, cr: &cairo::Context, width: f64, height: f64, (r, g, b): (f64, f64, f64)) {
@@ -533,6 +575,80 @@ fn fly(p: &mut Particle, t: f64, dt: f64, width: f64, height: f64) {
     p.vy = p.angle.sin() * p.spin * 0.6 + (t * 2.3 + p.phase).sin() * 16.0;
     p.x += p.vx * dt;
     p.y += p.vy * dt;
+}
+
+/// The still part of a scene, behind everything else.
+fn backdrop(cr: &cairo::Context, season: Season, width: f64, height: f64) {
+    match season {
+        Season::Carnival => {
+            let radius = width.hypot(height);
+            radial(cr, width * 0.15, 0.0, radius, &[(0.0, "#5b21b6"), (0.45, "#2a0f4d"), (1.0, "#14061f")], width, height);
+            serpentines(cr, width);
+        }
+        Season::Easter => vertical(cr, width, height, &[(0.0, "#33200f"), (1.0, "#1a0f0a")]),
+        Season::Valentines => vertical(cr, width, height, &[(0.0, "#120a14"), (1.0, "#120a14")]),
+        Season::June => vertical(cr, width, height, &[(0.0, "#0a1533"), (1.0, "#1d2f63")]),
+        Season::Halloween => {
+            vertical(cr, width, height, &[(0.0, "#34423c"), (1.0, "#18211d")]);
+            moon(cr, width - 275.0, 85.0, 45.0);
+            tree(cr, width, height);
+        }
+        Season::Christmas => vertical(cr, width, height, &[(0.0, "#0a1730"), (0.65, "#12274a"), (1.0, "#1c3760")]),
+        Season::NewYear => vertical(cr, width, height, &[(0.0, "#04060d"), (0.7, "#0a0f22"), (1.0, "#161d3a")]),
+    }
+}
+
+/// A drawing in a surface of its own, at the window's scale, to be copied
+/// at every frame instead of drawn again.
+fn sprite(
+    sx: f64,
+    sy: f64,
+    width: f64,
+    height: f64,
+    format: cairo::Format,
+    draw: impl FnOnce(&cairo::Context),
+) -> Option<cairo::ImageSurface> {
+    let surface = cairo::ImageSurface::create(format, (width * sx).ceil() as i32, (height * sy).ceil() as i32).ok()?;
+    surface.set_device_scale(sx, sy);
+    draw(&cairo::Context::new(&surface).ok()?);
+    surface.flush();
+    Some(surface)
+}
+
+/// Copies a sprite with its top left corner at (x, y).
+fn paint(cr: &cairo::Context, surface: &cairo::ImageSurface, x: f64, y: f64) {
+    let (sx, sy) = surface.device_scale();
+    let _ = cr.set_source_surface(surface, x, y);
+    // Pixel for pixel: nothing to smooth.
+    cr.source().set_filter(cairo::Filter::Fast);
+    cr.rectangle(x, y, f64::from(surface.width()) / sx, f64::from(surface.height()) / sy);
+    let _ = cr.fill();
+}
+
+/// A bank of fog in a sprite, with where its corner is before it drifts.
+fn fog_bank(sx: f64, sy: f64, width: f64, height: f64, (x, y, rx, ry, alpha, _): Bank) -> Option<(cairo::ImageSurface, f64, f64)> {
+    // It fades out at 0.7 of its radii: the sprite ends there.
+    let (rx, ry) = (0.7 * rx * width / 960.0, 0.7 * ry);
+    let y = if y < 0.0 { height + y } else { y };
+    let surface = sprite(sx, sy, 2.0 * rx, 2.0 * ry, cairo::Format::ARgb32, |cr| {
+        cr.translate(rx, ry);
+        cr.scale(rx, ry);
+        let gradient = cairo::RadialGradient::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+        gradient.add_color_stop_rgba(0.0, 0.84, 0.91, 0.87, alpha);
+        gradient.add_color_stop_rgba(1.0, 0.84, 0.91, 0.87, 0.0);
+        let _ = cr.set_source(&gradient);
+        cr.arc(0.0, 0.0, 1.0, 0.0, 2.0 * PI);
+        let _ = cr.fill();
+    })?;
+    Some((surface, (x * width / 960.0 - rx).round(), (y - ry).round()))
+}
+
+/// Banks of fog where they have drifted to at `t`, sideways.
+fn drift(cr: &cairo::Context, sprites: &[(cairo::ImageSurface, f64, f64)], banks: &[Bank], t: f64) {
+    for ((surface, x, y), &(.., period)) in sprites.iter().zip(banks) {
+        let drift = (t * 2.0 * PI / period).sin() * 140.0;
+        paint(cr, surface, (x + drift).round(), *y);
+    }
 }
 
 /// A vertical gradient over the whole area.
@@ -672,26 +788,6 @@ fn moon(cr: &cairo::Context, x: f64, y: f64, radius: f64) {
     let _ = cr.fill();
 }
 
-/// Banks of fog drifting sideways: centre (x of a 960-wide window; y from
-/// the top, or from the bottom when negative), radii, strength and period.
-fn fog(cr: &cairo::Context, width: f64, height: f64, t: f64, banks: &[(f64, f64, f64, f64, f64, f64)]) {
-    let sx = width / 960.0;
-    for &(x, y, rx, ry, alpha, period) in banks {
-        let drift = (t * 2.0 * PI / period).sin() * 140.0;
-        let y = if y < 0.0 { height + y } else { y };
-        let _ = cr.save();
-        cr.translate(x * sx + drift, y);
-        cr.scale(rx * sx, ry);
-        let gradient = cairo::RadialGradient::new(0.0, 0.0, 0.0, 0.0, 0.0, 1.0);
-        gradient.add_color_stop_rgba(0.0, 0.84, 0.91, 0.87, alpha);
-        gradient.add_color_stop_rgba(0.7, 0.84, 0.91, 0.87, 0.0);
-        let _ = cr.set_source(&gradient);
-        cr.arc(0.0, 0.0, 1.0, 0.0, 2.0 * PI);
-        let _ = cr.fill();
-        let _ = cr.restore();
-    }
-}
-
 /// A bare tree at the bottom right.
 fn tree(cr: &cairo::Context, width: f64, height: f64) {
     let _ = cr.save();
@@ -729,6 +825,8 @@ fn bunny(cr: &cairo::Context, width: f64, height: f64, t: f64) {
     cr.scale(1.25, 1.25);
     let twitch = (t * 1.5).sin() * 4.0;
     let ellipse = |cx: f64, cy: f64, rx: f64, ry: f64, degrees: f64| {
+        // Apart from the shape before: no line joining them.
+        cr.new_sub_path();
         let _ = cr.save();
         cr.translate(cx, cy);
         cr.rotate(degrees.to_radians());
@@ -1002,31 +1100,39 @@ impl Effects {
         if season.is_none() || !animations || self.ticking.replace(true) {
             return;
         }
-        let this = Rc::downgrade(self);
-        self.area.add_tick_callback(move |area, clock| {
-            let Some(this) = this.upgrade() else { return glib::ControlFlow::Break };
-            let mut scene = this.scene.borrow_mut();
-            let Some(scene) = scene.as_mut() else {
-                this.ticking.set(false);
-                return glib::ControlFlow::Break;
-            };
-            if !on_screen(area) {
-                // Paused: when it is back, it goes on from where it was.
-                scene.last = None;
-                return glib::ControlFlow::Continue;
-            }
-            let now = clock.frame_time();
-            let dt = match scene.last {
-                None => 0.0,
-                Some(last) if now - last < FRAME => return glib::ControlFlow::Continue,
-                Some(last) => ((now - last) as f64 / 1e6).min(0.1),
-            };
-            scene.last = Some(now);
-            scene.step(dt, f64::from(area.width()), f64::from(area.height()));
-            area.queue_draw();
-            glib::ControlFlow::Continue
-        });
+        next_frame(Rc::downgrade(self), FRAME);
     }
+
+    /// Moves the scene a frame on. Returns the wait until the next one, or
+    /// `None` when there is no scene any more.
+    fn frame(&self) -> Option<Duration> {
+        let mut scene = self.scene.borrow_mut();
+        let scene = scene.as_mut()?;
+        if !on_screen(&self.area) {
+            // Paused: when it is back, it goes on from where it was.
+            scene.last = None;
+            return Some(PAUSED);
+        }
+        let now = glib::monotonic_time();
+        let dt = scene.last.map_or(0.0, |last| ((now - last) as f64 / 1e6).min(0.1));
+        scene.last = Some(now);
+        scene.step(dt, f64::from(self.area.width()), f64::from(self.area.height()));
+        self.area.queue_draw();
+        Some(FRAME)
+    }
+}
+
+/// The scene moves on a timer, not a tick callback: one of those keeps GTK
+/// making frames at the screen's rate for as long as it is there, and each
+/// frame costs even when nothing changed.
+fn next_frame(effects: Weak<Effects>, wait: Duration) {
+    glib::timeout_add_local_once(wait, move || {
+        let Some(this) = effects.upgrade() else { return };
+        match this.frame() {
+            Some(wait) => next_frame(effects, wait),
+            None => this.ticking.set(false),
+        }
+    });
 }
 
 /// The holiday's scene behind the main window (if it is open), or none.
@@ -1092,6 +1198,10 @@ mod tests {
                 scene.draw(&cr, 1000.0, 600.0);
             }
             assert_eq!(cr.status(), Ok(()), "{season:?}");
+            // The still part is drawn once, then copied.
+            let cache = scene.cache.as_ref().expect("cached");
+            assert!(cache.backdrop.is_some(), "{season:?}");
+            assert_eq!(cache.fog_front.len(), if season == Season::Halloween { FOG_FRONT.len() } else { 0 });
         }
     }
 

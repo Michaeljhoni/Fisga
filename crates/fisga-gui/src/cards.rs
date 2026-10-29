@@ -41,6 +41,8 @@ struct Card {
     color: Cell<Ink>,
     parts: Cell<[f64; MAP_PARTS]>,
     running: Cell<bool>,
+    /// The ring or the sheen is moving, frame by frame.
+    ticking: Cell<bool>,
     /// The item shown and its notify handlers, dropped on unbind.
     bound: RefCell<Option<(DownloadItem, Vec<glib::SignalHandlerId>)>>,
 }
@@ -128,6 +130,7 @@ impl Card {
             color: Cell::new(Ink::Muted),
             parts: Cell::new([0.0; MAP_PARTS]),
             running: Cell::new(false),
+            ticking: Cell::new(false),
             bound: RefCell::default(),
         });
         // The drawings own the card: they go with the widgets.
@@ -137,8 +140,19 @@ impl Card {
         card.map.set_draw_func(move |_, cr, w, h| {
             draw_map(cr, f64::from(w), f64::from(h), &c.parts.get(), c.color.get(), c.running.get())
         });
-        let weak = Rc::downgrade(&card);
-        card.ring.add_tick_callback(move |_, _| {
+        card
+    }
+
+    /// Moves the ring to its value and the sheen up the map, frame by
+    /// frame, until the ring is there and the download stopped: a tick
+    /// callback keeps GTK making frames at the screen's rate, so none runs
+    /// while the card is still.
+    fn animate(self: &Rc<Self>) {
+        if self.ticking.replace(true) {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        self.ring.add_tick_callback(move |_, _| {
             let Some(card) = weak.upgrade() else { return glib::ControlFlow::Break };
             let (shown, target) = (card.shown.get(), card.target.get());
             if (target - shown).abs() > 0.002 {
@@ -150,13 +164,15 @@ impl Card {
             }
             if card.running.get() {
                 card.map.queue_draw();
+            } else if card.shown.get() == card.target.get() {
+                card.ticking.set(false);
+                return glib::ControlFlow::Break;
             }
             glib::ControlFlow::Continue
         });
-        card
     }
 
-    fn fill(&self, info: &DownloadInfo) {
+    fn fill(self: &Rc<Self>, info: &DownloadInfo) {
         self.name.set_text(&info.name);
         self.name.set_tooltip_text(Some(&info.name));
         self.badge.set_text(&format::badge(info));
@@ -182,6 +198,7 @@ impl Card {
         self.running.set(info.state == State::Running);
         self.ring.queue_draw();
         self.map.queue_draw();
+        self.animate();
     }
 
     /// Shows `item` and follows its updates.
@@ -190,6 +207,7 @@ impl Card {
         self.fill(&item.info());
         // The ring grows from zero when a card appears.
         self.shown.set(0.0);
+        self.animate();
         let handlers = ["status", "progress-text", "speed", "name"]
             .into_iter()
             .map(|property| {

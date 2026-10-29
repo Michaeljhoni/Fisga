@@ -37,23 +37,28 @@ impl SpeedPanel {
         let area = gtk::DrawingArea::builder().hexpand(true).content_height(150).build();
         let s = samples.clone();
         area.set_draw_func(move |_, cr, width, height| draw(cr, f64::from(width), f64::from(height), &s.borrow()));
-        // Redrawn every frame while the graph has something to show, for the slide.
-        let s = samples.clone();
-        area.add_tick_callback(move |area, _| {
-            if s.borrow().values.iter().any(|v| *v > 0.0) {
-                area.queue_draw();
-            }
-            glib::ControlFlow::Continue
-        });
+        // Redrawn every frame while the graph has something to show, for the
+        // slide. Only then: a tick callback keeps GTK making frames at the
+        // screen's rate, and that costs even when nothing is drawn.
+        let sliding = Rc::new(Cell::new(false));
         let (s, c, weak) = (samples.clone(), current.clone(), area.downgrade());
         glib::timeout_add_local(Duration::from_secs(1), move || {
-            if weak.upgrade().is_none() {
-                return glib::ControlFlow::Break;
-            }
+            let Some(area) = weak.upgrade() else { return glib::ControlFlow::Break };
             let mut samples = s.borrow_mut();
             samples.values.pop_front();
             samples.values.push_back(c.get());
             samples.at = Instant::now();
+            if samples.values.iter().any(|v| *v > 0.0) && !sliding.replace(true) {
+                let (s, sliding) = (s.clone(), sliding.clone());
+                area.add_tick_callback(move |area, _| {
+                    area.queue_draw();
+                    if s.borrow().values.iter().any(|v| *v > 0.0) {
+                        return glib::ControlFlow::Continue;
+                    }
+                    sliding.set(false);
+                    glib::ControlFlow::Break
+                });
+            }
             glib::ControlFlow::Continue
         });
 

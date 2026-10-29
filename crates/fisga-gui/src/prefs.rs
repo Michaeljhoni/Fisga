@@ -670,14 +670,17 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
     cancel.connect_clicked(move |_| w.close());
     crate::window::close_on_escape(&window);
     // The theme picked shows at once; closed without saving, the saved one is back.
-    // A holiday's theme shown from "Aparência" ends with the window too.
+    // A holiday's theme shown from "Aparência" ends with the window too. On
+    // closing, not on "destroy": the closures here that hold the window keep
+    // it from ever being destroyed.
     let saved = Rc::new(Cell::new(false));
     let (sv, light) = (saved.clone(), settings.theme == Theme::Light);
-    window.connect_destroy(move |_| {
+    window.connect_close_request(move |_| {
         theme::preview(None);
         if !sv.get() {
             theme::set_light(light);
         }
+        glib::Propagation::Proceed
     });
 
     let (w, d, l) = (window.clone(), dir.clone(), dir_label.clone());

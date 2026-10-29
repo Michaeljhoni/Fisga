@@ -517,10 +517,9 @@ impl MainWindow {
             .action_name("win.add")
             .build();
         fab.add_css_class("fisga-fab");
-        // Its glow is a layer of its own, behind it and of its size: the
-        // shadow stays put and only the layer's opacity pulses. GTK caches
-        // blurred shadows by size, and a shadow that grows every frame drew
-        // as stretched strips.
+        // Its glow is a layer of its own, behind it and of its size. It does
+        // not pulse: an endless animation keeps GTK drawing the whole window
+        // every frame, even with nothing going on.
         let glow = gtk::Box::builder().can_target(false).build();
         glow.add_css_class("fisga-fab-glow");
         let fab_layer = gtk::Overlay::builder()

@@ -24,6 +24,7 @@ struct Samples {
 
 pub struct SpeedPanel {
     pub root: gtk::Overlay,
+    dot: gtk::Box,
     value: gtk::Label,
     unit: gtk::Label,
     detail: gtk::Label,
@@ -94,7 +95,7 @@ impl SpeedPanel {
         let root = gtk::Overlay::builder().child(&area).build();
         root.add_overlay(&text);
         root.add_css_class("fisga-speed");
-        Self { root, value, unit, detail, current }
+        Self { root, dot, value, unit, detail, current }
     }
 
     /// What is going on now: the total speed and the downloads behind it.
@@ -120,6 +121,12 @@ impl SpeedPanel {
             }
         };
         self.detail.set_text(&detail);
+        // The dot blinks while something downloads.
+        if running > 0 {
+            self.dot.add_css_class("live");
+        } else {
+            self.dot.remove_css_class("live");
+        }
     }
 }
 

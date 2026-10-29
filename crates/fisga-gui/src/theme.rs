@@ -1,6 +1,6 @@
 //! The look: dark or light, with an amber accent and cyan for speeds,
-//! monospaced numbers, and small CSS animations (the live dot, the cards
-//! fading in, the glow of the add button). Applied to every window of the
+//! monospaced numbers, and small CSS animations (the live dot while
+//! something downloads, the cards fading in). Applied to every window of the
 //! app. The stylesheet names its colors (`@fisga_base`...): a theme is a
 //! palette for those names.
 //!
@@ -212,8 +212,10 @@ window.fisga headerbar entry, window.fisga searchbar entry {
   border-radius: 50%;
   min-width: 7px;
   min-height: 7px;
-  animation: fisga-blink 1.2s ease-in-out infinite;
 }
+/* Only while something downloads: an endless animation keeps GTK drawing
+   the whole window every frame. */
+.fisga-live-dot.live { animation: fisga-blink 1.2s ease-in-out infinite; }
 @keyframes fisga-blink {
   0% { opacity: 1; }
   50% { opacity: 0.25; }
@@ -298,13 +300,7 @@ columnview.fisga-list listview { background: transparent; color: @fisga_text; }
 .fisga-fab-glow {
   border-radius: 25px;
   box-shadow: 0 8px 30px alpha(@fisga_accent, 0.45);
-  opacity: 0.55;
-  animation: fisga-glow 2.4s ease-in-out infinite;
-}
-@keyframes fisga-glow {
-  0% { opacity: 0.55; }
-  50% { opacity: 1; }
-  100% { opacity: 0.55; }
+  opacity: 0.8;
 }
 
 .fisga-statusbar {

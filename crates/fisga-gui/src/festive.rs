@@ -721,10 +721,11 @@ fn tree(cr: &cairo::Context, width: f64, height: f64) {
     let _ = cr.restore();
 }
 
-/// Easter's bunny, peeking from the bottom right, its ears twitching.
+/// Easter's bunny, peeking from the bottom right (left of the add button,
+/// above the status bar), its ears twitching.
 fn bunny(cr: &cairo::Context, width: f64, height: f64, t: f64) {
     let _ = cr.save();
-    cr.translate(width - 70.0 - 150.0, height - 138.0);
+    cr.translate(width - 380.0, height - 168.0);
     cr.scale(1.25, 1.25);
     let twitch = (t * 1.5).sin() * 4.0;
     let ellipse = |cx: f64, cy: f64, rx: f64, ry: f64, degrees: f64| {

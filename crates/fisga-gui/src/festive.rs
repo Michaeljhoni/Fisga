@@ -514,7 +514,7 @@ pub struct Effects {
 
 thread_local! {
     /// The main window's layer, for "Testar" in the preferences.
-    static LAYER: RefCell<Weak<Effects>> = RefCell::new(Weak::new());
+    static LAYER: RefCell<Weak<Effects>> = const { RefCell::new(Weak::new()) };
 }
 
 impl Effects {

@@ -381,7 +381,7 @@ fn apply() {
     gtk::Settings::for_display(&display).set_gtk_application_prefer_dark_theme(!is_light());
     PROVIDER.with_borrow(|provider| {
         if let Some(provider) = provider {
-            provider.load_from_data(&stylesheet());
+            provider.load_from_string(&stylesheet());
         }
     });
     // What cairo draws takes its colors at drawing time.

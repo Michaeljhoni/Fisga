@@ -184,14 +184,21 @@ shot 5e-grabber
 xdotool windowfocus --sync "$grabber" key Escape
 
 echo "== the holidays' themes, out of their weeks"
-for season in carnaval pascoa namorados junina halloween natal anonovo; do
-  pkill -f "$BIN/fisga-gui" || true
-  for _ in $(seq 1 25); do pgrep -f "$BIN/fisga-gui" >/dev/null || break; sleep 0.2; done
+pkill -f "$BIN/fisga-gui" || true
+for _ in $(seq 1 25); do pgrep -f "$BIN/fisga-gui" >/dev/null || break; sleep 0.2; done
+for season in pascoa carnaval namorados junina halloween natal anonovo; do
   FISGA_SEASON="$season" "$BIN/fisga-gui" &
+  gui=$!
   main="$(find_window "^Fisga$")"
   sleep 3
   shot "7-tema-$season"
+  # Each one gone before the next starts (it would hand its window to this one).
+  kill "$gui" 2>/dev/null || echo "fisga-gui ($season) had already quit"
+  status=0
+  wait "$gui" || status=$?
+  echo "fisga-gui ($season): exit $status"
 done
+tail -n 15 "$HOME/.local/state/fisga/fisga-gui.log" 2>/dev/null || true
 
 echo "== background mode (session autostart): no window, but it answers the browser"
 pkill -f "$BIN/fisga-gui" || true

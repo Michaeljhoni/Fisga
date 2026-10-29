@@ -879,7 +879,9 @@ fn draw_particle(cr: &cairo::Context, p: &Particle, t: f64) {
     let _ = cr.restore();
 }
 
-/// A painted egg: a zigzag band and dots in its second color.
+/// A painted egg: a zigzag band and dots in its second color. It clips to
+/// the egg, which the caller's `restore` undoes (never `reset_clip`: that
+/// would also lift GTK's clip to the widget).
 fn draw_egg(cr: &cairo::Context, p: &Particle) {
     let s = p.size;
     let _ = cr.save();
@@ -912,7 +914,6 @@ fn draw_egg(cr: &cairo::Context, p: &Particle) {
         cr.arc(x * s, y * s, s * 0.1, 0.0, 2.0 * PI);
         let _ = cr.fill();
     }
-    cr.reset_clip();
 }
 
 /// A bat facing the viewer, its wings at `flap` (−1 down to 1 up).
@@ -1080,6 +1081,20 @@ mod tests {
         assert_eq!(Season::on(2027, 1, 2), Some(Season::NewYear));
         assert_eq!(Season::on(2027, 1, 3), None);
         assert_eq!(Season::on(2026, 7, 15), None);
+    }
+
+    #[test]
+    fn every_scene_draws() {
+        let surface = cairo::ImageSurface::create(cairo::Format::ARgb32, 1000, 600).unwrap();
+        let cr = cairo::Context::new(&surface).unwrap();
+        for (seed, season) in Season::ALL.into_iter().enumerate() {
+            let mut scene = Scene::new(season, seed as u64 + 3);
+            for _ in 0..90 {
+                scene.step(1.0 / 30.0, 1000.0, 600.0);
+                scene.draw(&cr, 1000.0, 600.0);
+            }
+            assert_eq!(cr.status(), Ok(()), "{season:?}");
+        }
     }
 
     #[test]

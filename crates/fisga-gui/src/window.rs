@@ -126,8 +126,9 @@ pub struct MainWindow {
     /// From the settings, for the status bar.
     pub speed_limit: Cell<u64>,
     queues: RefCell<Vec<Queue>>,
-    /// The holidays' effects, over everything.
-    pub effects: Rc<crate::festive::Effects>,
+    /// The holiday's scene, behind everything: held here, as `festive`
+    /// only keeps a weak reference to it.
+    _effects: Rc<crate::festive::Effects>,
 }
 
 #[derive(Clone)]
@@ -606,9 +607,11 @@ impl MainWindow {
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.append(&paned);
         content.append(&status_bar);
+        // A holiday's scene (see `festive`) is drawn under everything.
         let effects = crate::festive::Effects::new();
-        let layers = gtk::Overlay::builder().child(&content).build();
-        layers.add_overlay(&effects.area);
+        let layers = gtk::Overlay::builder().child(&effects.area).build();
+        layers.add_overlay(&content);
+        layers.set_measure_overlay(&content, true);
         window.set_child(Some(&layers));
 
         let actions = Actions {
@@ -682,7 +685,7 @@ impl MainWindow {
             search,
             speed_limit: Cell::new(app.settings().speed_limit),
             queues: RefCell::default(),
-            effects,
+            _effects: effects,
         };
         this.connect(app, &view);
         this.set_queues(queues);

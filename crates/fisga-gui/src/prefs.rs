@@ -3,7 +3,7 @@
 //! monitor, the tray icon and session autostart. Filas: the queues, each with
 //! its downloads at the same time, its schedule and what to do when it is
 //! done. Navegador: the file types the browser hands to Fisga and the key that
-//! sends a link to it. Aparência: the theme and the holidays' effects. The settings live in the daemon (`~/.config/fisga/settings.json`);
+//! sends a link to it. Aparência: the theme and the holidays' themes. The settings live in the daemon (`~/.config/fisga/settings.json`);
 //! autostart is a file in `~/.config/autostart`.
 
 use std::cell::{Cell, RefCell};
@@ -260,7 +260,7 @@ fn browser_page(browser: &BrowserSettings) -> (gtk::Box, Box<dyn Fn() -> Browser
 }
 
 /// The "Aparência" tab: the theme, shown as soon as it is picked, and the
-/// holidays' effects, with a button to try them. Returns the tab and a
+/// holidays' themes, any of which can be looked at. Returns the tab and a
 /// function that reads it back.
 fn look_page(settings: &Settings) -> (gtk::Grid, Box<dyn Fn() -> (Theme, bool)>) {
     const THEMES: [Theme; 2] = [Theme::Dark, Theme::Light];
@@ -269,38 +269,28 @@ fn look_page(settings: &Settings) -> (gtk::Grid, Box<dyn Fn() -> (Theme, bool)>)
     theme_choice.connect_selected_notify(|choice| theme::set_light(THEMES.get(choice.selected() as usize) == Some(&Theme::Light)));
     let festive = gtk::Switch::builder().active(settings.festive).build();
 
-    let labels: Vec<&str> = Season::ALL.iter().map(|season| season.label()).collect();
+    // A holiday's theme, shown at once and until the window closes.
+    let labels: Vec<&str> = std::iter::once("Nenhuma").chain(Season::ALL.iter().map(|season| season.label())).collect();
     let season = gtk::DropDown::from_strings(&labels);
-    // Today's holiday first, if there is one.
-    let today = Season::today().and_then(|today| Season::ALL.iter().position(|s| *s == today));
-    season.set_selected(today.unwrap_or(0) as u32);
-    let try_it = gtk::Button::with_label("Testar");
-    let s = season.clone();
-    try_it.connect_clicked(move |button| {
-        let picked = Season::ALL.get(s.selected() as usize).copied().unwrap_or(Season::Carnival);
-        if !crate::festive::try_effect(picked) {
-            let parent = button.root().and_downcast::<gtk::Window>();
-            show_error(parent.as_ref(), "Abra a janela principal", "O efeito aparece por cima da janela principal do Fisga.");
-        }
+    season.connect_selected_notify(|choice| {
+        let picked = (choice.selected() as usize).checked_sub(1).and_then(|i| Season::ALL.get(i)).copied();
+        theme::preview(picked);
     });
-    let try_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    try_box.append(&season);
-    try_box.append(&try_it);
 
     let grid = gtk::Grid::builder().column_spacing(18).row_spacing(14).build();
-    row(&grid, 0, "Tema", &theme_choice, None);
+    row(&grid, 0, "Tema", &theme_choice, Some("Na semana de uma data comemorativa, vale o tema da data."));
     row(
         &grid,
         1,
-        "Efeitos de datas comemorativas",
+        "Temas de datas comemorativas",
         &festive,
         Some(
-            "Na semana da data, a janela principal abre com um efeito por alguns segundos e a cor de destaque combina com \
-             ela: confete no Carnaval, ovos na Páscoa, corações no Dia dos Namorados, bandeirinhas na festa junina, \
-             morcegos no Halloween, neve no Natal e fogos no Ano-novo.",
+            "Na semana da data, a janela principal ganha o fundo e as cores dela, com uma animação atrás dos downloads: \
+             confete no Carnaval, ovos na Páscoa, um coração neon no Dia dos Namorados, bandeirinhas na festa junina, \
+             morcegos no Halloween, neve e pisca-pisca no Natal e fogos no Ano-novo. A animação para com a janela minimizada.",
         ),
     );
-    row(&grid, 2, "Ver um efeito agora", &try_box, Some("Por cima da janela principal, com as cores da data."));
+    row(&grid, 2, "Ver o tema de uma data", &season, Some("Enquanto as Preferências estiverem abertas."));
     let read = move || (THEMES.get(theme_choice.selected() as usize).copied().unwrap_or_default(), festive.is_active());
     (grid, Box::new(read))
 }
@@ -680,13 +670,14 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
     cancel.connect_clicked(move |_| w.close());
     crate::window::close_on_escape(&window);
     // The theme picked shows at once; closed without saving, the saved one is back.
+    // A holiday's theme shown from "Aparência" ends with the window too.
     let saved = Rc::new(Cell::new(false));
     let (sv, light) = (saved.clone(), settings.theme == Theme::Light);
-    window.connect_close_request(move |_| {
+    window.connect_destroy(move |_| {
+        theme::preview(None);
         if !sv.get() {
             theme::set_light(light);
         }
-        glib::Propagation::Proceed
     });
 
     let (w, d, l) = (window.clone(), dir.clone(), dir_label.clone());

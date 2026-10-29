@@ -104,7 +104,7 @@ struct SettingsArgs {
     /// Tema das janelas: escuro ou claro
     #[arg(long, value_parser = parse_theme)]
     theme: Option<Theme>,
-    /// Efeitos de datas comemorativas na janela principal (confete no Carnaval, neve no Natal...)
+    /// Temas de datas comemorativas na janela principal (confete no Carnaval, neve no Natal...)
     #[arg(long)]
     festive: Option<bool>,
 }

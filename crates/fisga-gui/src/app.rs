@@ -138,8 +138,7 @@ impl App {
         });
     }
 
-    /// The theme and the holiday's colors of the settings, and the holiday's
-    /// effect over the main window if it did not have it yet.
+    /// The theme of the settings, or the holiday's in its week.
     fn sync_look(&self) {
         if !self.settings_loaded.get() {
             return;
@@ -147,9 +146,6 @@ impl App {
         let settings = self.settings.borrow();
         let season = if settings.festive { Season::today() } else { None };
         crate::theme::set_style(settings.theme == Theme::Light, season);
-        if let (true, Some(window)) = (settings.festive, self.window.borrow().as_ref()) {
-            window.effects.celebrate();
-        }
     }
 
     pub fn settings(&self) -> Settings {

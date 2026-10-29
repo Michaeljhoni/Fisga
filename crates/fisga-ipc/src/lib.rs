@@ -295,9 +295,9 @@ pub struct Settings {
     pub browser: BrowserSettings,
     /// The look of the windows.
     pub theme: Theme,
-    /// In the weeks of Carnaval, Easter, Christmas and other holidays: an
-    /// effect over the main window (confetti, snow, bats...) when it opens,
-    /// and an accent color to match.
+    /// In the weeks of Carnaval, Easter, Christmas and other holidays, the
+    /// holiday's theme: its colors and a scene (confetti, snow, bats...)
+    /// moving behind the main window's panels.
     pub festive: bool,
 }
 

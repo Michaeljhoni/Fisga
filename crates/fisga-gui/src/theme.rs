@@ -1,8 +1,12 @@
-//! The look: dark or light, with an amber accent (or the holiday's, see
-//! `festive`) and cyan for speeds, monospaced numbers, and small CSS
-//! animations (the live dot, the cards fading in, the glow of the add
-//! button). Applied to every window of the app. The stylesheet names its
-//! colors (`@fisga_base`...): a theme is a palette for those names.
+//! The look: dark or light, with an amber accent and cyan for speeds,
+//! monospaced numbers, and small CSS animations (the live dot, the cards
+//! fading in, the glow of the add button). Applied to every window of the
+//! app. The stylesheet names its colors (`@fisga_base`...): a theme is a
+//! palette for those names.
+//!
+//! In a holiday's week (see `festive`) the holiday's own theme takes over:
+//! its scene is drawn behind the main window's panels, which turn
+//! translucent, and the accent takes the holiday's color.
 
 use std::cell::{Cell, RefCell};
 
@@ -11,16 +15,20 @@ use gtk::prelude::*;
 
 use crate::festive::Season;
 
-/// The colors of one theme, as CSS hex.
+/// The colors of one theme, as CSS colors.
+#[derive(Clone, Copy)]
 struct Palette {
-    /// The main window's background, under the cards.
-    base: &'static str,
-    header: &'static str,
-    sidebar: &'static str,
-    /// Cards, dialogs, chips.
+    /// The dialogs and menus (always opaque).
     surface: &'static str,
-    surface_hover: &'static str,
     field: &'static str,
+    /// The main window: behind everything, the sidebar and the speed
+    /// panel, the cards and chips, the list and the status bar.
+    ground: &'static str,
+    header: &'static str,
+    pane: &'static str,
+    card: &'static str,
+    card_hover: &'static str,
+    sheet: &'static str,
     hover: &'static str,
     /// Under the rings and the file map (also drawn with cairo).
     track: &'static str,
@@ -32,20 +40,26 @@ struct Palette {
     soft: &'static str,
     muted: &'static str,
     link: &'static str,
+    /// The speeds: the graph, the live dot.
     cyan: &'static str,
     green: &'static str,
     red: &'static str,
+    accent: &'static str,
     /// The accent as text (a checked chip), readable on this background.
     accent_text: &'static str,
+    /// Text on the accent (the add button).
+    on_accent: &'static str,
 }
 
 const DARK: Palette = Palette {
-    base: "#0f131a",
-    header: "#141922",
-    sidebar: "#11161e",
     surface: "#151b25",
-    surface_hover: "#18202b",
     field: "#1b212c",
+    ground: "#0f131a",
+    header: "#141922",
+    pane: "#11161e",
+    card: "#151b25",
+    card_hover: "#18202b",
+    sheet: "#0f131a",
     hover: "#1c2230",
     track: "#1f2633",
     border: "#232a36",
@@ -59,16 +73,20 @@ const DARK: Palette = Palette {
     cyan: "#22d3ee",
     green: "#34d399",
     red: "#f87171",
+    accent: "#f59e0b",
     accent_text: "#fbbf24",
+    on_accent: "#111111",
 };
 
 const LIGHT: Palette = Palette {
-    base: "#eef1f5",
-    header: "#ffffff",
-    sidebar: "#f7f8fa",
     surface: "#ffffff",
-    surface_hover: "#fbfcfd",
     field: "#ffffff",
+    ground: "#eef1f5",
+    header: "#ffffff",
+    pane: "#f7f8fa",
+    card: "#ffffff",
+    card_hover: "#fbfcfd",
+    sheet: "#eef1f5",
     hover: "#e6eaf0",
     track: "#e2e7ee",
     border: "#dde2e9",
@@ -82,10 +100,30 @@ const LIGHT: Palette = Palette {
     cyan: "#0891b2",
     green: "#059669",
     red: "#dc2626",
+    accent: "#f59e0b",
     accent_text: "#b45309",
+    on_accent: "#111111",
 };
 
-const AMBER: &str = "#f59e0b";
+/// A holiday's theme: dark, the main window see-through to the scene, and
+/// the holiday's colors.
+fn holiday(season: Season) -> Palette {
+    let look = season.look();
+    Palette {
+        ground: "transparent",
+        pane: "rgba(12, 16, 23, 0.70)",
+        card: "rgba(20, 26, 36, 0.84)",
+        card_hover: "rgba(26, 33, 45, 0.90)",
+        sheet: "rgba(12, 16, 23, 0.78)",
+        border: "rgba(255, 255, 255, 0.09)",
+        muted: "#a7afbd",
+        cyan: look.graph,
+        accent: look.accent,
+        accent_text: look.accent_text,
+        on_accent: look.on_accent,
+        ..DARK
+    }
+}
 
 const CSS: &str = r#"
 /* Every window (Novo download, progress, Preferências...) in the same palette. */
@@ -101,13 +139,13 @@ window.background progressbar > trough { background-color: @fisga_border; }
 window.background notebook > header, window.background notebook > stack { background-color: @fisga_surface; }
 window.background notebook > header tab:checked { box-shadow: inset 0 -2px @fisga_accent; }
 switch:checked { background-color: @fisga_accent; }
-checkbutton check:checked { background-color: @fisga_accent; color: #111; }
+checkbutton check:checked { background-color: @fisga_accent; color: @fisga_on_accent; }
 popover > contents, popover.menu > contents {
   background-color: @fisga_field;
   color: @fisga_text;
 }
 window.fisga, window.fisga .fisga-main {
-  background-color: @fisga_base;
+  background-color: @fisga_ground;
   color: @fisga_text;
 }
 window.fisga headerbar {
@@ -124,10 +162,12 @@ window.fisga headerbar entry, window.fisga searchbar entry {
 }
 .fisga-title { font-weight: 800; letter-spacing: 1px; }
 
-.fisga-sidebar, .fisga-sidebar list {
-  background: @fisga_sidebar;
+.fisga-sidebar {
+  background: @fisga_pane;
   color: @fisga_soft;
 }
+/* The list inside paints nothing: the pane under it does. */
+.fisga-sidebar list, list.fisga-sidebar { background: transparent; }
 .fisga-sidebar { border-right: 1px solid @fisga_border; }
 .fisga-sidebar row {
   border-radius: 7px;
@@ -153,7 +193,7 @@ window.fisga headerbar entry, window.fisga searchbar entry {
 .fisga-count { font-size: 0.85em; color: @fisga_muted; }
 
 .fisga-speed {
-  background: @fisga_sidebar;
+  background: @fisga_pane;
   border-bottom: 1px solid @fisga_border;
 }
 .fisga-live {
@@ -183,7 +223,7 @@ window.fisga headerbar entry, window.fisga searchbar entry {
   border-radius: 15px;
   padding: 2px 12px;
   min-height: 26px;
-  background: @fisga_surface;
+  background: @fisga_card;
   border: 1px solid @fisga_line;
   color: @fisga_soft;
   box-shadow: none;
@@ -209,14 +249,14 @@ gridview.fisga-cards > child box {
   border-spacing: 0;
 }
 .fisga-card {
-  background: @fisga_surface;
+  background: @fisga_card;
   border: 1px solid @fisga_border;
   border-radius: 16px;
   padding: 14px;
   transition: background 200ms ease-out, border-color 200ms ease-out;
   animation: fisga-card-in 450ms ease-out;
 }
-.fisga-card:hover { background: @fisga_surface_hover; border-color: @fisga_line_hover; }
+.fisga-card:hover { background: @fisga_card_hover; border-color: @fisga_line_hover; }
 gridview.fisga-cards > child:selected .fisga-card { border-color: @fisga_accent; }
 @keyframes fisga-card-in {
   from { opacity: 0; }
@@ -238,16 +278,14 @@ gridview.fisga-cards > child:selected .fisga-card { border-color: @fisga_accent;
 .fisga-status-failed { color: @fisga_red; }
 .fisga-status-done { color: @fisga_green; }
 
-columnview.fisga-list, columnview.fisga-list listview {
-  background: @fisga_base;
-  color: @fisga_text;
-}
+columnview.fisga-list { background: @fisga_sheet; color: @fisga_text; }
+columnview.fisga-list listview { background: transparent; color: @fisga_text; }
 
 .fisga-fab {
   border-radius: 25px;
   padding: 10px 20px 10px 16px;
   background: @fisga_accent;
-  color: #111;
+  color: @fisga_on_accent;
   font-weight: 700;
   box-shadow: none;
 }
@@ -268,12 +306,12 @@ columnview.fisga-list, columnview.fisga-list listview {
   color: @fisga_muted;
   font-size: 0.9em;
   border-top: 1px solid @fisga_border;
-  background: @fisga_base;
+  background: @fisga_sheet;
 }
 
 button.suggested-action {
   background: @fisga_accent;
-  color: #111;
+  color: @fisga_on_accent;
 }
 button.suggested-action:hover { background: shade(@fisga_accent, 1.1); }
 progressbar > trough > progress { background: @fisga_accent; }
@@ -281,46 +319,42 @@ progressbar > trough > progress { background: @fisga_accent; }
 
 thread_local! {
     static LIGHT_THEME: Cell<bool> = const { Cell::new(false) };
-    /// The holiday of these days (when the effects are on).
+    /// The holiday of these days (when the holidays' themes are on).
     static SEASON: Cell<Option<Season>> = const { Cell::new(None) };
-    /// The holiday being tried from the preferences, for the effect's length.
+    /// The holiday shown from the preferences, until they close.
     static PREVIEW: Cell<Option<Season>> = const { Cell::new(None) };
     static PROVIDER: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
 }
 
-fn palette() -> &'static Palette {
-    if is_light() {
-        &LIGHT
-    } else {
-        &DARK
+/// The holiday whose theme is shown, if any.
+pub fn season() -> Option<Season> {
+    PREVIEW.get().or(SEASON.get())
+}
+
+fn palette() -> Palette {
+    match (season(), is_light()) {
+        (Some(season), _) => holiday(season),
+        (None, true) => LIGHT,
+        (None, false) => DARK,
     }
 }
 
+/// The light theme is picked (a holiday's theme, dark, may be shown instead).
 pub fn is_light() -> bool {
     LIGHT_THEME.get()
 }
 
-/// The accent and the accent as text.
-fn accent() -> (&'static str, &'static str) {
-    match PREVIEW.get().or(SEASON.get()) {
-        Some(season) => {
-            let (accent, on_dark, on_light) = season.accent();
-            (accent, if is_light() { on_light } else { on_dark })
-        }
-        None => (AMBER, palette().accent_text),
-    }
-}
-
 fn stylesheet() -> String {
     let p = palette();
-    let (accent, accent_text) = accent();
     let colors = [
-        ("base", p.base),
-        ("header", p.header),
-        ("sidebar", p.sidebar),
         ("surface", p.surface),
-        ("surface_hover", p.surface_hover),
         ("field", p.field),
+        ("ground", p.ground),
+        ("header", p.header),
+        ("pane", p.pane),
+        ("card", p.card),
+        ("card_hover", p.card_hover),
+        ("sheet", p.sheet),
         ("hover", p.hover),
         ("track", p.track),
         ("border", p.border),
@@ -334,8 +368,9 @@ fn stylesheet() -> String {
         ("cyan", p.cyan),
         ("green", p.green),
         ("red", p.red),
-        ("accent", accent),
-        ("accent_text", accent_text),
+        ("accent", p.accent),
+        ("accent_text", p.accent_text),
+        ("on_accent", p.on_accent),
     ];
     let mut css: String = colors.iter().map(|(name, value)| format!("@define-color fisga_{name} {value};\n")).collect();
     css.push_str(CSS);
@@ -367,7 +402,7 @@ pub fn set_light(light: bool) {
     set_style(light, SEASON.get());
 }
 
-/// Shows a holiday's colors while its effect is tried; `None` goes back.
+/// Shows a holiday's theme from the preferences; `None` goes back.
 pub fn preview(season: Option<Season>) {
     if season != PREVIEW.get() {
         PREVIEW.set(season);
@@ -378,12 +413,13 @@ pub fn preview(season: Option<Season>) {
 fn apply() {
     let Some(display) = gdk::Display::default() else { return };
     // The widgets left to GTK's theme (buttons, menus, scrollbars).
-    gtk::Settings::for_display(&display).set_gtk_application_prefer_dark_theme(!is_light());
+    gtk::Settings::for_display(&display).set_gtk_application_prefer_dark_theme(!is_light() || season().is_some());
     PROVIDER.with_borrow(|provider| {
         if let Some(provider) = provider {
             provider.load_from_string(&stylesheet());
         }
     });
+    crate::festive::show(season());
     // What cairo draws takes its colors at drawing time.
     for window in gtk::Window::list_toplevels() {
         redraw(&window);
@@ -422,7 +458,7 @@ pub fn rgb(hex: &str) -> (f64, f64, f64) {
 pub fn set_color(cr: &gtk::cairo::Context, ink: Ink, alpha: f64) {
     let p = palette();
     let hex = match ink {
-        Ink::Accent => accent().0,
+        Ink::Accent => p.accent,
         Ink::Cyan => p.cyan,
         Ink::Green => p.green,
         Ink::Red => p.red,

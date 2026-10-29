@@ -216,14 +216,19 @@ troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O b
 - **Aparência** (aba *Aparência* das Preferências):
   - **Tema** escuro (o padrão) ou claro; aparece na hora ao escolher e vale para todas as janelas
     depois de salvar. No terminal: `fisga settings --theme claro`.
-  - **Efeitos de datas comemorativas** (ligados por padrão): na semana da data, a janela principal
-    abre com um efeito por uns 15 segundos e a cor de destaque combina com ela. Confete no
-    Carnaval (da sexta à Quarta-feira de Cinzas), ovos na Páscoa (do Domingo de Ramos à Páscoa),
-    corações no Dia dos Namorados (10 a 12 de junho), bandeirinhas na festa junina (20 a 29 de
-    junho), morcegos no Halloween (25 a 31 de outubro), neve no Natal (18 a 26 de dezembro) e
-    fogos no Ano-novo (27 de dezembro a 2 de janeiro). O efeito não pega cliques e não aparece
-    com as animações do sistema desligadas. *Ver um efeito agora* mostra qualquer um deles na
-    hora, por cima da janela principal. No terminal: `fisga settings --festive false`.
+  - **Temas de datas comemorativas** (ligados por padrão): na semana da data, a janela principal
+    ganha o tema dela, no lugar do escuro ou claro: o fundo e a cor de destaque mudam, os painéis
+    e os cards ficam translúcidos e uma animação roda atrás deles. Confete e serpentinas no
+    Carnaval (da sexta à Quarta-feira de Cinzas), ovos e um coelho na Páscoa (do Domingo de Ramos
+    à Páscoa), um coração neon no Dia dos Namorados (10 a 12 de junho), bandeirinhas e estrelas
+    na festa junina (20 a 29 de junho), morcegos na névoa no Halloween (25 a 31 de outubro), neve
+    e pisca-pisca no Natal (18 a 26 de dezembro) e fogos sobre a cidade no Ano-novo (27 de
+    dezembro a 2 de janeiro). A animação roda enquanto a janela está na tela e para com ela
+    minimizada ou na bandeja; com as animações do sistema desligadas, a cena fica parada. *Ver o
+    tema de uma data* mostra qualquer um deles enquanto as Preferências estiverem abertas. No
+    terminal: `fisga settings --festive false`; para ver um tema fora da semana dele,
+    `FISGA_SEASON=natal fisga-gui` (carnaval, pascoa, namorados, junina, halloween, natal,
+    anonovo).
 - **Agendador** (por fila, como o *Scheduler* do IDM): a fila só roda das HH:MM às HH:MM nos
   dias escolhidos. Fora desse horário os downloads ficam *na fila*; *Baixar agora* e retomar um
   download à mão começam na hora mesmo assim. No horário de parada, os downloads da fila voltam

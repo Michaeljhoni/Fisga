@@ -879,33 +879,30 @@ fn draw_particle(cr: &cairo::Context, p: &Particle, t: f64) {
     let _ = cr.restore();
 }
 
-/// A painted egg: a zigzag band and dots in its second color. It clips to
-/// the egg, which the caller's `restore` undoes (never `reset_clip`: that
-/// would also lift GTK's clip to the widget).
+/// A painted egg: a zigzag band and dots in its second color. The band ends
+/// on the egg's outline, worked out here: no clip (clipping the eggs made
+/// GTK's renderer crash).
 fn draw_egg(cr: &cairo::Context, p: &Particle) {
     let s = p.size;
+    let rx = 0.78 * s;
     let _ = cr.save();
     cr.scale(0.78, 1.0);
     cr.arc(0.0, 0.0, s, 0.0, 2.0 * PI);
     let _ = cr.restore();
-    let _ = cr.fill_preserve();
-    cr.clip();
+    let _ = cr.fill();
+    // Half the egg's width at a height.
+    let half = |y: f64| rx * (1.0 - (y / s).powi(2)).max(0.0).sqrt();
     let (r, g, b) = p.trim;
     cr.set_source_rgba(r, g, b, 0.95);
-    let step = s / 3.0;
-    cr.move_to(-s, -s * 0.05);
-    let mut x = -s;
-    let mut up = true;
-    while x < s {
-        x += step;
-        cr.line_to(x, if up { -s * 0.2 } else { -s * 0.05 });
-        up = !up;
+    for i in 0..=6 {
+        let y = if i % 2 == 0 { -0.05 * s } else { -0.2 * s };
+        let x = (f64::from(i) / 3.0 - 1.0) * half(y);
+        cr.line_to(x, y);
     }
-    cr.line_to(s, s * 0.25);
-    while x > -s {
-        x -= step;
-        cr.line_to(x, if up { s * 0.1 } else { s * 0.25 });
-        up = !up;
+    for i in (0..=6).rev() {
+        let y = if i % 2 == 0 { 0.25 * s } else { 0.1 * s };
+        let x = (f64::from(i) / 3.0 - 1.0) * half(y);
+        cr.line_to(x, y);
     }
     cr.close_path();
     let _ = cr.fill();

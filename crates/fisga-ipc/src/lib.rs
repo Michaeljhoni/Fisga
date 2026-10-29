@@ -293,6 +293,20 @@ pub struct Settings {
     pub newest_first: bool,
     pub on_complete: OnComplete,
     pub browser: BrowserSettings,
+    /// The look of the windows.
+    pub theme: Theme,
+    /// In the weeks of Carnaval, Easter, Christmas and other holidays: an
+    /// effect over the main window (confetti, snow, bats...) when it opens,
+    /// and an accent color to match.
+    pub festive: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Theme {
+    #[default]
+    Dark,
+    Light,
 }
 
 /// The browser downloads Fisga takes over (IDM's "Tipos de arquivo") and the
@@ -573,6 +587,8 @@ impl Default for Settings {
             newest_first: true,
             on_complete: OnComplete::default(),
             browser: BrowserSettings::default(),
+            theme: Theme::Dark,
+            festive: true,
         }
     }
 }
@@ -1628,6 +1644,9 @@ mod tests {
         assert!(settings.watch_clipboard);
         // A settings.json from before the window remembered its look: cards, newest on top.
         assert!(!settings.list_view && settings.newest_first);
+        // And from before the themes: dark, with the holidays' effects.
+        assert!(settings.theme == Theme::Dark && settings.festive);
+        assert_eq!(serde_json::from_str::<Settings>(r#"{"theme":"light"}"#).unwrap().theme, Theme::Light);
         assert_eq!(settings.sanitized().max_parallel, 20);
         let request: Request = serde_json::from_str(r#"{"type":"set_settings","settings":{"connections":4}}"#).unwrap();
         assert!(matches!(request, Request::SetSettings { settings } if settings.connections == 4));

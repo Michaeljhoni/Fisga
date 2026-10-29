@@ -3,7 +3,7 @@
 //! monitor, the tray icon and session autostart. Filas: the queues, each with
 //! its downloads at the same time, its schedule and what to do when it is
 //! done. Navegador: the file types the browser hands to Fisga and the key that
-//! sends a link to it. The settings live in the daemon (`~/.config/fisga/settings.json`);
+//! sends a link to it. Aparência: the theme and the holidays' effects. The settings live in the daemon (`~/.config/fisga/settings.json`);
 //! autostart is a file in `~/.config/autostart`.
 
 use std::cell::{Cell, RefCell};
@@ -13,12 +13,13 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{gio, glib, pango};
 use fisga_ipc::{
-    BrowserSettings, Category, ForceKey, ProxyMode, ProxySettings, Queue, Request, Schedule, Settings, SiteLogin, TimeOfDay,
-    WhenDone, MAIN_QUEUE, WEEKDAYS,
+    BrowserSettings, Category, ForceKey, ProxyMode, ProxySettings, Queue, Request, Schedule, Settings, SiteLogin, Theme,
+    TimeOfDay, WhenDone, MAIN_QUEUE, WEEKDAYS,
 };
 
+use crate::festive::Season;
 use crate::window::show_error;
-use crate::{autostart, ipc};
+use crate::{autostart, ipc, theme};
 
 fn row(grid: &gtk::Grid, index: i32, caption: &str, widget: &impl IsA<gtk::Widget>, hint: Option<&str>) {
     // A minimum width: wide controls (the weekday buttons) must not squeeze the text.
@@ -256,6 +257,52 @@ fn browser_page(browser: &BrowserSettings) -> (gtk::Box, Box<dyn Fn() -> Browser
         }
     };
     (page, Box::new(read))
+}
+
+/// The "Aparência" tab: the theme, shown as soon as it is picked, and the
+/// holidays' effects, with a button to try them. Returns the tab and a
+/// function that reads it back.
+fn look_page(settings: &Settings) -> (gtk::Grid, Box<dyn Fn() -> (Theme, bool)>) {
+    const THEMES: [Theme; 2] = [Theme::Dark, Theme::Light];
+    let theme_choice = gtk::DropDown::from_strings(&["Escuro", "Claro"]);
+    theme_choice.set_selected(THEMES.iter().position(|t| *t == settings.theme).unwrap_or(0) as u32);
+    theme_choice.connect_selected_notify(|choice| theme::set_light(THEMES.get(choice.selected() as usize) == Some(&Theme::Light)));
+    let festive = gtk::Switch::builder().active(settings.festive).build();
+
+    let labels: Vec<&str> = Season::ALL.iter().map(|season| season.label()).collect();
+    let season = gtk::DropDown::from_strings(&labels);
+    // Today's holiday first, if there is one.
+    let today = Season::today().and_then(|today| Season::ALL.iter().position(|s| *s == today));
+    season.set_selected(today.unwrap_or(0) as u32);
+    let try_it = gtk::Button::with_label("Testar");
+    let s = season.clone();
+    try_it.connect_clicked(move |button| {
+        let picked = Season::ALL.get(s.selected() as usize).copied().unwrap_or(Season::Carnival);
+        if !crate::festive::try_effect(picked) {
+            let parent = button.root().and_downcast::<gtk::Window>();
+            show_error(parent.as_ref(), "Abra a janela principal", "O efeito aparece por cima da janela principal do Fisga.");
+        }
+    });
+    let try_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    try_box.append(&season);
+    try_box.append(&try_it);
+
+    let grid = gtk::Grid::builder().column_spacing(18).row_spacing(14).build();
+    row(&grid, 0, "Tema", &theme_choice, None);
+    row(
+        &grid,
+        1,
+        "Efeitos de datas comemorativas",
+        &festive,
+        Some(
+            "Na semana da data, a janela principal abre com um efeito por alguns segundos e a cor de destaque combina com \
+             ela: confete no Carnaval, ovos na Páscoa, corações no Dia dos Namorados, bandeirinhas na festa junina, \
+             morcegos no Halloween, neve no Natal e fogos no Ano-novo.",
+        ),
+    );
+    row(&grid, 2, "Ver um efeito agora", &try_box, Some("Por cima da janela principal, com as cores da data."));
+    let read = move || (THEMES.get(theme_choice.selected() as usize).copied().unwrap_or_default(), festive.is_active());
+    (grid, Box::new(read))
 }
 
 /// The settings of one queue, in the "Filas" tab.
@@ -556,6 +603,7 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
     let (queues_box, read_queues) = queues_page(window.upcast_ref(), settings.all_queues(), settings.new_queue_id());
     let (network_box, read_proxy, read_logins) = network_page(&settings.proxy);
     let (browser_box, read_browser) = browser_page(&settings.browser);
+    let (look_box, read_look) = look_page(&settings);
 
     // "Ao concluir".
     let done = &settings.on_complete;
@@ -584,12 +632,13 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
     );
 
     let notebook = gtk::Notebook::new();
-    let pages: [(&gtk::Widget, &str); 5] = [
+    let pages: [(&gtk::Widget, &str); 6] = [
         (grid.upcast_ref(), "Geral"),
         (queues_box.upcast_ref(), "Filas"),
         (network_box.upcast_ref(), "Rede"),
         (done_grid.upcast_ref(), "Ao concluir"),
         (browser_box.upcast_ref(), "Navegador"),
+        (look_box.upcast_ref(), "Aparência"),
     ];
     for (page, title) in pages {
         page.set_margin_top(14);
@@ -630,6 +679,15 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
     let w = window.clone();
     cancel.connect_clicked(move |_| w.close());
     crate::window::close_on_escape(&window);
+    // The theme picked shows at once; closed without saving, the saved one is back.
+    let saved = Rc::new(Cell::new(false));
+    let (sv, light) = (saved.clone(), settings.theme == Theme::Light);
+    window.connect_close_request(move |_| {
+        if !sv.get() {
+            theme::set_light(light);
+        }
+        glib::Propagation::Proceed
+    });
 
     let (w, d, l) = (window.clone(), dir.clone(), dir_label.clone());
     choose.connect_clicked(move |_| {
@@ -672,6 +730,7 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
             }
         };
         let logins = read_logins();
+        let (theme, festive) = read_look();
         let on_complete = fisga_ipc::OnComplete {
             sound: sound.is_active(),
             antivirus: antivirus.is_active(),
@@ -695,6 +754,8 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
             newest_first: settings.newest_first,
             on_complete,
             browser: read_browser(),
+            theme,
+            festive,
         };
         for queue in queues {
             new.set_queue(queue);
@@ -706,7 +767,7 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
             }
         }
         button.set_sensitive(false);
-        let (w, button) = (w.clone(), button.clone());
+        let (w, button, done) = (w.clone(), button.clone(), saved.clone());
         glib::spawn_future_local(async move {
             let saved = match ipc::call(Request::SetSettings { settings: new }).await {
                 Ok(_) => match logins {
@@ -716,7 +777,10 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
                 Err(e) => Err(e),
             };
             match saved {
-                Ok(_) => w.close(),
+                Ok(_) => {
+                    done.set(true);
+                    w.close();
+                }
                 Err(e) => {
                     show_error(Some(&w), "Não foi possível salvar", &e.to_string());
                     button.set_sensitive(true);

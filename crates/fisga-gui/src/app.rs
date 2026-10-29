@@ -13,10 +13,11 @@ use std::time::Duration;
 
 use gtk::prelude::*;
 use gtk::{gio, glib};
-use fisga_ipc::{DownloadInfo, Request, Settings, State};
+use fisga_ipc::{DownloadInfo, Request, Settings, State, Theme};
 use tokio::sync::mpsc;
 
 use crate::confirm::ConfirmDialog;
+use crate::festive::Season;
 use crate::ipc::{self, Event};
 use crate::item::DownloadItem;
 use crate::power::PowerDialog;
@@ -127,6 +128,28 @@ impl App {
             this.refresh_tray();
             glib::ControlFlow::Continue
         });
+
+        // A holiday's week begins or ends while the app runs (in the tray, for days).
+        let this = Rc::downgrade(self);
+        glib::timeout_add_seconds_local(300, move || {
+            let Some(this) = this.upgrade() else { return glib::ControlFlow::Break };
+            this.sync_look();
+            glib::ControlFlow::Continue
+        });
+    }
+
+    /// The theme and the holiday's colors of the settings, and the holiday's
+    /// effect over the main window if it did not have it yet.
+    fn sync_look(&self) {
+        if !self.settings_loaded.get() {
+            return;
+        }
+        let settings = self.settings.borrow();
+        let season = if settings.festive { Season::today() } else { None };
+        crate::theme::set_style(settings.theme == Theme::Light, season);
+        if let (true, Some(window)) = (settings.festive, self.window.borrow().as_ref()) {
+            window.effects.celebrate();
+        }
     }
 
     pub fn settings(&self) -> Settings {
@@ -166,6 +189,7 @@ impl App {
         window.set_connection(&self.connection.borrow());
         window.window.present();
         self.window.replace(Some(window));
+        self.sync_look();
     }
 
     pub fn main_window(&self) -> Option<gtk::ApplicationWindow> {
@@ -228,6 +252,7 @@ impl App {
                 let (list_view, newest_first) = (settings.list_view, settings.newest_first);
                 *self.settings.borrow_mut() = settings;
                 self.settings_loaded.set(true);
+                self.sync_look();
                 // After storing them: the cards/list toggle compares with the stored settings.
                 if let Some(window) = self.window.borrow().as_ref() {
                     window.set_view(list_view, newest_first);

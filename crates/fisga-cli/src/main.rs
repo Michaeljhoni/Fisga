@@ -9,8 +9,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use fisga_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
 use fisga_ipc::{
     AddRequest, BrowserSettings, Category, Checksum, Conflict, Connection, Direction, DownloadInfo, ForceKey, Hashing,
-    ProxyMode, ProxySettings, Queue, Request, Response, Settings, SiteLogin, State, TimeOfDay, WhenDone, MAIN_QUEUE,
-    WEEKDAYS,
+    ProxyMode, ProxySettings, Queue, Request, Response, Settings, SiteLogin, State, Theme, TimeOfDay, WhenDone,
+    MAIN_QUEUE, WEEKDAYS,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -101,6 +101,12 @@ struct SettingsArgs {
     /// Tecla que, segurada ao clicar num link, manda o link ao Fisga: nenhuma, alt, ctrl+alt, shift+alt ou ctrl+shift
     #[arg(long, value_parser = parse_force_key)]
     force_key: Option<ForceKey>,
+    /// Tema das janelas: escuro ou claro
+    #[arg(long, value_parser = parse_theme)]
+    theme: Option<Theme>,
+    /// Efeitos de datas comemorativas na janela principal (confete no Carnaval, neve no Natal...)
+    #[arg(long)]
+    festive: Option<bool>,
 }
 
 #[derive(Subcommand)]
@@ -673,6 +679,14 @@ fn parse_force_key(value: &str) -> Result<ForceKey, String> {
         .ok_or_else(|| "use nenhuma, alt, ctrl+alt, shift+alt ou ctrl+shift".into())
 }
 
+fn parse_theme(value: &str) -> Result<Theme, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "escuro" | "dark" => Ok(Theme::Dark),
+        "claro" | "light" => Ok(Theme::Light),
+        _ => Err("use escuro ou claro".into()),
+    }
+}
+
 fn parse_conflict(value: &str) -> Result<Conflict, String> {
     match value {
         "rename" => Ok(Conflict::Rename),
@@ -698,6 +712,8 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         on_complete,
         file_types,
         force_key,
+        theme,
+        festive,
     } = args;
     let mut current = get_settings().await?;
     if let Some(proxy) = &proxy {
@@ -724,7 +740,9 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         || antivirus.is_some()
         || on_complete.is_some()
         || file_types.is_some()
-        || force_key.is_some();
+        || force_key.is_some()
+        || theme.is_some()
+        || festive.is_some();
     if let Some(types) = file_types {
         current.browser.file_types = match types.trim() {
             "padrao" | "padrão" | "default" => BrowserSettings::default().file_types,
@@ -747,6 +765,8 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
     current.speed_limit = speed_limit.map(|kb| kb * 1024).unwrap_or(current.speed_limit);
     current.watch_clipboard = watch_clipboard.unwrap_or(current.watch_clipboard);
     current.tray = tray.unwrap_or(current.tray);
+    current.theme = theme.unwrap_or(current.theme);
+    current.festive = festive.unwrap_or(current.festive);
     if changed {
         fisga_ipc::call(&Request::SetSettings { settings: current.clone() }).await?;
     }
@@ -773,6 +793,8 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
     }
     println!("tipos do navegador:      {}", current.browser.file_types.join(" "));
     println!("tecla do navegador:      {}", current.browser.force_key.label());
+    println!("tema:                    {}", if current.theme == Theme::Light { "claro" } else { "escuro" });
+    println!("efeitos de datas:        {}", if current.festive { "sim" } else { "não" });
     Ok(())
 }
 

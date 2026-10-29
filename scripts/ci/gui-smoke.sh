@@ -151,8 +151,18 @@ shot 5b-filas
 xdotool windowfocus --sync "$prefs" key ctrl+Page_Down
 sleep 1
 shot 5c-rede
+xdotool windowfocus --sync "$prefs" key ctrl+Page_Down ctrl+Page_Down ctrl+Page_Down
+sleep 1
+shot 5f-aparencia
 xdotool windowfocus --sync "$prefs" key Escape
 for _ in $(seq 1 25); do xdotool search --name "^Preferências$" >/dev/null 2>&1 || break; sleep 0.2; done
+
+# The light theme, as the settings change it (and back).
+"$BIN/fisga" settings --theme claro >/dev/null
+sleep 1.5
+shot 4e-tema-claro
+"$BIN/fisga" settings --theme escuro >/dev/null
+sleep 0.5
 
 echo "== batch download window"
 xdotool windowfocus --sync "$main" key ctrl+shift+n

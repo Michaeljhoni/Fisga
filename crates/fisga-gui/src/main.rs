@@ -19,6 +19,7 @@ mod autostart;
 mod batch;
 mod cards;
 mod confirm;
+mod festive;
 mod format;
 mod grabber;
 mod ipc;

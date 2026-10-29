@@ -126,6 +126,8 @@ pub struct MainWindow {
     /// From the settings, for the status bar.
     pub speed_limit: Cell<u64>,
     queues: RefCell<Vec<Queue>>,
+    /// The holidays' effects, over everything.
+    pub effects: Rc<crate::festive::Effects>,
 }
 
 #[derive(Clone)]
@@ -604,7 +606,10 @@ impl MainWindow {
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.append(&paned);
         content.append(&status_bar);
-        window.set_child(Some(&content));
+        let effects = crate::festive::Effects::new();
+        let layers = gtk::Overlay::builder().child(&content).build();
+        layers.add_overlay(&effects.area);
+        window.set_child(Some(&layers));
 
         let actions = Actions {
             resume: gio::SimpleAction::new("resume", None),
@@ -677,6 +682,7 @@ impl MainWindow {
             search,
             speed_limit: Cell::new(app.settings().speed_limit),
             queues: RefCell::default(),
+            effects,
         };
         this.connect(app, &view);
         this.set_queues(queues);

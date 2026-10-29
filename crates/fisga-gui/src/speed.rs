@@ -139,11 +139,11 @@ fn draw(cr: &gtk::cairo::Context, width: f64, height: f64, samples: &Samples) {
     cr.line_to(last_x, height);
     cr.line_to(x0, height);
     cr.close_path();
-    theme::set_color(cr, theme::CYAN, 0.10);
+    theme::set_color(cr, theme::Ink::Cyan, 0.10);
     let _ = cr.fill();
     if let Ok(line) = line {
         cr.append_path(&line);
-        theme::set_color(cr, theme::CYAN, 1.0);
+        theme::set_color(cr, theme::Ink::Cyan, 1.0);
         cr.set_line_width(2.0);
         let _ = cr.stroke();
     }

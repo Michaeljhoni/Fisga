@@ -213,6 +213,17 @@ troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O b
     cada download, no máximo a cada 5 s) e guarda as últimas; com o `fisgad` parado, valem as
     guardadas. No terminal: `fisga settings --file-types "zip safetensors gguf"` (`padrao` volta à
     lista padrão) e `fisga settings --force-key ctrl+alt`.
+- **Aparência** (aba *Aparência* das Preferências):
+  - **Tema** escuro (o padrão) ou claro; aparece na hora ao escolher e vale para todas as janelas
+    depois de salvar. No terminal: `fisga settings --theme claro`.
+  - **Efeitos de datas comemorativas** (ligados por padrão): na semana da data, a janela principal
+    abre com um efeito por uns 15 segundos e a cor de destaque combina com ela. Confete no
+    Carnaval (da sexta à Quarta-feira de Cinzas), ovos na Páscoa (do Domingo de Ramos à Páscoa),
+    corações no Dia dos Namorados (10 a 12 de junho), bandeirinhas na festa junina (20 a 29 de
+    junho), morcegos no Halloween (25 a 31 de outubro), neve no Natal (18 a 26 de dezembro) e
+    fogos no Ano-novo (27 de dezembro a 2 de janeiro). O efeito não pega cliques e não aparece
+    com as animações do sistema desligadas. *Ver um efeito agora* mostra qualquer um deles na
+    hora, por cima da janela principal. No terminal: `fisga settings --festive false`.
 - **Agendador** (por fila, como o *Scheduler* do IDM): a fila só roda das HH:MM às HH:MM nos
   dias escolhidos. Fora desse horário os downloads ficam *na fila*; *Baixar agora* e retomar um
   download à mão começam na hora mesmo assim. No horário de parada, os downloads da fila voltam

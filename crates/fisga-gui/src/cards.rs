@@ -14,7 +14,7 @@ use fisga_ipc::{DownloadInfo, State, MAP_PARTS};
 
 use crate::format;
 use crate::item::DownloadItem;
-use crate::theme::{self, set_color};
+use crate::theme::{set_color, Ink};
 
 pub struct Cards {
     pub root: gtk::ScrolledWindow,
@@ -38,21 +38,21 @@ struct Card {
     /// The ring's drawn fraction, easing to `target`.
     shown: Cell<f64>,
     target: Cell<f64>,
-    color: Cell<(f64, f64, f64)>,
+    color: Cell<Ink>,
     parts: Cell<[f64; MAP_PARTS]>,
     running: Cell<bool>,
     /// The item shown and its notify handlers, dropped on unbind.
     bound: RefCell<Option<(DownloadItem, Vec<glib::SignalHandlerId>)>>,
 }
 
-fn state_style(info: &DownloadInfo) -> (&'static str, (f64, f64, f64)) {
+fn state_style(info: &DownloadInfo) -> (&'static str, Ink) {
     let flagged = info.error.is_some() || info.checksum_matches() == Some(false);
     match info.state {
-        State::Running => ("running", theme::ACCENT),
-        State::Completed if flagged => ("failed", theme::RED),
-        State::Completed => ("done", theme::GREEN),
-        State::Failed => ("failed", theme::RED),
-        _ => ("idle", theme::MUTED),
+        State::Running => ("running", Ink::Accent),
+        State::Completed if flagged => ("failed", Ink::Red),
+        State::Completed => ("done", Ink::Green),
+        State::Failed => ("failed", Ink::Red),
+        _ => ("idle", Ink::Muted),
     }
 }
 
@@ -125,7 +125,7 @@ impl Card {
             speed,
             shown: Cell::new(0.0),
             target: Cell::new(0.0),
-            color: Cell::new(theme::MUTED),
+            color: Cell::new(Ink::Muted),
             parts: Cell::new([0.0; MAP_PARTS]),
             running: Cell::new(false),
             bound: RefCell::default(),
@@ -213,12 +213,12 @@ impl Card {
     }
 }
 
-fn draw_ring(cr: &gtk::cairo::Context, width: f64, height: f64, fraction: f64, color: (f64, f64, f64)) {
+fn draw_ring(cr: &gtk::cairo::Context, width: f64, height: f64, fraction: f64, color: Ink) {
     let (cx, cy) = (width / 2.0, height / 2.0);
     let radius = width.min(height) / 2.0 - 4.0;
     cr.set_line_width(6.0);
     cr.set_line_cap(gtk::cairo::LineCap::Round);
-    set_color(cr, theme::TRACK, 1.0);
+    set_color(cr, Ink::Track, 1.0);
     cr.arc(cx, cy, radius, 0.0, 2.0 * PI);
     let _ = cr.stroke();
     if fraction > 0.003 {
@@ -238,14 +238,14 @@ fn rounded(cr: &gtk::cairo::Context, x: f64, y: f64, width: f64, height: f64, ra
     cr.close_path();
 }
 
-fn draw_map(cr: &gtk::cairo::Context, width: f64, height: f64, parts: &[f64; MAP_PARTS], color: (f64, f64, f64), running: bool) {
+fn draw_map(cr: &gtk::cairo::Context, width: f64, height: f64, parts: &[f64; MAP_PARTS], color: Ink, running: bool) {
     let gap = 3.0;
     let bar = (width - gap * (MAP_PARTS - 1) as f64) / MAP_PARTS as f64;
     // The sheen's place, from the clock: one pass every 1.6 s.
     let now = glib::monotonic_time() as f64 / 1_000_000.0;
     for (i, part) in parts.iter().enumerate() {
         let x = i as f64 * (bar + gap);
-        set_color(cr, theme::TRACK, 1.0);
+        set_color(cr, Ink::Track, 1.0);
         rounded(cr, x, 0.0, bar, height, 3.0);
         let _ = cr.fill();
         // Something always shows, so an empty stretch is told from no stretch.

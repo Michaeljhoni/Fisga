@@ -2,6 +2,32 @@
 
 Cada versão tem uma seção `## X.Y.Z`; o texto dela vira a descrição da release no GitHub.
 
+## 1.2.0
+
+- **Atualização automática:** uma vez por dia o Fisga procura uma versão nova e mostra uma faixa no
+  alto da janela, com as novidades. No Windows, **Atualizar agora** baixa o instalador, confere a
+  soma, instala e abre o Fisga de novo; os downloads em andamento continuam depois. No macOS o
+  `.dmg` é aberto; no Linux, quem atualiza é o gerenciador de pacotes. Dá para desligar em
+  Preferências → Geral, e **Procurar atualizações** no menu olha na hora. Quem está na 1.1.0 instala
+  esta à mão uma última vez.
+- **Vídeos no Windows e no macOS sem instalar nada:** no primeiro vídeo, o Fisga baixa o yt-dlp, o
+  ffmpeg e o Deno (uns 150 MB, uma vez só), conferidos pela soma, e mantém o yt-dlp em dia. Vídeos
+  com acento no nome da pasta (`Vídeos`) não terminam mais com erro no Windows.
+- **Link de vídeo colado:** um endereço do YouTube, Vimeo, Instagram e outros sites colado em
+  **Adicionar URL** (ou no `fisga add`) baixa o vídeo, com a escolha de qualidade, e não a página.
+- **Baixar todos os links:** clique direito numa página → **Baixar todos os links com o Fisga** (ou
+  só os selecionados). O Fisga lista os links para arquivos, para filtrar e marcar.
+- **Sites excluídos** (Preferências → Navegador): os downloads desses sites ficam com o navegador, e
+  os links deles copiados não abrem o Fisga.
+- **Aviso de endereço repetido** na janela *Novo download*, com onde ele já foi salvo.
+- **Propriedades** de um download (clique direito ou Alt+Enter), e **arrastar e soltar** links na
+  janela principal.
+- **Temas:** escuro ou claro, e o tema da semana de datas comemorativas (Carnaval, Páscoa, Dia dos
+  Namorados, festa junina, Halloween, Natal e Ano-novo), com uma animação atrás dos downloads que
+  para quando o Fisga não está em uso. Dá para desligar em Preferências → Aparência.
+- **Mais leve:** sem nada acontecendo, a janela não gasta processador.
+- **macOS:** agora pede o macOS 15 ou mais novo.
+
 ## 1.1.0
 
 O Fisga agora também roda no Windows e no macOS.

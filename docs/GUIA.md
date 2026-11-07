@@ -102,7 +102,8 @@ troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O b
   *Todos os downloads*, *Em andamento*, *Concluídos* e as **categorias** (Vídeos, Músicas, Imagens,
   Documentos, Compactados, Programas, Outros), cada uma com a contagem. À direita, a lista com nome,
   tamanho, progresso, velocidade, tempo restante e estado, atualizada em tempo real. Botões para
-  adicionar URL (Ctrl+N; sugere o link da área de transferência), retomar, pausar, remover (Delete;
+  adicionar URL (Ctrl+N; sugere o link da área de transferência; um link de vídeo do YouTube,
+  Vimeo, Instagram e outros sites conhecidos baixa o vídeo, não a página), retomar, pausar, remover (Delete;
   pergunta se apaga também o arquivo), abrir o arquivo e abrir a pasta. No menu (☰): *Retomar
   todos*, *Pausar todos*, *Copiar endereço* (Ctrl+C), *Remover concluídos da lista*,
   *Preferências* (Ctrl+,) e *Sobre*. Clique duplo: confirma um download

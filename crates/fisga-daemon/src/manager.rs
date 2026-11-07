@@ -172,6 +172,45 @@ fn looks_like_manifest(url: &str) -> bool {
     path.ends_with(".m3u8") || path.ends_with(".mpd")
 }
 
+/// Sites whose videos yt-dlp gets from the page; the extension has the same
+/// list (`PAGE_EXTRACTOR_HOSTS`).
+const VIDEO_SITES: [&str; 17] = [
+    "youtube.com",
+    "youtu.be",
+    "youtube-nocookie.com",
+    "vimeo.com",
+    "dailymotion.com",
+    "twitch.tv",
+    "instagram.com",
+    "facebook.com",
+    "tiktok.com",
+    "x.com",
+    "twitter.com",
+    "reddit.com",
+    "soundcloud.com",
+    "bilibili.com",
+    "bandcamp.com",
+    "rumble.com",
+    "kick.com",
+];
+
+/// A pasted or typed link to a video's page, which would otherwise download
+/// the page's HTML. What the browser hands over says what it is, and a file
+/// on these sites (a Bandcamp purchase) is a file.
+fn looks_like_video_page(request: &AddRequest) -> bool {
+    if request.referrer.is_some() || request.page_url.is_some() || !request.cookies.is_empty() {
+        return false;
+    }
+    let Ok(url) = url::Url::parse(&request.url) else { return false };
+    let host = url.host_str().unwrap_or_default();
+    let on_site = VIDEO_SITES.iter().any(|site| host.strip_suffix(site).is_some_and(|rest| rest.is_empty() || rest.ends_with('.')));
+    let last = url.path().rsplit('/').next().unwrap_or_default();
+    let is_file = last
+        .rsplit_once('.')
+        .is_some_and(|(_, extension)| (1..=5).contains(&extension.len()) && extension.bytes().all(|b| b.is_ascii_alphanumeric()));
+    matches!(url.scheme(), "http" | "https") && on_site && !is_file
+}
+
 fn display_name(request: &AddRequest) -> String {
     request
         .file_name
@@ -432,6 +471,9 @@ impl Manager {
         check_url(&request.url)?;
         if request.kind == SourceKind::Direct && looks_like_manifest(&request.url) {
             request.kind = SourceKind::Stream;
+        }
+        if request.kind == SourceKind::Direct && looks_like_video_page(&request) {
+            request.kind = SourceKind::Page;
         }
         let queue = request.queue.unwrap_or(MAIN_QUEUE);
         self.check_queue(queue)?;
@@ -1058,6 +1100,36 @@ mod tests {
 
     fn add(manager: &Arc<Manager>, confirm: bool) -> u64 {
         manager.add(AddRequest { url: URL.into(), confirm, start: true, ..Default::default() }).unwrap()
+    }
+
+    #[test]
+    fn pasted_links_to_video_pages() {
+        let page = |url: &str| looks_like_video_page(&AddRequest { url: url.into(), ..Default::default() });
+        assert!(page("https://www.youtube.com/watch?v=jNQXAC9IVRw"));
+        assert!(page("https://youtu.be/jNQXAC9IVRw"));
+        assert!(page("https://m.youtube.com/shorts/abcdefg"));
+        assert!(page("https://vimeo.com/123456"));
+        assert!(page("https://www.reddit.com/r/videos/comments/abc/v1.2_released"));
+        assert!(!page("https://example.com/video"), "another site");
+        assert!(!page("https://notyoutube.com/watch?v=1"), "only the site's own subdomains");
+        assert!(!page("https://popplers5.bandcamp.com/album.zip"), "a file");
+        assert!(!page("ftp://youtube.com/watch"));
+        // From the browser, it is what the extension said it is.
+        let bought = AddRequest {
+            url: "https://popplers5.bandcamp.com/download/album?id=1".into(),
+            referrer: Some("https://bandcamp.com/download".into()),
+            ..Default::default()
+        };
+        assert!(!looks_like_video_page(&bought));
+    }
+
+    #[tokio::test]
+    async fn a_pasted_video_page_goes_to_yt_dlp() {
+        let manager = manager();
+        manager.add(AddRequest { url: "https://www.youtube.com/watch?v=jNQXAC9IVRw".into(), ..Default::default() }).unwrap();
+        let item = &manager.list()[0];
+        assert_eq!(item.kind, SourceKind::Page);
+        assert_eq!(item.category, Category::Video);
     }
 
     #[tokio::test]

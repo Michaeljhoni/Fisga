@@ -1,3 +1,296 @@
 # The English of fisga-daemon's texts: each Portuguese text as it is in the code,
 # then its English after "= ", then a blank line. See crates/fisga-i18n.
 
+pedido inválido: {}
+= invalid request: {}
+
+não foi possível procurar uma versão nova: {}
+= could not check for a new version: {}
+
+Download adicionado
+= Download added
+
+A janela de confirmação não pôde ser aberta; o download foi para a fila.
+= The confirmation window could not be opened; the download was added to the queue.
+
+Preparando os vídeos, só na primeira vez: {} ({})
+= Getting videos ready, first time only: {} ({})
+
+não foi possível preparar os vídeos ({}): {}
+= could not get videos ready ({}): {}
+
+Atualizando o {} ({})
+= Updating {} ({})
+
+{} de {} MB
+= {} of {} MB
+
+{} não está na lista de somas
+= {} is not in the list of checksums
+
+a soma de {} não confere
+= the checksum of {} does not match
+
+a conexão parou
+= the connection stalled
+
+{} não está no arquivo
+= {} is not in the archive
+
+o tar falhou ({})
+= tar failed ({})
+
+não foi possível iniciar o tar: {}
+= could not start tar: {}
+
+não há versão nova a instalar
+= there is no new version to install
+
+a versão nova já está sendo instalada
+= the new version is already being installed
+
+aqui quem atualiza o Fisga é o gerenciador de pacotes do sistema
+= on this system, Fisga is updated by the system's package manager
+
+Abra o Fisga para ver as novidades e atualizar.
+= Open Fisga to see what's new and update.
+
+Abra o Fisga para ver as novidades.
+= Open Fisga to see what's new.
+
+Fisga {} disponível
+= Fisga {} available
+
+resposta inesperada do GitHub: {}
+= unexpected response from GitHub: {}
+
+a soma do instalador baixado não confere
+= the checksum of the downloaded installer does not match
+
+não foi possível iniciar o instalador: {}
+= could not start the installer: {}
+
+o disco da versão nova não abriu ({})
+= the new version's disk image did not open ({})
+
+o disco da versão nova não abriu: {}
+= the new version's disk image did not open: {}
+
+o site recusou o link do vídeo; links de vídeo capturados costumam expirar. Abra a página, dê play e baixe de novo. (yt-dlp: {})
+= the site refused the video link; captured video links usually expire. Open the page, play the video and download it again. (yt-dlp: {})
+
+{}\nPela página também não foi possível: {}
+= {}\nFrom the page it did not work either: {}
+
+Somente áudio
+= Audio only
+
+o yt-dlp demorou demais para responder
+= yt-dlp took too long to respond
+
+não foi possível iniciar o yt-dlp: {}
+= could not start yt-dlp: {}
+
+o yt-dlp falhou
+= yt-dlp failed
+
+resposta inválida do yt-dlp: {}
+= invalid response from yt-dlp: {}
+
+o yt-dlp não está instalado. Instale pelo gerenciador de pacotes da sua distro (ex.: pacman -S yt-dlp ffmpeg deno).
+= yt-dlp is not installed. Install it with your distro's package manager (e.g. pacman -S yt-dlp ffmpeg deno).
+
+o yt-dlp terminou sem informar o arquivo gerado
+= yt-dlp finished without reporting the file it created
+
+o yt-dlp terminou com {}
+= yt-dlp exited with {}
+
+URL inválida
+= invalid URL
+
+esquema não suportado: {}
+= unsupported scheme: {}
+
+downloads.json inválido
+= invalid downloads.json
+
+a pasta de downloads precisa ser um caminho absoluto
+= the downloads folder must be an absolute path
+
+fila não encontrada: {}
+= queue not found: {}
+
+download não encontrado
+= download not found
+
+nenhum endereço no lote
+= no addresses in the batch
+
+são {} endereços; o máximo é {}
+= {} addresses; the maximum is {}
+
+no lote: {}
+= in the batch: {}
+
+Este endereço é uma lista de vídeos{}, não um vídeo: baixá-lo traria todos eles. Abra o vídeo desejado e clique em Baixar de novo.
+= This address is a list of videos{}, not a video: downloading it would bring all of them. Open the video you want and click Download again.
+
+o download #{} não está aguardando confirmação
+= download #{} is not waiting for confirmation
+
+este download não tem opções de qualidade
+= this download has no quality options
+
+qualidade desconhecida: {} (opções: {})
+= unknown quality: {} (options: {})
+
+Download concluído
+= Download complete
+
+Falha no download
+= Download failed
+
+o arquivo já está sendo verificado
+= the file is already being checked
+
+o download ainda não terminou; diga a soma que o arquivo deve ter para conferir quando terminar
+= the download has not finished yet; give the checksum the file should have, to check it when it finishes
+
+o download #{} não tem arquivo
+= download #{} has no file
+
+não foi possível ler o arquivo: {}
+= could not read the file: {}
+
+a verificação falhou: {}
+= the check failed: {}
+
+Arquivo diferente do esperado
+= File differs from the expected one
+
+{}\nO {} não confere: o arquivo pode estar corrompido ou ter sido trocado.
+= {}\nThe {} does not match: the file may be corrupted or may have been swapped.
+
+Não foi possível verificar o arquivo
+= Could not check the file
+
+Agendador
+= Scheduler
+
+A fila “{}” começou.
+= The “{}” queue started.
+
+O horário da fila “{}” acabou: os downloads voltaram para ela.
+= The time window of the “{}” queue ended: its downloads went back to the queue.
+
+Fila concluída
+= Queue finished
+
+Os downloads da fila “{}” terminaram.
+= The downloads of the “{}” queue finished.
+
+suspenso
+= suspended
+
+desligado
+= turned off
+
+O computador será {} quando os outros downloads terminarem.
+= The computer will be {} when the other downloads finish.
+
+O computador será {} em {} s. Para cancelar, use a janela do Fisga ou “fisga schedule --cancel”.
+= The computer will be {} in {} s. To cancel, use the Fisga window or “fisga schedule --cancel”.
+
+não há suspensão nem desligamento planejado
+= no suspend or power off is planned
+
+suspender
+= suspend
+
+desligar
+= turn off
+
+Não foi possível {} o computador.
+= Could not {} the computer.
+
+um vírus
+= a virus
+
+o ClamAV encontrou {}; não abra este arquivo
+= ClamAV found {}; do not open this file
+
+Vírus encontrado
+= Virus found
+
+{}\nO ClamAV encontrou {}.
+= {}\nClamAV found {}.
+
+Antivírus indisponível
+= Antivirus unavailable
+
+{} não foi verificado: {}
+= {} was not scanned: {}
+
+o ClamAV não está instalado ({})
+= ClamAV is not installed ({})
+
+o ClamAV falhou
+= ClamAV failed
+
+O comando ao concluir falhou
+= The on-completion command failed
+
+proxy inválido
+= invalid proxy
+
+nenhum link para arquivo nesta página
+= no links to files on this page
+
+o grabber lê páginas http ou https
+= the grabber reads http or https pages
+
+{} demorou demais
+= {} took too long
+
+não foi possível ler {}
+= could not read {}
+
+{}: o servidor respondeu {}
+= {}: the server responded {}
+
+{} não é uma página
+= {} is not a page
+
+o download #{} já terminou
+= download #{} has already finished
+
+o download #{} ainda aguarda confirmação
+= download #{} is still waiting for confirmation
+
+o novo endereço não respondeu
+= the new address did not respond
+
+o novo endereço é de outro arquivo: {} bytes em vez de {}
+= the new address is for another file: {} bytes instead of {}
+
+o novo endereço não informa o tamanho, então não dá para saber se é o mesmo arquivo
+= the new address does not give the size, so there is no way to tell whether it is the same file
+
+capturar o endereço só funciona com links diretos de tamanho conhecido; cole o novo endereço
+= catching the address only works with direct links of a known size; paste the new address
+
+Endereço atualizado
+= Address updated
+
+{} continua de onde parou.
+= {} continues where it left off.
+
+Endereço não atualizado
+= Address not updated
+
+{}. O link virou um download novo.
+= {}. The link became a new download.
+
+o download não pausou a tempo; tente de novo
+= the download did not pause in time; try again

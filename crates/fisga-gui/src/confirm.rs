@@ -4,7 +4,8 @@
 //! already exists, with "Baixar agora", "Adicionar à fila" and "Cancelar".
 //! Closing the window cancels.
 //!
-//! The title is always exactly `Novo download`, so compositors can match it
+//! The title is always exactly `Novo download` (`New download` in English),
+//! so compositors can match it
 //! (niri: `window-rule { match app-id="io.fisga.Fisga" title="^Novo download$" ... }`).
 
 use std::cell::{Cell, RefCell};
@@ -13,12 +14,16 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib, pango};
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{Category, Checksum, Conflict, DownloadInfo, Existing, MediaFormat, Queue, Request, SourceKind};
 
 use crate::format;
 use crate::ipc;
 
-pub const TITLE: &str = "Novo download";
+/// The window's title.
+pub fn title() -> &'static str {
+    tr!("Novo download")
+}
 
 pub struct ConfirmDialog {
     id: u64,
@@ -77,12 +82,12 @@ fn size_text(info: &DownloadInfo) -> String {
     let size = format::size(info);
     match info.kind {
         _ if info.note.is_some() => info.note.clone().unwrap_or_default(),
-        _ if info.probing => "verificando…".into(),
+        _ if info.probing => tr!("verificando…").into(),
         SourceKind::Page | SourceKind::Stream if info.total.is_none() => {
-            "definido ao baixar (vídeo de site, via yt-dlp)".into()
+            tr!("definido ao baixar (vídeo de site, via yt-dlp)").into()
         }
         SourceKind::Page | SourceKind::Stream => format!("≈ {size}"),
-        _ if info.total.is_some() && !info.resumable => format!("{size} (o servidor não permite pausar e retomar)"),
+        _ if info.total.is_some() && !info.resumable => trf!("{} (o servidor não permite pausar e retomar)", size),
         _ => size,
     }
 }
@@ -98,7 +103,7 @@ impl ConfirmDialog {
     ) -> Rc<Self> {
         let window = gtk::Window::builder()
             .application(app)
-            .title(TITLE)
+            .title(title())
             .default_width(580)
             .resizable(false)
             .build();
@@ -121,13 +126,13 @@ impl ConfirmDialog {
             .ellipsize(pango::EllipsizeMode::Start)
             .hexpand(true)
             .build();
-        let change_dir = gtk::Button::with_label("Alterar…");
+        let change_dir = gtk::Button::with_label(tr!("Alterar…"));
         let dir_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         dir_row.append(&dir_label);
         dir_row.append(&change_dir);
         let size = gtk::Label::builder().xalign(0.0).wrap(true).build();
         let quality = gtk::DropDown::builder().halign(gtk::Align::Start).visible(false).build();
-        let quality_caption = caption("Qualidade");
+        let quality_caption = caption(tr!("Qualidade"));
         quality_caption.set_visible(false);
         let exists_label = gtk::Label::builder().xalign(0.0).wrap(true).build();
         exists_label.add_css_class("warning");
@@ -135,13 +140,13 @@ impl ConfirmDialog {
         let exists_box = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).visible(false).build();
         exists_box.append(&exists_label);
         exists_box.append(&exists_choice);
-        let exists_caption = caption("Já existe");
+        let exists_caption = caption(tr!("Já existe"));
         exists_caption.set_visible(false);
         exists_caption.set_valign(gtk::Align::Start);
         // IDM's "duplicate download link": the same address is in the list.
         let repeated = gtk::Label::builder().xalign(0.0).wrap(true).max_width_chars(60).build();
         repeated.add_css_class("warning");
-        let repeated_caption = caption("Repetido");
+        let repeated_caption = caption(tr!("Repetido"));
         repeated_caption.set_valign(gtk::Align::Start);
         match duplicate {
             Some(other) => repeated.set_label(&format::duplicate(other)),
@@ -151,9 +156,9 @@ impl ConfirmDialog {
             }
         }
         let queue_choice = gtk::DropDown::builder().halign(gtk::Align::Start).build();
-        let queue_caption = caption("Fila");
+        let queue_caption = caption(tr!("Fila"));
         let checksum = gtk::Entry::builder()
-            .placeholder_text("opcional: a SHA-256 publicada na página, para conferir o arquivo")
+            .placeholder_text(tr!("opcional: a SHA-256 publicada na página, para conferir o arquivo"))
             .text(info.checksum.as_ref().map(|c| c.hex.as_str()).unwrap_or_default())
             .activates_default(true)
             .hexpand(true)
@@ -161,14 +166,14 @@ impl ConfirmDialog {
 
         let grid = gtk::Grid::builder().column_spacing(12).row_spacing(10).build();
         for (row, (label, widget)) in [
-            (caption("Endereço"), url.upcast_ref::<gtk::Widget>()),
+            (caption(tr!("Endereço")), url.upcast_ref::<gtk::Widget>()),
             (repeated_caption, repeated.upcast_ref()),
-            (caption("Salvar como"), name.upcast_ref()),
-            (caption("Pasta"), dir_row.upcast_ref()),
+            (caption(tr!("Salvar como")), name.upcast_ref()),
+            (caption(tr!("Pasta")), dir_row.upcast_ref()),
             (queue_caption.clone(), queue_choice.upcast_ref()),
             (quality_caption.clone(), quality.upcast_ref()),
-            (caption("Tamanho"), size.upcast_ref()),
-            (caption("Soma"), checksum.upcast_ref()),
+            (caption(tr!("Tamanho")), size.upcast_ref()),
+            (caption(tr!("Soma")), checksum.upcast_ref()),
             (exists_caption.clone(), exists_box.upcast_ref()),
         ]
         .into_iter()
@@ -181,9 +186,9 @@ impl ConfirmDialog {
         let error = gtk::Label::builder().xalign(0.0).wrap(true).visible(false).build();
         error.add_css_class("error");
 
-        let cancel = gtk::Button::with_label("Cancelar");
-        let queue = gtk::Button::with_label("Adicionar à fila");
-        let now = gtk::Button::with_label("Baixar agora");
+        let cancel = gtk::Button::with_label(tr!("Cancelar"));
+        let queue = gtk::Button::with_label(tr!("Adicionar à fila"));
+        let now = gtk::Button::with_label(tr!("Baixar agora"));
         now.add_css_class("suggested-action");
         let button_row = gtk::Box::builder().spacing(8).halign(gtk::Align::End).margin_top(6).build();
         button_row.append(&cancel);
@@ -366,7 +371,7 @@ impl ConfirmDialog {
     fn show_dir(&self) {
         let text = match self.dir.borrow().as_ref() {
             Some(dir) => dir.display().to_string(),
-            None => "pasta de Downloads".into(),
+            None => tr!("pasta de Downloads").into(),
         };
         self.dir_label.set_tooltip_text(Some(&text));
         self.dir_label.set_label(&text);
@@ -420,7 +425,7 @@ impl ConfirmDialog {
         if let Some(format) = self.selected_format() {
             self.size.set_label(&match format.size {
                 Some(size) => format!("\u{2248} {}", format::bytes(size)),
-                None => "definido ao baixar".into(),
+                None => tr!("definido ao baixar").into(),
             });
         }
     }
@@ -452,18 +457,18 @@ impl ConfirmDialog {
             return;
         }
         let dir = self.dir.borrow().clone().unwrap_or_default();
-        let other_name = format!("Salvar como \u{201c}{}\u{201d}", fisga_ipc::unique_name(&dir, &name));
+        let other_name = trf!("Salvar como \u{201c}{}\u{201d}", fisga_ipc::unique_name(&dir, &name));
         let (message, entries): (&str, Vec<(Conflict, &str)>) = match existing {
             Existing::File => (
-                "Já existe um arquivo com este nome nesta pasta.",
-                vec![(Conflict::Rename, other_name.as_str()), (Conflict::Overwrite, "Substituir o arquivo existente")],
+                tr!("Já existe um arquivo com este nome nesta pasta."),
+                vec![(Conflict::Rename, other_name.as_str()), (Conflict::Overwrite, tr!("Substituir o arquivo existente"))],
             ),
             _ => (
-                "Há um download incompleto deste arquivo nesta pasta.",
+                tr!("Há um download incompleto deste arquivo nesta pasta."),
                 vec![
-                    (Conflict::Resume, "Continuar de onde parou"),
+                    (Conflict::Resume, tr!("Continuar de onde parou")),
                     (Conflict::Rename, other_name.as_str()),
-                    (Conflict::Overwrite, "Recomeçar do zero"),
+                    (Conflict::Overwrite, tr!("Recomeçar do zero")),
                 ],
             ),
         };
@@ -483,7 +488,7 @@ impl ConfirmDialog {
     }
 
     async fn choose_dir(self: Rc<Self>) {
-        let mut dialog = gtk::FileDialog::builder().title("Salvar em").modal(true);
+        let mut dialog = gtk::FileDialog::builder().title(tr!("Salvar em")).modal(true);
         if let Some(dir) = self.dir.borrow().as_ref() {
             dialog = dialog.initial_folder(&gio::File::for_path(dir));
         }
@@ -520,7 +525,7 @@ impl ConfirmDialog {
             text => match Checksum::parse(text) {
                 Ok(checksum) => Some(checksum),
                 Err(e) => {
-                    self.error.set_label(&format!("Soma inválida: {e}"));
+                    self.error.set_label(&trf!("Soma inválida: {}", e));
                     self.error.set_visible(true);
                     return;
                 }
@@ -540,7 +545,7 @@ impl ConfirmDialog {
                     this.window.close();
                 }
                 Err(e) => {
-                    this.error.set_label(&format!("Não foi possível confirmar: {e}"));
+                    this.error.set_label(&trf!("Não foi possível confirmar: {}", e));
                     this.error.set_visible(true);
                     this.set_busy(false);
                 }

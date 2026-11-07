@@ -20,6 +20,7 @@ use reqwest::{Client, StatusCode};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use fisga_i18n::{tr, trf};
 use url::Url;
 
 use crate::control::{self, ControlFile, SegmentState};
@@ -250,7 +251,7 @@ async fn single_stream(
             next = tokio::time::timeout(opts.idle_timeout.saturating_mul(10), stream.next()) => next,
         };
         match next {
-            Err(_) => return Err(Error::Other("tempo esgotado esperando dados do servidor".into())),
+            Err(_) => return Err(Error::Other(tr!("tempo esgotado esperando dados do servidor").into())),
             Ok(None) => break,
             Ok(Some(Err(e))) => return Err(e.into()),
             Ok(Some(Ok(chunk))) => {
@@ -278,7 +279,7 @@ async fn single_stream(
     drop(file);
     if let Some(total) = total {
         if downloaded != total {
-            return Err(Error::Other(format!("conexão encerrada em {downloaded} de {total} bytes")));
+            return Err(Error::Other(trf!("conexão encerrada em {} de {} bytes", downloaded, total)));
         }
     }
     let _ = events.send(EngineEvent::Progress(Progress {
@@ -506,7 +507,7 @@ impl Ctx {
         let at = *offset;
         let mut data = tokio::task::spawn_blocking(move || write_all_at(&file, &data, at).map(|_| data))
             .await
-            .map_err(|e| Error::Other(format!("falha na escrita: {e}")))??;
+            .map_err(|e| Error::Other(trf!("falha na escrita: {}", e)))??;
         {
             let mut segs = self.segments.lock().unwrap();
             let seg = &mut segs[index];
@@ -546,7 +547,7 @@ impl Ctx {
                         return Ok(());
                     }
                     if asked.elapsed() >= self.idle_timeout {
-                        return Err(Error::Other("tempo esgotado esperando a resposta do servidor".into()));
+                        return Err(Error::Other(tr!("tempo esgotado esperando a resposta do servidor").into()));
                     }
                 }
             }
@@ -567,7 +568,7 @@ impl Ctx {
             .and_then(|v| v.split('-').next())
             .and_then(|v| v.trim().parse::<u64>().ok());
         if range_start.is_some_and(|s| s != from) {
-            return Err(Error::Other("Content-Range diferente do pedido".into()));
+            return Err(Error::Other(tr!("Content-Range diferente do pedido").into()));
         }
         self.streaming(index);
 
@@ -594,7 +595,7 @@ impl Ctx {
                     return if self.gone(index, offset) {
                         Ok(())
                     } else {
-                        Err(Error::Other("conexão encerrada antes do fim do segmento".into()))
+                        Err(Error::Other(tr!("conexão encerrada antes do fim do segmento").into()))
                     };
                 }
                 Err(_) => {
@@ -605,7 +606,7 @@ impl Ctx {
                         return Ok(());
                     }
                     if last_data.elapsed() >= self.idle_timeout {
-                        return Err(Error::Other("tempo esgotado esperando dados".into()));
+                        return Err(Error::Other(tr!("tempo esgotado esperando dados").into()));
                     }
                     continue;
                 }
@@ -822,7 +823,7 @@ async fn segmented_download(
                 }
                 Some(Ok(Ok(()))) => {}
                 Some(Ok(Err(e))) => last_error = Some(e),
-                Some(Err(e)) => last_error = Some(Error::Other(format!("conexão abortou: {e}"))),
+                Some(Err(e)) => last_error = Some(Error::Other(trf!("conexão abortou: {}", e))),
             },
             _ = ticker.tick() => {
                 let downloaded = ctx.downloaded.load(Ordering::Relaxed);
@@ -862,7 +863,7 @@ async fn segmented_download(
     if cancel.is_cancelled() {
         return Ok(Outcome::Paused(final_path));
     }
-    Err(last_error.unwrap_or_else(|| Error::Other("download incompleto".into())))
+    Err(last_error.unwrap_or_else(|| Error::Other(tr!("download incompleto").into())))
 }
 
 #[cfg(test)]

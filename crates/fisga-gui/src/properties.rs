@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{DownloadInfo, Hashing, Queue, SourceKind, State};
 use gtk::prelude::*;
 use gtk::{glib, pango};
@@ -14,9 +15,9 @@ use crate::item::DownloadItem;
 /// The lines of the window, in order: a caption and its text (empty = hidden).
 fn lines(info: &DownloadInfo, queues: &[Queue]) -> Vec<(&'static str, String)> {
     let kind = match info.kind {
-        SourceKind::Direct => "Link direto",
-        SourceKind::Page => "Vídeo de site (pelo yt-dlp)",
-        SourceKind::Stream => "Transmissão (HLS/DASH)",
+        SourceKind::Direct => tr!("Link direto"),
+        SourceKind::Page => tr!("Vídeo de site (pelo yt-dlp)"),
+        SourceKind::Stream => tr!("Transmissão (HLS/DASH)"),
     };
     let file = match (&info.path, &info.dir) {
         (Some(path), _) => path.display().to_string(),
@@ -26,7 +27,7 @@ fn lines(info: &DownloadInfo, queues: &[Queue]) -> Vec<(&'static str, String)> {
     let downloaded = match (info.state, info.total) {
         (State::Completed, _) => String::new(),
         (_, Some(total)) if total > 0 => {
-            format!("{} de {} ({})", format::bytes(info.downloaded), format::bytes(total), format::progress_text(info))
+            trf!("{} de {} ({})", format::bytes(info.downloaded), format::bytes(total), format::progress_text(info))
         }
         _ if info.downloaded > 0 => format::bytes(info.downloaded),
         _ => String::new(),
@@ -46,28 +47,28 @@ fn lines(info: &DownloadInfo, queues: &[Queue]) -> Vec<(&'static str, String)> {
     };
     let queue = queues.iter().find(|queue| queue.id == info.queue).map(|queue| queue.name.clone()).unwrap_or_default();
     vec![
-        ("Nome", info.name.clone()),
-        ("Situação", format::status(info)),
-        ("Endereço", info.url.clone()),
-        ("Página", info.page.clone().filter(|page| *page != info.url).unwrap_or_default()),
-        ("Arquivo", file),
-        ("Tamanho", format::size(info)),
-        ("Baixado", downloaded),
-        ("Tipo", kind.to_string()),
-        ("Categoria", info.category.label().to_string()),
-        ("Fila", queue),
-        ("Adicionado em", format::added(info)),
-        ("Conexões", connections),
-        ("Limite próprio", limit),
-        ("Soma esperada", expected),
-        ("Soma do arquivo", found),
+        (tr!("Nome"), info.name.clone()),
+        (tr!("Situação"), format::status(info)),
+        (tr!("Endereço"), info.url.clone()),
+        (tr!("Página"), info.page.clone().filter(|page| *page != info.url).unwrap_or_default()),
+        (tr!("Arquivo"), file),
+        (tr!("Tamanho"), format::size(info)),
+        (tr!("Baixado"), downloaded),
+        (tr!("Tipo"), kind.to_string()),
+        (tr!("Categoria"), info.category.label().to_string()),
+        (tr!("Fila"), queue),
+        (tr!("Adicionado em"), format::added(info)),
+        (tr!("Conexões"), connections),
+        (tr!("Limite próprio"), limit),
+        (tr!("Soma esperada"), expected),
+        (tr!("Soma do arquivo"), found),
     ]
 }
 
 pub fn show(parent: &gtk::Window, item: &DownloadItem, queues: Vec<Queue>) {
     let info = item.info();
     let window = gtk::Window::builder()
-        .title("Propriedades")
+        .title(tr!("Propriedades"))
         .transient_for(parent)
         .default_width(620)
         .resizable(false)
@@ -103,8 +104,8 @@ pub fn show(parent: &gtk::Window, item: &DownloadItem, queues: Vec<Queue>) {
     };
     fill(&info);
 
-    let copy = gtk::Button::with_label("Copiar endereço");
-    let close = gtk::Button::with_label("Fechar");
+    let copy = gtk::Button::with_label(tr!("Copiar endereço"));
+    let close = gtk::Button::with_label(tr!("Fechar"));
     close.add_css_class("suggested-action");
     let buttons = gtk::Box::builder().spacing(8).halign(gtk::Align::End).build();
     buttons.append(&copy);

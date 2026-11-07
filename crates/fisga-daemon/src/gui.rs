@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use fisga_i18n::tr;
 use fisga_ipc::{Response, State};
 
 use crate::manager::{Answer, Manager};
@@ -172,8 +173,8 @@ fn give_up(manager: &Arc<Manager>, id: u64, unanswered: Unanswered) {
             tracing::info!(id, "o download começa sem confirmação");
             if manager.confirm(id, Answer::default()).is_ok() {
                 notify::send(
-                    "Download adicionado",
-                    "A janela de confirmação não pôde ser aberta; o download foi para a fila.",
+                    tr!("Download adicionado"),
+                    tr!("A janela de confirmação não pôde ser aberta; o download foi para a fila."),
                 );
             }
         }

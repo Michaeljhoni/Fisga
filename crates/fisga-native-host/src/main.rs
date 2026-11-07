@@ -8,6 +8,7 @@ static I18N: fisga_i18n::Table = fisga_i18n::Table::new(include_str!("../i18n/en
 
 use std::io::{self, Read, Write};
 
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{AddRequest, Request, Response};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -37,7 +38,7 @@ fn read_message(input: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
     }
     let len = u32::from_ne_bytes(len) as usize;
     if len > MAX_MESSAGE {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "mensagem grande demais"));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, tr!("mensagem grande demais")));
     }
     let mut body = vec![0u8; len];
     input.read_exact(&mut body)?;
@@ -68,7 +69,7 @@ async fn handle(message: Incoming) -> Value {
                     "excludedSites": browser.excluded_sites,
                 })
             }
-            Ok(other) => json!({ "type": "error", "message": format!("resposta inesperada: {other:?}") }),
+            Ok(other) => json!({ "type": "error", "message": trf!("resposta inesperada: {}", format!("{other:?}")) }),
             Err(e) => json!({ "type": "error", "message": e.to_string() }),
         },
         Incoming::Links { page_url, links } => {
@@ -91,7 +92,7 @@ async fn handle(message: Incoming) -> Value {
             .await;
             match result {
                 Ok(Response::Added { id }) => json!({ "type": "added", "id": id, "pending": pending }),
-                Ok(other) => json!({ "type": "error", "message": format!("resposta inesperada: {other:?}") }),
+                Ok(other) => json!({ "type": "error", "message": trf!("resposta inesperada: {}", format!("{other:?}")) }),
                 Err(e) => json!({ "type": "error", "message": e.to_string() }),
             }
         }
@@ -119,8 +120,9 @@ async fn main() -> anyhow::Result<()> {
         let reply = match parse(&body) {
             Ok(message) => handle(message).await,
             Err(e) => {
-                eprintln!("fisga-native-host: mensagem inválida: {e}");
-                json!({ "type": "error", "message": format!("mensagem inválida: {e}") })
+                let message = trf!("mensagem inválida: {}", e);
+                eprintln!("fisga-native-host: {message}");
+                json!({ "type": "error", "message": message })
             }
         };
         write_message(&mut stdout, &reply)?;

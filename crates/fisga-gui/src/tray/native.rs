@@ -6,6 +6,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+use fisga_i18n::tr;
 use gtk::{gdk_pixbuf, gio, glib};
 use tokio::sync::mpsc;
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
@@ -15,15 +16,17 @@ use super::Action;
 
 const ICON: &[u8] = include_bytes!("../../data/icons/32/io.fisga.Fisga.png");
 
-const MENU: &[Option<(&str, Action)>] = &[
-    Some(("Abrir o Fisga", Action::Open)),
-    Some(("Adicionar URL…", Action::Add)),
-    None,
-    Some(("Retomar todos", Action::ResumeAll)),
-    Some(("Pausar todos", Action::PauseAll)),
-    None,
-    Some(("Sair", Action::Quit)),
-];
+fn menu_entries() -> [Option<(&'static str, Action)>; 7] {
+    [
+        Some((tr!("Abrir o Fisga"), Action::Open)),
+        Some((tr!("Adicionar URL…"), Action::Add)),
+        None,
+        Some((tr!("Retomar todos"), Action::ResumeAll)),
+        Some((tr!("Pausar todos"), Action::PauseAll)),
+        None,
+        Some((tr!("Sair"), Action::Quit)),
+    ]
+}
 
 pub struct Tray {
     icon: TrayIcon,
@@ -55,11 +58,11 @@ pub async fn spawn(actions: mpsc::UnboundedSender<Action>, summary: String, _wai
     menu.append(&summary_item)?;
     menu.append(&PredefinedMenuItem::separator())?;
     let mut ids: Vec<(MenuId, Action)> = Vec::new();
-    for entry in MENU {
+    for entry in menu_entries() {
         match entry {
             Some((label, action)) => {
                 let item = MenuItem::new(label, true, None);
-                ids.push((item.id().clone(), *action));
+                ids.push((item.id().clone(), action));
                 menu.append(&item)?;
             }
             None => menu.append(&PredefinedMenuItem::separator())?,

@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
+use fisga_i18n::{tr, trf};
 use fisga_core::RequestSpec;
 use fisga_ipc::{AddRequest, DownloadInfo, Response, SourceKind, State};
 
@@ -33,8 +34,8 @@ fn forget_etag(path: &Path, url: &str) {
 
 fn can_refresh(info: &DownloadInfo) -> anyhow::Result<()> {
     match info.state {
-        State::Completed => bail!("o download #{} já terminou", info.id),
-        State::Pending => bail!("o download #{} ainda aguarda confirmação", info.id),
+        State::Completed => bail!(trf!("o download #{} já terminou", info.id)),
+        State::Pending => bail!(trf!("o download #{} ainda aguarda confirmação", info.id)),
         _ => Ok(()),
     }
 }
@@ -42,26 +43,26 @@ fn can_refresh(info: &DownloadInfo) -> anyhow::Result<()> {
 impl Manager {
     /// Replaces the link of a download with another one to the same file.
     pub async fn refresh_url(self: &Arc<Self>, id: u64, url: String) -> anyhow::Result<()> {
-        let parsed = url::Url::parse(&url).context("URL inválida")?;
+        let parsed = url::Url::parse(&url).context(tr!("URL inválida"))?;
         if !matches!(parsed.scheme(), "http" | "https" | "ftp") {
-            bail!("esquema não suportado: {}", parsed.scheme());
+            bail!(trf!("esquema não suportado: {}", parsed.scheme()));
         }
         let (info, request) = {
             let inner = self.inner.lock().unwrap();
-            let job = inner.jobs.get(&id).context("download não encontrado")?;
+            let job = inner.jobs.get(&id).context(tr!("download não encontrado"))?;
             (job.info.clone(), job.request.clone())
         };
         can_refresh(&info)?;
         let request = AddRequest { url, ..request };
         if request.kind == SourceKind::Direct {
             let spec = RequestSpec { url: request.url.clone(), headers: self.headers(&request) };
-            let probe = fisga_core::probe(&self.client(), &spec).await.context("o novo endereço não respondeu")?;
+            let probe = fisga_core::probe(&self.client(), &spec).await.context(tr!("o novo endereço não respondeu"))?;
             match (info.total, probe.total) {
                 (Some(old), Some(new)) if old != new => {
-                    bail!("o novo endereço é de outro arquivo: {new} bytes em vez de {old}")
+                    bail!(trf!("o novo endereço é de outro arquivo: {} bytes em vez de {}", new, old))
                 }
                 (Some(_), None) => {
-                    bail!("o novo endereço não informa o tamanho, então não dá para saber se é o mesmo arquivo")
+                    bail!(tr!("o novo endereço não informa o tamanho, então não dá para saber se é o mesmo arquivo"))
                 }
                 _ => {}
             }
@@ -73,11 +74,11 @@ impl Manager {
     pub fn await_url(self: &Arc<Self>, id: u64, waiting: bool) -> anyhow::Result<()> {
         {
             let mut inner = self.inner.lock().unwrap();
-            let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
+            let job = inner.jobs.get_mut(&id).context(tr!("download não encontrado"))?;
             if waiting {
                 can_refresh(&job.info)?;
                 if job.info.kind != SourceKind::Direct || job.info.total.is_none() {
-                    bail!("capturar o endereço só funciona com links diretos de tamanho conhecido; cole o novo endereço");
+                    bail!(tr!("capturar o endereço só funciona com links diretos de tamanho conhecido; cole o novo endereço"));
                 }
                 // The old link is useless: stop trying it.
                 if let Some(cancel) = job.cancel.as_ref().filter(|_| job.info.state == State::Running) {
@@ -140,12 +141,12 @@ impl Manager {
         match self.apply_address(target, request).await {
             Ok(()) => {
                 let name = self.inner.lock().unwrap().jobs.get(&target).map(|j| j.info.name.clone()).unwrap_or_default();
-                notify::send("Endereço atualizado", &format!("{name} continua de onde parou."));
+                notify::send(tr!("Endereço atualizado"), &trf!("{} continua de onde parou.", name));
             }
             Err(e) => {
                 // The browser's click is not lost: it becomes a download of its own.
                 tracing::warn!(target, error = %e, "não foi possível usar o endereço capturado");
-                notify::send("Endereço não atualizado", &format!("{e}. O link virou um download novo."));
+                notify::send(tr!("Endereço não atualizado"), &trf!("{}. O link virou um download novo.", e));
                 let _ = self.add(AddRequest { confirm: true, ..sent });
             }
         }
@@ -163,13 +164,13 @@ impl Manager {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             if self.state(id) == Some(State::Running) {
-                bail!("o download não pausou a tempo; tente de novo");
+                bail!(tr!("o download não pausou a tempo; tente de novo"));
             }
         }
         let url = request.url.clone();
         let path = {
             let mut inner = self.inner.lock().unwrap();
-            let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
+            let job = inner.jobs.get_mut(&id).context(tr!("download não encontrado"))?;
             // It may have finished meanwhile.
             can_refresh(&job.info)?;
             // Not started by the queue until the control file below is fixed.

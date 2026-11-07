@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use gtk::glib;
 use gtk::prelude::*;
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{Checksum, DownloadInfo, Hashing, Request, State};
 
 use crate::ipc;
@@ -25,7 +26,7 @@ impl Widgets {
     fn show(&self, info: &DownloadInfo) {
         let finished = info.state == State::Completed;
         let running = matches!(info.hash, Some(Hashing::Running { .. }));
-        self.check.set_label(if finished { "Conferir" } else { "Guardar" });
+        self.check.set_label(if finished { tr!("Conferir") } else { tr!("Guardar") });
         self.check.set_sensitive(!running);
         self.entry.set_sensitive(!running);
         self.progress.set_visible(running);
@@ -37,17 +38,17 @@ impl Widgets {
             Some(Hashing::Running { done }) => {
                 let total = info.total.unwrap_or(info.downloaded).max(1);
                 self.progress.set_fraction((*done as f64 / total as f64).min(1.0));
-                self.progress.set_text(Some(&format!("Lendo o arquivo… {}", crate::format::bytes(*done))));
+                self.progress.set_text(Some(&trf!("Lendo o arquivo… {}", crate::format::bytes(*done))));
             }
             Some(Hashing::Done { digest }) => {
-                self.digest.set_label(&format!("{} do arquivo:\n{}", digest.algo.label(), digest.hex));
+                self.digest.set_label(&trf!("{} do arquivo:\n{}", digest.algo.label(), digest.hex));
                 self.digest.set_visible(true);
                 let verdict = match info.checksum_matches() {
-                    Some(true) => Some(("success", "\u{2713} Confere: é exatamente o arquivo publicado na página.")),
+                    Some(true) => Some(("success", tr!("\u{2713} Confere: é exatamente o arquivo publicado na página."))),
                     Some(false) => Some((
                         "error",
-                        "\u{2717} Não confere: o arquivo pode estar corrompido ou ter sido trocado. Baixe-o de novo \
-                         e, se continuar diferente, desconfie do site.",
+                        tr!("\u{2717} Não confere: o arquivo pode estar corrompido ou ter sido trocado. Baixe-o de novo \
+                         e, se continuar diferente, desconfie do site."),
                     )),
                     None => None,
                 };
@@ -58,7 +59,7 @@ impl Widgets {
                 }
             }
             Some(Hashing::Failed { error }) => {
-                self.verdict.set_label(&format!("Não foi possível conferir: {error}"));
+                self.verdict.set_label(&trf!("Não foi possível conferir: {}", error));
                 self.verdict.add_css_class("error");
                 self.verdict.set_visible(true);
             }
@@ -70,7 +71,7 @@ impl Widgets {
 pub fn show(parent: &gtk::Window, item: &DownloadItem) {
     let info = item.info();
     let window = gtk::Window::builder()
-        .title("Conferir soma")
+        .title(tr!("Conferir soma"))
         .transient_for(parent)
         .modal(true)
         .default_width(560)
@@ -78,12 +79,12 @@ pub fn show(parent: &gtk::Window, item: &DownloadItem) {
         .build();
     let explanation = gtk::Label::builder()
         .label(match info.state {
-            State::Completed => format!(
+            State::Completed => trf!(
                 "Cole a soma publicada na página de download (SHA-256, SHA-1, SHA-384 ou SHA-512) para conferir se \
                  \u{201c}{}\u{201d} é exatamente aquele arquivo. Sem ela, o Fisga só mostra a SHA-256 do arquivo.",
                 info.name
             ),
-            _ => format!(
+            _ => trf!(
                 "Cole a soma publicada na página de download (SHA-256, SHA-1, SHA-384 ou SHA-512): quando \
                  \u{201c}{}\u{201d} terminar, o Fisga confere se é exatamente aquele arquivo.",
                 info.name
@@ -94,7 +95,7 @@ pub fn show(parent: &gtk::Window, item: &DownloadItem) {
         .max_width_chars(60)
         .build();
     let entry = gtk::Entry::builder()
-        .placeholder_text("soma da página (opcional)")
+        .placeholder_text(tr!("soma da página (opcional)"))
         .text(info.checksum.as_ref().map(|c| c.hex.as_str()).unwrap_or_default())
         .activates_default(true)
         .hexpand(true)
@@ -106,8 +107,8 @@ pub fn show(parent: &gtk::Window, item: &DownloadItem) {
     let error = gtk::Label::builder().xalign(0.0).wrap(true).visible(false).build();
     error.add_css_class("error");
 
-    let close = gtk::Button::with_label("Fechar");
-    let check = gtk::Button::with_label("Conferir");
+    let close = gtk::Button::with_label(tr!("Fechar"));
+    let check = gtk::Button::with_label(tr!("Conferir"));
     check.add_css_class("suggested-action");
     let buttons = gtk::Box::builder().spacing(8).halign(gtk::Align::End).build();
     buttons.append(&close);
@@ -159,7 +160,7 @@ pub fn show(parent: &gtk::Window, item: &DownloadItem) {
             text => match Checksum::parse(text) {
                 Ok(checksum) => Some(checksum),
                 Err(e) => {
-                    w.error.set_label(&format!("Soma inválida: {e}"));
+                    w.error.set_label(&trf!("Soma inválida: {}", e));
                     w.error.set_visible(true);
                     return;
                 }
@@ -174,7 +175,7 @@ pub fn show(parent: &gtk::Window, item: &DownloadItem) {
                 Ok(_) if !finished => win.close(),
                 Ok(_) => {}
                 Err(e) => {
-                    w.error.set_label(&format!("Não foi possível conferir: {e}"));
+                    w.error.set_label(&trf!("Não foi possível conferir: {}", e));
                     w.error.set_visible(true);
                     w.check.set_sensitive(true);
                 }

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use gtk::glib;
 use gtk::prelude::*;
+use fisga_i18n::{tr, trf};
 
 use crate::format;
 use crate::theme;
@@ -65,7 +66,7 @@ impl SpeedPanel {
 
         let dot = gtk::Box::builder().valign(gtk::Align::Center).build();
         dot.add_css_class("fisga-live-dot");
-        let live = gtk::Label::new(Some("AO VIVO"));
+        let live = gtk::Label::new(Some(tr!("AO VIVO")));
         live.add_css_class("fisga-live");
         let live_row = gtk::Box::builder().spacing(6).build();
         live_row.append(&dot);
@@ -106,16 +107,16 @@ impl SpeedPanel {
         self.value.set_text(number);
         self.unit.set_text(&format!("{unit}/s"));
         let detail = match running {
-            0 => "Nenhum download em andamento".to_string(),
+            0 => tr!("Nenhum download em andamento").to_string(),
             n => {
-                let mut parts = vec![if n == 1 { "1 baixando".to_string() } else { format!("{n} baixando") }];
+                let mut parts = vec![if n == 1 { tr!("1 baixando").to_string() } else { trf!("{} baixando", n) }];
                 match connections {
                     0 => {}
-                    1 => parts.push("1 conexão".to_string()),
-                    n => parts.push(format!("{n} conexões")),
+                    1 => parts.push(tr!("1 conexão").to_string()),
+                    n => parts.push(trf!("{} conexões", n)),
                 }
                 if let Some(seconds) = left {
-                    parts.push(format!("termina em ~{}", format::duration(seconds)));
+                    parts.push(trf!("termina em ~{}", format::duration(seconds)));
                 }
                 parts.join(" · ")
             }

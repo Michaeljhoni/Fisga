@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use gtk::prelude::*;
 use gtk::{gio, glib};
+use fisga_i18n::tr;
 use fisga_ipc::{DownloadInfo, NewVersion, Request, Settings, State, Theme};
 use tokio::sync::mpsc;
 
@@ -81,7 +82,7 @@ impl App {
             power: RefCell::default(),
             settings: RefCell::default(),
             settings_loaded: Cell::new(false),
-            connection: RefCell::new(Err("conectando ao fisgad…".into())),
+            connection: RefCell::new(Err(tr!("conectando ao fisgad…").into())),
             startup_hold: RefCell::default(),
             background: Cell::new(false),
             persistent: Cell::new(false),

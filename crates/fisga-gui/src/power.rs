@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gtk::prelude::*;
 use gtk::glib;
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{PowerPlan, Request, WhenDone};
 
 use crate::window::send;
@@ -25,24 +26,24 @@ fn remaining(plan: &PowerPlan) -> u64 {
 
 pub fn text(plan: &PowerPlan) -> String {
     let what = match plan.action {
-        WhenDone::Suspend => "suspenso",
-        _ => "desligado",
+        WhenDone::Suspend => tr!("suspenso"),
+        _ => tr!("desligado"),
     };
-    format!("Os downloads agendados terminaram.\nO computador será {what} em {} s.", remaining(plan))
+    trf!("Os downloads agendados terminaram.\nO computador será {} em {} s.", what, remaining(plan))
 }
 
 impl PowerDialog {
     pub fn new(app: &gtk::Application, parent: Option<&gtk::ApplicationWindow>, plan: PowerPlan) -> Self {
         let window = gtk::Window::builder()
             .application(app)
-            .title("Fila concluída")
+            .title(tr!("Fila concluída"))
             .modal(parent.is_some())
             .resizable(false)
             .default_width(380)
             .build();
         window.set_transient_for(parent);
         let label = gtk::Label::builder().label(text(&plan)).xalign(0.0).wrap(true).build();
-        let cancel = gtk::Button::with_label("Cancelar");
+        let cancel = gtk::Button::with_label(tr!("Cancelar"));
         cancel.add_css_class("suggested-action");
         let buttons = gtk::Box::builder().halign(gtk::Align::End).build();
         buttons.append(&cancel);

@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
+use fisga_i18n::{tr, trf};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -179,8 +180,8 @@ async fn ensure_in(client: &reqwest::Client, dir: &Path, tools: &[Tool], note: &
     let missing: Vec<&Tool> =
         tools.iter().filter(|tool| !dir.join(&tool.program).exists() && !on_path(&tool.program)).collect();
     for tool in missing {
-        let say = |done, total| note(format!("Preparando os vídeos, só na primeira vez: {} ({})", tool.name, amount(done, total)));
-        install(client, dir, tool, &say).await.map_err(|e| format!("não foi possível preparar os vídeos ({}): {e}", tool.name))?;
+        let say = |done, total| note(trf!("Preparando os vídeos, só na primeira vez: {} ({})", tool.name, amount(done, total)));
+        install(client, dir, tool, &say).await.map_err(|e| trf!("não foi possível preparar os vídeos ({}): {}", tool.name, e))?;
         tracing::info!(tool = tool.name, "ferramenta de vídeo instalada");
     }
     if let Some(tool) = tools.first() {
@@ -206,7 +207,7 @@ async fn update(client: &reqwest::Client, dir: &Path, tool: &Tool, note: &(impl 
     if std::fs::read_to_string(sum_file(dir, tool)).is_ok_and(|installed| installed == latest) {
         return;
     }
-    let say = |done, total| note(format!("Atualizando o {} ({})", tool.name, amount(done, total)));
+    let say = |done, total| note(trf!("Atualizando o {} ({})", tool.name, amount(done, total)));
     // A copy in use cannot be replaced on Windows: tomorrow, then.
     match install(client, dir, tool, &say).await {
         Ok(()) => tracing::info!(tool = tool.name, "ferramenta de vídeo atualizada"),
@@ -217,7 +218,7 @@ async fn update(client: &reqwest::Client, dir: &Path, tool: &Tool, note: &(impl 
 fn amount(done: u64, total: Option<u64>) -> String {
     let mb = |bytes: u64| bytes / 1_000_000;
     match total {
-        Some(total) => format!("{} de {} MB", mb(done), mb(total)),
+        Some(total) => trf!("{} de {} MB", mb(done), mb(total)),
         None => format!("{} MB", mb(done)),
     }
 }
@@ -234,7 +235,7 @@ impl Sum {
             Sum::Listed { url, name } => {
                 let response = client.get(url).send().await.and_then(|r| r.error_for_status()).map_err(|e| e.to_string())?;
                 let list = response.text().await.map_err(|e| e.to_string())?;
-                find_sum(&list, name).ok_or_else(|| format!("{name} não está na lista de somas"))
+                find_sum(&list, name).ok_or_else(|| trf!("{} não está na lista de somas", name))
             }
         }
     }
@@ -260,7 +261,7 @@ async fn install(client: &reqwest::Client, dir: &Path, tool: &Tool, say: &(impl 
     let file = dir.join(format!("{}.part", tool.program));
     let result = fetch(client, &tool.url, &file, say).await.and_then(|sum| match sum == expected {
         true => Ok(()),
-        false => Err(format!("a soma de {} não confere", tool.url)),
+        false => Err(trf!("a soma de {} não confere", tool.url)),
     });
     let placed = match (result, tool.form) {
         (Err(e), _) => Err(e),
@@ -282,7 +283,7 @@ pub(crate) async fn fetch(client: &reqwest::Client, url: &str, file: &Path, say:
     say(0, total);
     loop {
         let chunk = tokio::time::timeout(STALLED, response.chunk()).await;
-        let chunk = chunk.map_err(|_| "a conexão parou".to_string())?.map_err(|e| e.to_string())?;
+        let chunk = chunk.map_err(|_| tr!("a conexão parou").to_string())?.map_err(|e| e.to_string())?;
         let Some(chunk) = chunk else { break };
         digest.update(&chunk);
         out.write_all(&chunk).await.map_err(|e| e.to_string())?;
@@ -313,7 +314,7 @@ async fn unzip(zip: &Path, dir: &Path, program: &str) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(&unpacked);
     std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
     let result = unzip_to(zip, &unpacked).await.and_then(|()| {
-        let found = find_file(&unpacked, program).ok_or_else(|| format!("{program} não está no arquivo"))?;
+        let found = find_file(&unpacked, program).ok_or_else(|| trf!("{} não está no arquivo", program))?;
         let from = found.parent().unwrap_or(&unpacked);
         let mut names: Vec<_> = std::fs::read_dir(from)
             .map_err(|e| e.to_string())?
@@ -338,8 +339,8 @@ async fn unzip_to(zip: &Path, dir: &Path) -> Result<(), String> {
     let status = crate::shell::program(&tar).arg("-xf").arg(zip).arg("-C").arg(dir).status().await;
     match status {
         Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(format!("o tar falhou ({status})")),
-        Err(e) => Err(format!("não foi possível iniciar o tar: {e}")),
+        Ok(status) => Err(trf!("o tar falhou ({})", status)),
+        Err(e) => Err(trf!("não foi possível iniciar o tar: {}", e)),
     }
 }
 

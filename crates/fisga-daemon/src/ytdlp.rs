@@ -7,6 +7,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{AddRequest, Cookie, MediaFormat, SourceKind};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -92,9 +93,10 @@ fn link_refused(error: &str) -> bool {
 /// yt-dlp's message, with what to do when the link was refused.
 fn explain(error: String) -> String {
     match link_refused(&error) {
-        true => format!(
+        true => trf!(
             "o site recusou o link do vídeo; links de vídeo capturados costumam expirar. Abra a página, \
-             dê play e baixe de novo. (yt-dlp: {error})"
+             dê play e baixe de novo. (yt-dlp: {})",
+            error
         ),
         false => error,
     }
@@ -127,7 +129,7 @@ pub async fn run(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel: 
             let from_page = AddRequest { url: page, kind: SourceKind::Page, ..request.clone() };
             match run_once(manager, id, &from_page, cancel).await {
                 JobResult::Failed(second) => {
-                    JobResult::Failed(format!("{error}\nPela página também não foi possível: {second}"))
+                    JobResult::Failed(trf!("{}\nPela página também não foi possível: {}", error, second))
                 }
                 other => other,
             }
@@ -319,7 +321,7 @@ fn media_formats(json: &Value) -> Vec<MediaFormat> {
     if let Some(audio) = m4a_audio {
         result.push(MediaFormat {
             key: AUDIO.into(),
-            label: "Somente áudio".into(),
+            label: tr!("Somente áudio").into(),
             ext: audio.get("ext").and_then(|e| e.as_str()).map(str::to_string),
             size: format_size(audio),
         });
@@ -360,17 +362,17 @@ pub async fn probe(id: u64, request: &AddRequest, proxy: &fisga_ipc::ProxySettin
         let _ = tokio::fs::remove_file(path).await;
     }
     let output = match output {
-        Err(_) => return Err("o yt-dlp demorou demais para responder".into()),
-        Ok(Err(e)) => return Err(format!("não foi possível iniciar o yt-dlp: {e}")),
+        Err(_) => return Err(tr!("o yt-dlp demorou demais para responder").into()),
+        Ok(Err(e)) => return Err(trf!("não foi possível iniciar o yt-dlp: {}", e)),
         Ok(Ok(output)) => output,
     };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let error = stderr.lines().rev().find(|l| l.starts_with("ERROR:")).unwrap_or("o yt-dlp falhou");
+        let error = stderr.lines().rev().find(|l| l.starts_with("ERROR:")).unwrap_or(tr!("o yt-dlp falhou"));
         return Err(error.trim_start_matches("ERROR:").trim().to_string());
     }
     let json: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("resposta inválida do yt-dlp: {e}"))?;
+        serde_json::from_slice(&output.stdout).map_err(|e| trf!("resposta inválida do yt-dlp: {}", e))?;
     Ok(parse_probe(&json))
 }
 
@@ -379,12 +381,14 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
         Ok(child) => child,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return JobResult::Failed(
-                "o yt-dlp não está instalado. Instale pelo gerenciador de pacotes da sua distro \
-                 (ex.: pacman -S yt-dlp ffmpeg deno)."
-                    .into(),
+                tr!(
+                    "o yt-dlp não está instalado. Instale pelo gerenciador de pacotes da sua distro \
+                     (ex.: pacman -S yt-dlp ffmpeg deno)."
+                )
+                .into(),
             )
         }
-        Err(e) => return JobResult::Failed(format!("não foi possível iniciar o yt-dlp: {e}")),
+        Err(e) => return JobResult::Failed(trf!("não foi possível iniciar o yt-dlp: {}", e)),
     };
 
     let (lines_tx, mut lines) = mpsc::unbounded_channel::<String>();
@@ -466,9 +470,9 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
         // 101: stopped by --max-downloads after the one file we wanted.
         Ok(status) if status.success() || status.code() == Some(101) => match final_path {
             Some(path) => JobResult::Completed(path),
-            None => JobResult::Failed("o yt-dlp terminou sem informar o arquivo gerado".into()),
+            None => JobResult::Failed(tr!("o yt-dlp terminou sem informar o arquivo gerado").into()),
         },
-        Ok(status) => JobResult::Failed(explain(last_error.unwrap_or_else(|| format!("o yt-dlp terminou com {status}")))),
+        Ok(status) => JobResult::Failed(explain(last_error.unwrap_or_else(|| trf!("o yt-dlp terminou com {}", status)))),
         Err(e) => JobResult::Failed(e.to_string()),
     }
 }

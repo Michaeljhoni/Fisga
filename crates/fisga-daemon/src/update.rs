@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{NewVersion, Response, UpdateStage};
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
@@ -118,12 +119,12 @@ impl Updater {
     pub fn install(self: &Arc<Self>, manager: &Arc<Manager>) -> Result<(), String> {
         let (installer, sums) = {
             let mut found = self.found.lock().unwrap();
-            let Some(found) = found.as_mut() else { return Err("não há versão nova a instalar".into()) };
+            let Some(found) = found.as_mut() else { return Err(tr!("não há versão nova a instalar").into()) };
             if found.info.stage.as_ref().is_some_and(UpdateStage::busy) {
-                return Err("a versão nova já está sendo instalada".into());
+                return Err(tr!("a versão nova já está sendo instalada").into());
             }
             let (Some(installer), Some(sums)) = (found.installer.clone(), found.sums.clone()) else {
-                return Err("aqui quem atualiza o Fisga é o gerenciador de pacotes do sistema".into());
+                return Err(tr!("aqui quem atualiza o Fisga é o gerenciador de pacotes do sistema").into());
             };
             (installer, sums)
         };
@@ -167,10 +168,10 @@ impl Updater {
         }
         let _ = std::fs::write(&said, &info.version);
         let body = match info.installable {
-            true => "Abra o Fisga para ver as novidades e atualizar.",
-            false => "Abra o Fisga para ver as novidades.",
+            true => tr!("Abra o Fisga para ver as novidades e atualizar."),
+            false => tr!("Abra o Fisga para ver as novidades."),
         };
-        crate::notify::send(&format!("Fisga {} disponível", info.version), body);
+        crate::notify::send(&trf!("Fisga {} disponível", info.version), body);
     }
 
     /// Installers of earlier updates (one still running is left for next time).
@@ -215,7 +216,7 @@ async fn latest(client: &reqwest::Client, url: &str) -> Result<Release, String> 
     let request = client.get(url).header(reqwest::header::ACCEPT, "application/vnd.github+json").timeout(TIMEOUT);
     let response = request.send().await.and_then(|r| r.error_for_status()).map_err(|e| e.to_string())?;
     let text = response.text().await.map_err(|e| e.to_string())?;
-    serde_json::from_str(&text).map_err(|e| format!("resposta inesperada do GitHub: {e}"))
+    serde_json::from_str(&text).map_err(|e| trf!("resposta inesperada do GitHub: {}", e))
 }
 
 /// The release, when newer than `current`, with this system's installer
@@ -266,13 +267,13 @@ async fn download(
     let list = response.text().await.map_err(|e| e.to_string())?;
     let named = list.lines().any(|line| line.split_whitespace().any(|word| word.trim_start_matches('*') == installer.name));
     let expected = crate::tools::find_sum(&list, &installer.name).filter(|_| named);
-    let expected = expected.ok_or_else(|| format!("{} não está na lista de somas", installer.name))?;
+    let expected = expected.ok_or_else(|| trf!("{} não está na lista de somas", installer.name))?;
     let part = dir.join(format!("{}.part", installer.name));
     let sum = crate::tools::fetch(client, &installer.browser_download_url, &part, say).await;
     let file = dir.join(&installer.name);
     let placed = match sum {
         Ok(sum) if sum == expected => std::fs::rename(&part, &file).map_err(|e| e.to_string()),
-        Ok(_) => Err("a soma do instalador baixado não confere".into()),
+        Ok(_) => Err(tr!("a soma do instalador baixado não confere").into()),
         Err(e) => Err(e),
     };
     let _ = std::fs::remove_file(&part);
@@ -294,7 +295,7 @@ async fn launch(file: &Path) -> Result<UpdateStage, String> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| format!("não foi possível iniciar o instalador: {e}"))?;
+        .map_err(|e| trf!("não foi possível iniciar o instalador: {}", e))?;
     Ok(UpdateStage::Installing)
 }
 
@@ -303,14 +304,14 @@ async fn launch(file: &Path) -> Result<UpdateStage, String> {
 async fn launch(file: &Path) -> Result<UpdateStage, String> {
     match crate::shell::program("open").arg(file).status().await {
         Ok(status) if status.success() => Ok(UpdateStage::Opened),
-        Ok(status) => Err(format!("o disco da versão nova não abriu ({status})")),
-        Err(e) => Err(format!("o disco da versão nova não abriu: {e}")),
+        Ok(status) => Err(trf!("o disco da versão nova não abriu ({})", status)),
+        Err(e) => Err(trf!("o disco da versão nova não abriu: {}", e)),
     }
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
 async fn launch(_: &Path) -> Result<UpdateStage, String> {
-    Err("aqui quem atualiza o Fisga é o gerenciador de pacotes do sistema".into())
+    Err(tr!("aqui quem atualiza o Fisga é o gerenciador de pacotes do sistema").into())
 }
 
 #[cfg(test)]

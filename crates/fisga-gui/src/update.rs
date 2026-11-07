@@ -6,6 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{NewVersion, Request, Response, UpdateStage};
 use gtk::prelude::*;
 use gtk::{gio, glib};
@@ -35,10 +36,10 @@ impl Banner {
         text.append(&title);
         text.append(&detail);
 
-        let notes = gtk::Button::with_label("Novidades");
-        let install = gtk::Button::with_label("Atualizar agora");
+        let notes = gtk::Button::with_label(tr!("Novidades"));
+        let install = gtk::Button::with_label(tr!("Atualizar agora"));
         install.add_css_class("suggested-action");
-        let close = gtk::Button::builder().icon_name("window-close-symbolic").tooltip_text("Agora não").build();
+        let close = gtk::Button::builder().icon_name("window-close-symbolic").tooltip_text(tr!("Agora não")).build();
         close.add_css_class("flat");
 
         let row = gtk::Box::builder().spacing(12).build();
@@ -57,7 +58,7 @@ impl Banner {
             let parent = w.clone();
             gtk::UriLauncher::new(&p.borrow()).launch(Some(&w), gio::Cancellable::NONE, move |result| {
                 if let Err(e) = result {
-                    show_error(Some(parent.upcast_ref()), "Não foi possível abrir a página", &e.to_string());
+                    show_error(Some(parent.upcast_ref()), tr!("Não foi possível abrir a página"), &e.to_string());
                 }
             });
         });
@@ -69,7 +70,7 @@ impl Banner {
             glib::spawn_future_local(async move {
                 if let Err(e) = ipc::call(Request::InstallUpdate).await {
                     button.set_sensitive(true);
-                    show_error(Some(w.upcast_ref()), "Não foi possível atualizar", &e.to_string());
+                    show_error(Some(w.upcast_ref()), tr!("Não foi possível atualizar"), &e.to_string());
                 }
             });
         });
@@ -83,18 +84,18 @@ impl Banner {
             self.root.set_reveal_child(false);
             return;
         };
-        self.title.set_label(&format!("Fisga {} disponível", release.version));
+        self.title.set_label(&trf!("Fisga {} disponível", release.version));
         let detail = match (&release.stage, release.installable) {
             (Some(stage), _) => stage.describe(),
-            (None, true) => format!(
+            (None, true) => trf!(
                 "Você está na {}. Os downloads em andamento param durante a atualização e continuam depois.",
                 fisga_ipc::VERSION
             ),
-            (None, false) => format!("Você está na {}. Atualize pelo gerenciador de pacotes do sistema.", fisga_ipc::VERSION),
+            (None, false) => trf!("Você está na {}. Atualize pelo gerenciador de pacotes do sistema.", fisga_ipc::VERSION),
         };
         self.detail.set_label(&detail);
         let failed = matches!(release.stage, Some(UpdateStage::Failed { .. }));
-        self.install.set_label(if failed { "Tentar de novo" } else { "Atualizar agora" });
+        self.install.set_label(if failed { tr!("Tentar de novo") } else { tr!("Atualizar agora") });
         self.install.set_visible(release.installable && release.stage != Some(UpdateStage::Opened));
         self.install.set_sensitive(!release.stage.as_ref().is_some_and(UpdateStage::busy));
         self.page.replace(release.page.clone());
@@ -111,12 +112,12 @@ pub fn check(window: &gtk::ApplicationWindow, found: impl Fn() + 'static) {
             Ok(Response::NewVersion { release: Some(_) }) => found(),
             Ok(Response::NewVersion { release: None }) => gtk::AlertDialog::builder()
                 .modal(true)
-                .message("O Fisga está atualizado")
-                .detail(format!("A versão {} é a mais nova.", fisga_ipc::VERSION))
+                .message(tr!("O Fisga está atualizado"))
+                .detail(trf!("A versão {} é a mais nova.", fisga_ipc::VERSION))
                 .build()
                 .show(Some(&window)),
             Ok(_) => {}
-            Err(e) => show_error(Some(window.upcast_ref()), "Não foi possível procurar atualizações", &e.to_string()),
+            Err(e) => show_error(Some(window.upcast_ref()), tr!("Não foi possível procurar atualizações"), &e.to_string()),
         }
     });
 }

@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context};
+use fisga_i18n::{tr, trf};
 use fisga_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
 use fisga_ipc::{
     AddRequest, Category, Checksum, Conflict, Direction, DownloadInfo, Hashing, LocalTime, PowerPlan, Response,
@@ -160,9 +161,9 @@ fn now() -> u64 {
 }
 
 fn check_url(url: &str) -> anyhow::Result<()> {
-    let parsed = url::Url::parse(url).context("URL inválida")?;
+    let parsed = url::Url::parse(url).context(tr!("URL inválida"))?;
     if !matches!(parsed.scheme(), "http" | "https" | "ftp") {
-        bail!("esquema não suportado: {}", parsed.scheme());
+        bail!(trf!("esquema não suportado: {}", parsed.scheme()));
     }
     Ok(())
 }
@@ -224,7 +225,7 @@ impl Manager {
     pub fn load(store: PathBuf, settings_path: PathBuf) -> anyhow::Result<Arc<Self>> {
         let mut inner = Inner { next_id: 1, jobs: BTreeMap::new() };
         if let Ok(data) = std::fs::read(&store) {
-            let stored: Stored = serde_json::from_slice(&data).context("downloads.json inválido")?;
+            let stored: Stored = serde_json::from_slice(&data).context(tr!("downloads.json inválido"))?;
             inner.next_id = stored.next_id;
             for StoredJob { mut info, request } in stored.jobs {
                 if info.state == State::Running {
@@ -294,7 +295,7 @@ impl Manager {
         let settings = settings.sanitized();
         if let Some(dir) = &settings.download_dir {
             if !dir.is_absolute() {
-                bail!("a pasta de downloads precisa ser um caminho absoluto");
+                bail!(tr!("a pasta de downloads precisa ser um caminho absoluto"));
             }
         }
         let old = self.settings();
@@ -339,7 +340,7 @@ impl Manager {
     fn check_queue(&self, queue: u64) -> anyhow::Result<()> {
         match self.settings().queue(queue) {
             Some(_) => Ok(()),
-            None => bail!("fila não encontrada: {queue}"),
+            None => bail!(trf!("fila não encontrada: {}", queue)),
         }
     }
 
@@ -349,7 +350,7 @@ impl Manager {
         {
             let mut inner = self.inner.lock().unwrap();
             let order = inner.next_order();
-            let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
+            let job = inner.jobs.get_mut(&id).context(tr!("download não encontrado"))?;
             if job.info.queue == queue {
                 return Ok(());
             }
@@ -369,7 +370,7 @@ impl Manager {
     pub fn reorder(self: &Arc<Self>, id: u64, direction: Direction) -> anyhow::Result<()> {
         {
             let mut inner = self.inner.lock().unwrap();
-            let job = inner.jobs.get(&id).context("download não encontrado")?;
+            let job = inner.jobs.get(&id).context(tr!("download não encontrado"))?;
             let queue = job.info.queue;
             let mut line: Vec<(i64, u64)> = inner
                 .jobs
@@ -454,13 +455,13 @@ impl Manager {
         referrer: Option<String>,
     ) -> anyhow::Result<Vec<u64>> {
         if urls.is_empty() {
-            bail!("nenhum endereço no lote");
+            bail!(tr!("nenhum endereço no lote"));
         }
         if urls.len() > fisga_ipc::MAX_BATCH {
-            bail!("são {} endereços; o máximo é {}", urls.len(), fisga_ipc::MAX_BATCH);
+            bail!(trf!("são {} endereços; o máximo é {}", urls.len(), fisga_ipc::MAX_BATCH));
         }
         for url in &urls {
-            check_url(url).with_context(|| format!("no lote: {url}"))?;
+            check_url(url).with_context(|| trf!("no lote: {}", url))?;
         }
         if let Some(queue) = queue {
             self.check_queue(queue)?;
@@ -598,9 +599,10 @@ impl Manager {
                 }
                 Ok(ytdlp::PageProbe::List { title }) => {
                     let what = title.map(|t| format!(" (\u{201c}{t}\u{201d})")).unwrap_or_default();
-                    info.error = Some(format!(
-                        "Este endereço é uma lista de vídeos{what}, não um vídeo: baixá-lo traria todos eles. \
-                         Abra o vídeo desejado e clique em Baixar de novo."
+                    info.error = Some(trf!(
+                        "Este endereço é uma lista de vídeos{}, não um vídeo: baixá-lo traria todos eles. \
+                         Abra o vídeo desejado e clique em Baixar de novo.",
+                        what
                     ));
                 }
                 Err(e) => tracing::info!(id, error = %e, "o yt-dlp não conseguiu analisar o endereço"),
@@ -619,9 +621,9 @@ impl Manager {
         let mut to_delete = Vec::new();
         {
             let mut inner = self.inner.lock().unwrap();
-            let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
+            let job = inner.jobs.get_mut(&id).context(tr!("download não encontrado"))?;
             if job.info.state != State::Pending {
-                bail!("o download #{id} não está aguardando confirmação");
+                bail!(trf!("o download #{} não está aguardando confirmação", id));
             }
             if let Some(error) = &job.info.error {
                 bail!("{error}");
@@ -634,8 +636,8 @@ impl Manager {
                 if !job.info.formats.iter().any(|f| f.key == format) {
                     let known: Vec<&str> = job.info.formats.iter().map(|f| f.key.as_str()).collect();
                     match known.is_empty() {
-                        true => bail!("este download não tem opções de qualidade"),
-                        false => bail!("qualidade desconhecida: {format} (opções: {})", known.join(", ")),
+                        true => bail!(tr!("este download não tem opções de qualidade")),
+                        false => bail!(trf!("qualidade desconhecida: {} (opções: {})", format, known.join(", "))),
                     }
                 }
                 job.request.format = Some(format);
@@ -694,7 +696,7 @@ impl Manager {
 
     pub fn pause(&self, id: u64) -> anyhow::Result<()> {
         let mut inner = self.inner.lock().unwrap();
-        let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
+        let job = inner.jobs.get_mut(&id).context(tr!("download não encontrado"))?;
         match job.info.state {
             // The job task notices the cancellation and reports Paused.
             State::Running => {
@@ -721,7 +723,7 @@ impl Manager {
         let forced = !self.queue_open(queue);
         {
             let mut inner = self.inner.lock().unwrap();
-            let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
+            let job = inner.jobs.get_mut(&id).context(tr!("download não encontrado"))?;
             // Resumed by hand: no longer waiting for a new address.
             job.info.awaiting_url = false;
             if matches!(job.info.state, State::Paused | State::Failed) {
@@ -737,7 +739,7 @@ impl Manager {
     }
 
     pub async fn remove(self: &Arc<Self>, id: u64, delete_file: bool) -> anyhow::Result<()> {
-        let job = self.inner.lock().unwrap().jobs.remove(&id).context("download não encontrado")?;
+        let job = self.inner.lock().unwrap().jobs.remove(&id).context(tr!("download não encontrado"))?;
         if let Some(cancel) = &job.cancel {
             cancel.cancel();
             // Give the engine a moment to flush before files are deleted.
@@ -808,7 +810,7 @@ impl Manager {
     pub fn set_speed_limit(&self, id: u64, limit: u64) -> anyhow::Result<()> {
         {
             let mut inner = self.inner.lock().unwrap();
-            let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
+            let job = inner.jobs.get_mut(&id).context(tr!("download não encontrado"))?;
             job.info.speed_limit = limit;
             job.limiter.set_rate(limit);
             let _ = self.updates.send(Response::Update { item: job.info.clone() });
@@ -980,14 +982,14 @@ impl Manager {
                     if let Some(total) = info.total {
                         info.downloaded = total;
                     }
-                    message = Some(("Download concluído".to_string(), info.name.clone()));
+                    message = Some((tr!("Download concluído").to_string(), info.name.clone()));
                 }
                 JobResult::Paused if requeue => info.state = State::Queued,
                 JobResult::Paused => info.state = State::Paused,
                 JobResult::Failed(error) => {
                     info.state = State::Failed;
                     info.error = Some(error.clone());
-                    message = Some(("Falha no download".to_string(), format!("{}\n{}", info.name, error)));
+                    message = Some((tr!("Falha no download").to_string(), format!("{}\n{}", info.name, error)));
                 }
             }
         });

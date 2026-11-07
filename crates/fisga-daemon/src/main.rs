@@ -18,6 +18,7 @@ use std::io::IsTerminal;
 use std::sync::Arc;
 
 use fisga_ipc::transport::{BoxStream, Listener, WriteHalf};
+use fisga_i18n::trf;
 use fisga_ipc::{Request, Response};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;
@@ -181,7 +182,7 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, updater: Arc<Updater
         let request = match serde_json::from_str::<Request>(&line) {
             Ok(request) => request,
             Err(e) => {
-                let _ = write(&mut writer, &Response::Error { message: format!("pedido inválido: {e}") }).await;
+                let _ = write(&mut writer, &Response::Error { message: trf!("pedido inválido: {}", e) }).await;
                 continue;
             }
         };
@@ -238,7 +239,7 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, updater: Arc<Updater
             },
             Request::CheckUpdate => match updater.check(&manager).await {
                 Ok(release) => Response::NewVersion { release },
-                Err(e) => Response::Error { message: format!("não foi possível procurar uma versão nova: {e}") },
+                Err(e) => Response::Error { message: trf!("não foi possível procurar uma versão nova: {}", e) },
             },
             Request::InstallUpdate => match updater.install(&manager) {
                 Ok(()) => Response::Ok,

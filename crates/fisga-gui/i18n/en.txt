@@ -1,3 +1,1017 @@
 # The English of fisga-gui's texts: each Portuguese text as it is in the code,
 # then its English after "= ", then a blank line. See crates/fisga-i18n.
 
+# format.rs
+
+Nenhum download em andamento
+= No downloads in progress
+
+{} baixando
+= {} downloading
+
+{} na fila
+= {} queued
+
+verificando…
+= checking…
+
+desconhecido
+= unknown
+
+{} de {}
+= {} of {}
+
+ARQUIVO
+= FILE
+
+VÍDEO
+= VIDEO
+
+%d/%m/%Y %H:%M
+= %Y-%m-%d %H:%M
+
+Aguardando confirmação
+= Awaiting confirmation
+
+Na fila
+= Queued
+
+Baixando
+= Downloading
+
+Pausado
+= Paused
+
+Concluído
+= Complete
+
+Erro
+= Error
+
+Este endereço já foi baixado: “{}”, em {}.
+= This address was already downloaded: “{}”, in {}.
+
+Este endereço já está na lista: “{}” ({}).
+= This address is already in the list: “{}” ({}).
+
+Conferindo a soma… {}%
+= Verifying checksum… {}%
+
+Conferindo a soma… {}
+= Verifying checksum… {}
+
+Concluído — atenção: não foi possível conferir a soma
+= Complete — warning: the checksum could not be verified
+
+Concluído — atenção: o {} não confere
+= Complete — warning: the {} does not match
+
+Concluído · soma conferida
+= Complete · checksum verified
+
+Aguardando novo endereço
+= Waiting for a new address
+
+Erro: {}
+= Error: {}
+
+Concluído — atenção: {}
+= Complete — warning: {}
+
+Baixando ({} conexões)
+= Downloading ({} connections)
+
+{} · máx. {}/s
+= {} · max {}/s
+
+# app.rs, ipc.rs
+
+conectando ao fisgad…
+= connecting to fisgad…
+
+o fisgad encerrou a conexão
+= fisgad closed the connection
+
+# window.rs
+
+Todos os downloads
+= All downloads
+
+Em andamento
+= Unfinished
+
+Concluídos
+= Finished
+
+Com erro
+= Failed
+
+Categorias
+= Categories
+
+Filas
+= Queues
+
+Todos
+= All
+
+Abrir
+= Open
+
+Abrir pasta
+= Open folder
+
+Conferir soma (SHA-256)…
+= Verify checksum (SHA-256)…
+
+Retomar
+= Resume
+
+Pausar
+= Pause
+
+Atualizar endereço…
+= Refresh address…
+
+Limitar velocidade…
+= Limit speed…
+
+Mover para cima
+= Move up
+
+Mover para baixo
+= Move down
+
+Mover para a fila
+= Move to queue
+
+Copiar endereço
+= Copy address
+
+Remover…
+= Remove…
+
+Propriedades
+= Properties
+
+Progresso
+= Progress
+
+Tamanho
+= Size
+
+Velocidade
+= Speed
+
+Restante
+= Time left
+
+Estado
+= Status
+
+Adicionado em
+= Added
+
+Adicionar em lote…
+= Add batch…
+
+Baixar de um site…
+= Download from a site…
+
+Importar lista…
+= Import list…
+
+Exportar lista…
+= Export list…
+
+Colunas
+= Columns
+
+Retomar todos
+= Resume all
+
+Pausar todos
+= Pause all
+
+Remover concluídos da lista
+= Remove finished from the list
+
+Filas e agendador
+= Queues and scheduler
+
+Preferências
+= Preferences
+
+Procurar atualizações
+= Check for updates
+
+Sobre o Fisga
+= About Fisga
+
+Retomar / confirmar
+= Resume / confirm
+
+Remover (Delete)
+= Remove (Delete)
+
+Menu
+= Menu
+
+Ver como lista
+= View as list
+
+Abrir o arquivo
+= Open the file
+
+Buscar (Ctrl+F)
+= Search (Ctrl+F)
+
+Nome
+= Name
+
+Adicionar URL
+= Add URL
+
+Adicionar um endereço (Ctrl+N)
+= Add an address (Ctrl+N)
+
+Recentes
+= Newest
+
+Antigos
+= Oldest
+
+Mais recentes no topo (clique para inverter)
+= Newest on top (click to reverse)
+
+Mais antigos no topo (clique para inverter)
+= Oldest on top (click to reverse)
+
+Nada para exportar
+= Nothing to export
+
+A lista mostrada está vazia.
+= The list shown is empty.
+
+Exportar lista
+= Export list
+
+Não foi possível exportar
+= Could not export
+
+Importar lista
+= Import list
+
+Não foi possível ler o arquivo
+= Could not read the file
+
+Sem conexão com o fisgad ({}). Tentando de novo…
+= No connection to fisgad ({}). Trying again…
+
+Nenhum download
+= No downloads
+
+1 download
+= 1 download
+
+{} downloads
+= {} downloads
+
+limite de {}/s
+= limit {}/s
+
+agendado — {}
+= scheduled — {}
+
+Gerenciador de downloads para Linux, Windows e macOS, inspirado no Internet Download Manager.
+= Download manager for Linux, Windows and macOS, inspired by Internet Download Manager.
+
+O fisgad recusou o pedido
+= fisgad refused the request
+
+Remover “{}”?
+= Remove “{}”?
+
+O arquivo pode continuar na pasta ou ser apagado junto (inclusive as partes já baixadas).
+= The file can stay in the folder or be deleted along with it (including the parts already downloaded).
+
+Cancelar
+= Cancel
+
+Remover da lista
+= Remove from list
+
+Remover e apagar o arquivo
+= Remove and delete the file
+
+Não foi possível abrir o arquivo
+= Could not open the file
+
+Não foi possível abrir a pasta
+= Could not open the folder
+
+Adicionar
+= Add
+
+Endereço do arquivo:
+= File address:
+
+# confirm.rs
+
+Novo download
+= New download
+
+definido ao baixar (vídeo de site, via yt-dlp)
+= set when downloading (site video, via yt-dlp)
+
+{} (o servidor não permite pausar e retomar)
+= {} (the server does not allow pausing and resuming)
+
+Alterar…
+= Change…
+
+Qualidade
+= Quality
+
+Já existe
+= Already exists
+
+Repetido
+= Duplicate
+
+Fila
+= Queue
+
+opcional: a SHA-256 publicada na página, para conferir o arquivo
+= optional: the SHA-256 published on the page, to verify the file
+
+Endereço
+= Address
+
+Salvar como
+= Save as
+
+Pasta
+= Folder
+
+Soma
+= Checksum
+
+Adicionar à fila
+= Add to queue
+
+Baixar agora
+= Download now
+
+pasta de Downloads
+= Downloads folder
+
+definido ao baixar
+= set when downloading
+
+Salvar como “{}”
+= Save as “{}”
+
+Já existe um arquivo com este nome nesta pasta.
+= A file with this name already exists in this folder.
+
+Substituir o arquivo existente
+= Replace the existing file
+
+Há um download incompleto deste arquivo nesta pasta.
+= There is an unfinished download of this file in this folder.
+
+Continuar de onde parou
+= Resume where it stopped
+
+Recomeçar do zero
+= Start over
+
+Salvar em
+= Save to
+
+Soma inválida: {}
+= Invalid checksum: {}
+
+Não foi possível confirmar: {}
+= Could not confirm: {}
+
+# speed.rs
+
+AO VIVO
+= LIVE
+
+1 baixando
+= 1 downloading
+
+1 conexão
+= 1 connection
+
+{} conexões
+= {} connections
+
+termina em ~{}
+= done in ~{}
+
+# progress.rs
+
+Download concluído
+= Download complete
+
+Baixado
+= Downloaded
+
+Retomável
+= Resumable
+
+No máximo
+= At most
+
+Limite
+= Limit
+
+Fechar
+= Close
+
+Sim (pode pausar e continuar depois)
+= Yes (can be paused and resumed later)
+
+Não
+= No
+
+Tentar de novo
+= Try again
+
+# properties.rs
+
+Link direto
+= Direct link
+
+Vídeo de site (pelo yt-dlp)
+= Site video (through yt-dlp)
+
+Transmissão (HLS/DASH)
+= Stream (HLS/DASH)
+
+{} de {} ({})
+= {} of {} ({})
+
+Situação
+= Status
+
+Página
+= Page
+
+Arquivo
+= File
+
+Tipo
+= Type
+
+Categoria
+= Category
+
+Conexões
+= Connections
+
+Limite próprio
+= Own speed limit
+
+Soma esperada
+= Expected checksum
+
+Soma do arquivo
+= File checksum
+
+# verify.rs
+
+Conferir
+= Verify
+
+Guardar
+= Save
+
+Lendo o arquivo… {}
+= Reading the file… {}
+
+{} do arquivo:\n{}
+= {} of the file:\n{}
+
+✓ Confere: é exatamente o arquivo publicado na página.
+= ✓ Matches: it is exactly the file published on the page.
+
+✗ Não confere: o arquivo pode estar corrompido ou ter sido trocado. Baixe-o de novo e, se continuar diferente, desconfie do site.
+= ✗ Does not match: the file may be corrupted or may have been replaced. Download it again and, if it is still different, do not trust the site.
+
+Não foi possível conferir: {}
+= Could not verify: {}
+
+Conferir soma
+= Verify checksum
+
+Cole a soma publicada na página de download (SHA-256, SHA-1, SHA-384 ou SHA-512) para conferir se “{}” é exatamente aquele arquivo. Sem ela, o Fisga só mostra a SHA-256 do arquivo.
+= Paste the checksum published on the download page (SHA-256, SHA-1, SHA-384 or SHA-512) to verify that “{}” is exactly that file. Without it, Fisga only shows the file’s SHA-256.
+
+Cole a soma publicada na página de download (SHA-256, SHA-1, SHA-384 ou SHA-512): quando “{}” terminar, o Fisga confere se é exatamente aquele arquivo.
+= Paste the checksum published on the download page (SHA-256, SHA-1, SHA-384 or SHA-512): when “{}” finishes, Fisga verifies that it is exactly that file.
+
+soma da página (opcional)
+= checksum from the page (optional)
+
+# refresh.rs
+
+Não foi possível abrir a página
+= Could not open the page
+
+Atualizar endereço
+= Refresh address
+
+O link de “{}” expirou ou mudou? Cole abaixo um novo endereço do mesmo arquivo. Ou clique em “Capturar do navegador” e baixe o arquivo de novo na página: o Fisga usa o link novo e continua de onde parou.
+= Has the link of “{}” expired or changed? Paste a new address of the same file below. Or click “Catch from browser” and download the file again on the page: Fisga uses the new link and resumes where it stopped.
+
+Abrir a página
+= Open the page
+
+Parar de esperar
+= Stop waiting
+
+Capturar do navegador
+= Catch from browser
+
+Atualizar
+= Refresh
+
+Não foi possível
+= Could not do it
+
+Não foi possível usar este endereço: {}
+= Could not use this address: {}
+
+# batch.rs
+
+Cole os endereços acima, um por linha.
+= Paste the addresses above, one per line.
+
+São {} endereços; o máximo é {}.
+= That is {} addresses; the maximum is {}.
+
+1 endereço: {}
+= 1 address: {}
+
+{} endereços: {} … {}
+= {} addresses: {} … {}
+
+Adicionar em lote
+= Add batch
+
+até
+= to
+
+  dígitos
+=   digits
+
+O * vira cada número (ou letra, de a até z). Começar em 01 deixa todos com 2 dígitos; ou escolha os dígitos (0 = como no início).
+= The * becomes each number (or letter, from a to z). Starting at 01 gives them all 2 digits; or choose the digits (0 = as at the start).
+
+De
+= From
+
+Padrão com *
+= Pattern with *
+
+Lista de endereços
+= List of addresses
+
+a de cada tipo de arquivo
+= the one for each file type
+
+Começar a baixar (entrar na fila)
+= Start downloading (join the queue)
+
+Salvar o lote em
+= Save the batch to
+
+Não foi possível adicionar o lote: {}
+= Could not add the batch: {}
+
+# grabber.rs
+
+Baixar de um site
+= Download from a site
+
+Quantos níveis de páginas seguir: 0 = só esta página
+= How many levels of pages to follow: 0 = only this page
+
+Procurar
+= Search
+
+níveis
+= levels
+
+Lê a página e, até o número de níveis, as páginas abaixo dela no mesmo site, e lista os arquivos que elas apontam.
+= Reads the page and, up to the number of levels, the pages below it on the same site, and lists the files they link to.
+
+Tipos
+= Types
+
+Nomes
+= Names
+
+Digite o endereço e clique em Procurar.
+= Type the address and click Search.
+
+Marcar todos
+= Check all
+
+Desmarcar todos
+= Uncheck all
+
+{} marcados · {} de {} com os filtros
+= {} checked · {} of {} with the filters
+
+Adicionar {}
+= Add {}
+
+Nenhum arquivo nas {} página(s) lida(s).
+= No files in the {} page(s) read.
+
+Baixar de um site — {} página(s)
+= Download from a site — {} page(s)
+
+Não foi possível procurar: {}
+= Could not search: {}
+
+Links da página
+= Page links
+
+Os links para arquivos da página aberta no navegador. Marque os que quiser baixar; “Procurar” lê a página de novo, seguindo os níveis.
+= The links to files on the page open in the browser. Check the ones you want to download; “Search” reads the page again, following the levels.
+
+Salvar os arquivos em
+= Save the files to
+
+Não foi possível adicionar: {}
+= Could not add: {}
+
+# power.rs
+
+suspenso
+= suspended
+
+desligado
+= turned off
+
+Os downloads agendados terminaram.\nO computador será {} em {} s.
+= The scheduled downloads are done.\nThe computer will be {} in {} s.
+
+Fila concluída
+= Queue finished
+
+# update.rs
+
+Novidades
+= What's new
+
+Atualizar agora
+= Update now
+
+Agora não
+= Not now
+
+Não foi possível atualizar
+= Could not update
+
+Fisga {} disponível
+= Fisga {} available
+
+Você está na {}. Os downloads em andamento param durante a atualização e continuam depois.
+= You have {}. Downloads in progress stop during the update and continue afterwards.
+
+Você está na {}. Atualize pelo gerenciador de pacotes do sistema.
+= You have {}. Update it with the system's package manager.
+
+O Fisga está atualizado
+= Fisga is up to date
+
+A versão {} é a mais nova.
+= Version {} is the latest.
+
+Não foi possível procurar atualizações
+= Could not check for updates
+
+# tray
+
+Abrir o Fisga
+= Open Fisga
+
+Adicionar URL…
+= Add URL…
+
+Sair
+= Quit
+
+# autostart.rs
+
+não encontrei a pasta de configuração (HOME)
+= could not find the configuration folder (HOME)
+
+não foi possível remover a entrada de {}
+= could not remove the entry from {}
+
+não foi possível gravar em {}
+= could not write to {}
+
+# prefs.rs
+
+Downloads do sistema
+= System Downloads
+
+{}: use HH:MM, como 02:00 ou 23:30.
+= {}: use HH:MM, like 02:00 or 23:30.
+
+Do sistema
+= System
+
+Sem proxy
+= No proxy
+
+Manual
+= Manual
+
+Proxy
+= Proxy
+
+“Do sistema” usa as variáveis http_proxy e https_proxy. Vale para todos os downloads, inclusive os vídeos de sites.
+= “System” uses the http_proxy and https_proxy variables. It applies to all downloads, including site videos.
+
+Endereço do proxy
+= Proxy address
+
+http://host:porta ou socks5://host:porta; com senha: socks5://usuário:senha@host:porta.
+= http://host:port or socks5://host:port; with a password: socks5://user:password@host:port.
+
+Logins por site
+= Logins per site
+
+Usuário e senha enviados aos links diretos do site, só por https (autenticação HTTP). Para valer também nos subdomínios, use *.exemplo.com. Ficam só no seu usuário, fora das configurações.
+= User name and password sent to the site's direct links, over https only (HTTP authentication). To include its subdomains, use *.example.com. They are kept only in your user account, outside the settings.
+
+Carregando…
+= Loading…
+
+Adicionar login
+= Add login
+
+arquivos.exemplo.com
+= files.example.com
+
+usuário
+= user
+
+senha
+= password
+
+Esquecer este login
+= Forget this login
+
+Não foi possível ler os logins do fisgad.
+= Could not read the logins from fisgad.
+
+Restaurar a lista padrão
+= Restore the default list
+
+Tipos de arquivo
+= File types
+
+Os downloads do navegador com estas extensões vão para o Fisga. Separe com espaços, sem ponto (safetensors, gguf, pdf...). Vídeos, músicas e arquivos compactados também são reconhecidos pelo tipo que o site informa.
+= Browser downloads with these extensions go to Fisga. Separate them with spaces, without a dot (safetensors, gguf, pdf...). Videos, music and compressed files are also recognized by the type the site reports.
+
+Tecla para baixar com o Fisga
+= Key to download with Fisga
+
+Segure ao clicar num link: ele vai para o Fisga, seja qual for o tipo de arquivo. Para os casos que escapam da lista acima.
+= Hold it while clicking a link: it goes to Fisga, whatever the file type. For the cases the list above misses.
+
+meubanco.com.br intranet.empresa.com
+= mybank.com intranet.company.com
+
+Sites excluídos
+= Excluded sites
+
+Os downloads destes sites ficam com o navegador, e os links deles copiados não abrem o Fisga. Vale também para os subdomínios. Separe com espaços. A tecla acima continua mandando um link ao Fisga.
+= Downloads from these sites stay with the browser, and their copied links do not open Fisga. It applies to their subdomains too. Separate them with spaces. The key above still sends a link to Fisga.
+
+Vale para a extensão do Fisga no navegador; ela recebe as mudanças em alguns segundos.
+= Applies to Fisga's browser extension; it gets the changes within a few seconds.
+
+Escuro
+= Dark
+
+Claro
+= Light
+
+Nenhuma
+= None
+
+Tema
+= Theme
+
+Na semana de uma data comemorativa, vale o tema da data.
+= In a holiday's week, the holiday's theme is used.
+
+Temas de datas comemorativas
+= Holiday themes
+
+Na semana da data, a janela principal ganha o fundo e as cores dela, com uma animação atrás dos downloads: confete no Carnaval, ovos na Páscoa, um coração neon no Dia dos Namorados, bandeirinhas na festa junina, morcegos no Halloween, neve e pisca-pisca no Natal e fogos no Ano-novo. A animação para quando o Fisga não está em uso.
+= In the holiday's week, the main window takes on its background and colors, with an animation behind the downloads: confetti at Carnival, eggs at Easter, a neon heart on Valentine's Day, bunting at the June festival, bats at Halloween, snow and twinkle lights at Christmas and fireworks at New Year. The animation stops when Fisga is not in use.
+
+Ver o tema de uma data
+= Preview a holiday's theme
+
+Enquanto as Preferências estiverem abertas.
+= While Preferences is open.
+
+Downloads ao mesmo tempo
+= Downloads at the same time
+
+Os outros desta fila esperam a vez.
+= The others in this queue wait their turn.
+
+Usar o agendador
+= Use the scheduler
+
+Os downloads desta fila só rodam no horário abaixo. “Baixar agora” e retomar um download à mão continuam valendo na hora.
+= This queue's downloads only run at the time below. “Download now” and resuming a download by hand still work right away.
+
+Começar às
+= Start at
+
+Parar às
+= Stop at
+
+No horário de parada, os downloads voltam para a fila. Sem horário, a fila vai até terminar.
+= At the stop time, the downloads go back to the queue. Without a time, the queue runs until it finishes.
+
+Dias
+= Days
+
+Ao terminar a fila
+= When the queue finishes
+
+Antes de suspender ou desligar, uma janela conta 60 segundos e deixa cancelar.
+= Before suspending or shutting down, a window counts down 60 seconds and lets you cancel.
+
+Escolha pelo menos um dia para o agendador.
+= Choose at least one day for the scheduler.
+
+Dê um nome à fila.
+= Give the queue a name.
+
+Nova fila
+= New queue
+
+Excluir a fila (os downloads dela vão para a fila principal)
+= Delete the queue (its downloads go to the main queue)
+
+Confira a fila
+= Check the queue
+
+Fila {}
+= Queue {}
+
+Padrão
+= Default
+
+Usar a pasta de Downloads do sistema
+= Use the system's Downloads folder
+
+Subpastas: {}. Os demais ficam na pasta de downloads.
+= Subfolders: {}. The rest stay in the download folder.
+
+Pasta de downloads
+= Download folder
+
+Separar por tipo de arquivo
+= Sort by file type
+
+Conexões por arquivo
+= Connections per file
+
+Para links diretos; vídeos de sites usam o yt-dlp.
+= For direct links; site videos use yt-dlp.
+
+Mostrar a janela de progresso
+= Show the progress window
+
+Ao clicar em “Baixar agora”.
+= When clicking “Download now”.
+
+Limite de velocidade (KB/s)
+= Speed limit (KB/s)
+
+Todos os downloads juntos; 0 = sem limite. Vale na hora, até para os que estão baixando.
+= All downloads together; 0 = no limit. It applies right away, even to those downloading.
+
+Capturar links copiados
+= Catch copied links
+
+Ao copiar o endereço de um vídeo, música, programa, arquivo compactado ou PDF, abre a janela “Novo download”. No Wayland, precisa do wl-clipboard.
+= Copying the address of a video, song, program, compressed file or PDF opens the “New download” window. On Wayland, it needs wl-clipboard.
+
+Ícone na bandeja
+= Tray icon
+
+Fechar a janela deixa o Fisga na bandeja, pronto para os downloads do navegador. Precisa de uma bandeja (waybar, noctalia, KDE...).
+= Closing the window leaves Fisga in the tray, ready for the browser's downloads. It needs a tray (waybar, noctalia, KDE...).
+
+Iniciar com a sessão
+= Start with the session
+
+Abre o Fisga na bandeja, sem janela, ao entrar no sistema.
+= Opens Fisga in the tray, without a window, when you log in.
+
+Uma vez por dia, no GitHub, onde o Fisga é publicado. Uma versão nova aparece na janela principal, para instalar com um clique.
+= Once a day, on GitHub, where Fisga is published. A new version shows in the main window, to install with one click.
+
+Uma vez por dia, no GitHub, onde o Fisga é publicado. Uma versão nova aparece na janela principal; quem a instala é o gerenciador de pacotes.
+= Once a day, on GitHub, where Fisga is published. A new version shows in the main window; the package manager installs it.
+
+Procurar versões novas do Fisga
+= Check for new versions of Fisga
+
+Idioma
+= Language
+
+Vale a partir da próxima vez que o Fisga abrir.
+= Takes effect the next time Fisga opens.
+
+mv "$FISGA_FILE" ~/Concluídos/
+= mv "$FISGA_FILE" ~/Finished/
+
+Tocar um som
+= Play a sound
+
+O som de “concluído” do sistema.
+= The system's “complete” sound.
+
+Verificar com o antivírus
+= Scan with the antivirus
+
+Usa o ClamAV (pacote clamav). Se achar um vírus, avisa, marca o download e não roda o comando abaixo.
+= Uses ClamAV (the clamav package). If it finds a virus, it warns, flags the download and does not run the command below.
+
+Rodar um comando
+= Run a command
+
+No shell, com o arquivo em $FISGA_FILE (e $FISGA_NAME, $FISGA_URL, $FISGA_DIR). Use as variáveis entre aspas. Vazio = nada.
+= In the shell, with the file in $FISGA_FILE (and $FISGA_NAME, $FISGA_URL, $FISGA_DIR). Put the variables in quotes. Empty = nothing.
+
+Geral
+= General
+
+Rede
+= Network
+
+Ao concluir
+= When done
+
+Navegador
+= Browser
+
+Aparência
+= Appearance
+
+Salvar
+= Save
+
+Confira o proxy
+= Check the proxy
+
+Não foi possível mudar o início com a sessão
+= Could not change starting with the session
+
+Não foi possível salvar
+= Could not save
+
+# festive.rs
+
+Carnaval
+= Carnival
+
+Páscoa
+= Easter
+
+Dia dos Namorados
+= Valentine's Day
+
+Festa junina
+= June festival
+
+Halloween
+= Halloween
+
+Natal
+= Christmas
+
+Ano-novo
+= New Year

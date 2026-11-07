@@ -11,16 +11,19 @@ use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use fisga_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{
     AddRequest, BrowserSettings, Category, Checksum, Conflict, Connection, Direction, DownloadInfo, ForceKey, Hashing,
-    ProxyMode, ProxySettings, Queue, Request, Response, Settings, SiteLogin, State, Theme, TimeOfDay, UpdateStage,
-    WhenDone, MAIN_QUEUE, WEEKDAYS,
+    Language, ProxyMode, ProxySettings, Queue, Request, Response, Settings, SiteLogin, State, Theme, TimeOfDay,
+    UpdateStage, WhenDone, MAIN_QUEUE, WEEKDAYS, WEEKDAYS_EN,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+// The help texts are attributes, not doc comments, to be translated: clap
+// builds them when parsing, after `main` chose the language.
 #[derive(Parser)]
-#[command(name = "fisga", version, about = "Fisga: gerenciador de downloads para Linux, Windows e macOS")]
+#[command(name = "fisga", version, about = tr!("Fisga: gerenciador de downloads para Linux, Windows e macOS"))]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -29,21 +32,17 @@ struct Cli {
 #[derive(clap::Args)]
 struct Source {
     url: String,
-    /// Pasta de destino (padrão: pasta de Downloads)
-    #[arg(short = 'o', long)]
+    #[arg(short = 'o', long, help = tr!("Pasta de destino (padrão: pasta de Downloads)"))]
     dir: Option<PathBuf>,
-    /// Nome do arquivo (padrão: detectado pelo servidor)
-    #[arg(short, long)]
+    #[arg(short, long, help = tr!("Nome do arquivo (padrão: detectado pelo servidor)"))]
     name: Option<String>,
-    /// Número máximo de conexões
-    #[arg(short, long)]
+    #[arg(short, long, help = tr!("Número máximo de conexões"))]
     connections: Option<usize>,
     #[arg(long)]
     referer: Option<String>,
     #[arg(long)]
     user_agent: Option<String>,
-    /// Cabeçalho extra, no formato "Nome: valor" (pode repetir)
-    #[arg(short = 'H', long = "header")]
+    #[arg(short = 'H', long = "header", help = tr!("Cabeçalho extra, no formato \"Nome: valor\" (pode repetir)"))]
     headers: Vec<String>,
 }
 
@@ -52,7 +51,7 @@ impl Source {
         self.headers
             .iter()
             .map(|h| {
-                let (name, value) = h.split_once(':').with_context(|| format!("cabeçalho inválido: {h}"))?;
+                let (name, value) = h.split_once(':').with_context(|| trf!("cabeçalho inválido: {}", h))?;
                 Ok((name.trim().to_string(), value.trim().to_string()))
             })
             .collect()
@@ -61,114 +60,87 @@ impl Source {
 
 #[derive(clap::Args)]
 struct SettingsArgs {
-    /// Pasta de downloads ("padrao" volta para a pasta de Downloads do sistema)
-    #[arg(long)]
+    #[arg(long, help = tr!("Pasta de downloads (\"padrao\" volta para a pasta de Downloads do sistema)"))]
     dir: Option<PathBuf>,
-    /// Separar por tipo de arquivo em subpastas (Vídeos, Músicas, Programas...)
-    #[arg(long)]
+    #[arg(long, help = tr!("Separar por tipo de arquivo em subpastas (Vídeos, Músicas, Programas...)"))]
     category_folders: Option<bool>,
-    /// Downloads ao mesmo tempo
-    #[arg(long)]
+    #[arg(long, help = tr!("Downloads ao mesmo tempo"))]
     max_parallel: Option<usize>,
-    /// Conexões por arquivo
-    #[arg(long)]
+    #[arg(long, help = tr!("Conexões por arquivo"))]
     connections: Option<usize>,
-    /// Abrir a janela de progresso ao confirmar um download
-    #[arg(long)]
+    #[arg(long, help = tr!("Abrir a janela de progresso ao confirmar um download"))]
     show_progress: Option<bool>,
-    /// Limite de velocidade de todos os downloads juntos, em KB/s (0 = sem limite)
-    #[arg(long)]
+    #[arg(long, help = tr!("Limite de velocidade de todos os downloads juntos, em KB/s (0 = sem limite)"))]
     speed_limit: Option<u64>,
-    /// Abrir a janela "Novo download" ao copiar o link de um arquivo
-    #[arg(long)]
+    #[arg(long, help = tr!("Abrir a janela \"Novo download\" ao copiar o link de um arquivo"))]
     watch_clipboard: Option<bool>,
-    /// Ícone na bandeja (o fisga-gui continua rodando ao fechar a janela)
-    #[arg(long)]
+    #[arg(long, help = tr!("Ícone na bandeja (o fisga-gui continua rodando ao fechar a janela)"))]
     tray: Option<bool>,
-    /// Proxy: "sistema" (variáveis http_proxy...), "nenhum", um endereço como
-    /// http://host:3128, ou "-" para ler o endereço da entrada padrão (com senha,
-    /// socks5://usuário:senha@host:1080, sem deixá-la no histórico do shell)
-    #[arg(long)]
+    #[arg(long, help = tr!("Proxy: \"sistema\" (variáveis http_proxy...), \"nenhum\", um endereço como http://host:3128, ou \"-\" para ler o endereço da entrada padrão (com senha, socks5://usuário:senha@host:1080, sem deixá-la no histórico do shell)"))]
     proxy: Option<String>,
-    /// Tocar um som ao concluir um download
-    #[arg(long)]
+    #[arg(long, help = tr!("Tocar um som ao concluir um download"))]
     sound: Option<bool>,
-    /// Verificar cada download concluído com o ClamAV
-    #[arg(long)]
+    #[arg(long, help = tr!("Verificar cada download concluído com o ClamAV"))]
     antivirus: Option<bool>,
-    /// Comando a rodar ao concluir (no shell, com o arquivo em "$FISGA_FILE"; "" = nenhum)
-    #[arg(long)]
+    #[arg(long, help = tr!("Comando a rodar ao concluir (no shell, com o arquivo em \"$FISGA_FILE\"; \"\" = nenhum)"))]
     on_complete: Option<String>,
-    /// Extensões que o navegador entrega ao Fisga, separadas por espaço ("padrao" = a lista padrão)
-    #[arg(long)]
+    #[arg(long, help = tr!("Extensões que o navegador entrega ao Fisga, separadas por espaço (\"padrao\" = a lista padrão)"))]
     file_types: Option<String>,
-    /// Tecla que, segurada ao clicar num link, manda o link ao Fisga: nenhuma, alt, ctrl+alt, shift+alt ou ctrl+shift
-    #[arg(long, value_parser = parse_force_key)]
+    #[arg(long, value_parser = parse_force_key, help = tr!("Tecla que, segurada ao clicar num link, manda o link ao Fisga: nenhuma, alt, ctrl+alt, shift+alt ou ctrl+shift"))]
     force_key: Option<ForceKey>,
-    /// Sites cujos downloads ficam com o navegador, separados por espaço ("nenhum" = limpa a lista)
-    #[arg(long)]
+    #[arg(long, help = tr!("Sites cujos downloads ficam com o navegador, separados por espaço (\"nenhum\" = limpa a lista)"))]
     excluded_sites: Option<String>,
-    /// Tema das janelas: escuro ou claro
-    #[arg(long, value_parser = parse_theme)]
+    #[arg(long, value_parser = parse_theme, help = tr!("Tema das janelas: escuro ou claro"))]
     theme: Option<Theme>,
-    /// Temas de datas comemorativas na janela principal (confete no Carnaval, neve no Natal...)
-    #[arg(long)]
+    #[arg(long, help = tr!("Temas de datas comemorativas na janela principal (confete no Carnaval, neve no Natal...)"))]
     festive: Option<bool>,
-    /// Procurar uma versão nova do Fisga uma vez por dia
-    #[arg(long)]
+    #[arg(long, help = tr!("Procurar uma versão nova do Fisga uma vez por dia"))]
     check_updates: Option<bool>,
+    #[arg(long, value_parser = parse_language, help = tr!("Idioma dos textos: auto (o do sistema), pt ou en"))]
+    language: Option<Language>,
 }
 
 #[derive(Subcommand)]
 enum LoginCommand {
-    /// Lista os sites com login (sem as senhas)
+    #[command(about = tr!("Lista os sites com login (sem as senhas)"))]
     List,
-    /// Guarda o usuário e a senha de um site; a senha é lida da entrada padrão
+    #[command(about = tr!("Guarda o usuário e a senha de um site; a senha é lida da entrada padrão"))]
     Add { host: String, user: String },
-    /// Esquece o login de um site
+    #[command(about = tr!("Esquece o login de um site"))]
     Rm { host: String },
 }
 
 #[derive(clap::Args)]
 struct ScheduleArgs {
-    /// Liga o agendador: a fila só roda no horário
-    #[arg(long, conflicts_with = "off")]
+    #[arg(long, conflicts_with = "off", help = tr!("Liga o agendador: a fila só roda no horário"))]
     on: bool,
-    /// Desliga o agendador: a fila roda sempre
-    #[arg(long)]
+    #[arg(long, help = tr!("Desliga o agendador: a fila roda sempre"))]
     off: bool,
-    /// Horário de início, HH:MM
-    #[arg(long, value_parser = parse_time)]
+    #[arg(long, value_parser = parse_time, help = tr!("Horário de início, HH:MM"))]
     start: Option<TimeOfDay>,
-    /// Horário de parada, HH:MM, ou "nenhum" (vai até terminar a fila)
-    #[arg(long, value_parser = parse_stop)]
+    #[arg(long, value_parser = parse_stop, help = tr!("Horário de parada, HH:MM, ou \"nenhum\" (vai até terminar a fila)"))]
     stop: Option<Stop>,
-    /// Dias: "todos" ou uma lista como "seg,ter,qua,qui,sex"
-    #[arg(long, value_parser = |text: &str| parse_days(text).map(Days))]
+    #[arg(long, help = tr!("Dias: \"todos\" ou uma lista como \"seg,ter,qua,qui,sex\""), value_parser = |text: &str| parse_days(text).map(Days))]
     days: Option<Days>,
-    /// Ao terminar a fila: nada, suspender ou desligar
-    #[arg(long, value_parser = parse_when_done)]
+    #[arg(long, value_parser = parse_when_done, help = tr!("Ao terminar a fila: nada, suspender ou desligar"))]
     when_done: Option<WhenDone>,
-    /// Cancela a suspensão ou o desligamento planejado
-    #[arg(long, conflicts_with_all = ["on", "off", "start", "stop", "days", "when_done"])]
+    #[arg(long, conflicts_with_all = ["on", "off", "start", "stop", "days", "when_done"], help = tr!("Cancela a suspensão ou o desligamento planejado"))]
     cancel: bool,
-    /// Fila (número em "fisga queue"; padrão: a principal)
-    #[arg(short = 'Q', long, default_value_t = MAIN_QUEUE)]
+    #[arg(short = 'Q', long, default_value_t = MAIN_QUEUE, help = tr!("Fila (número em \"fisga queue\"; padrão: a principal)"))]
     queue_id: u64,
 }
 
 #[derive(Subcommand)]
 enum QueueCommand {
-    /// Lista as filas
+    #[command(about = tr!("Lista as filas"))]
     List,
-    /// Cria uma fila
+    #[command(about = tr!("Cria uma fila"))]
     Add {
         name: String,
-        /// Downloads desta fila ao mesmo tempo
-        #[arg(long, default_value_t = 1)]
+        #[arg(long, default_value_t = 1, help = tr!("Downloads desta fila ao mesmo tempo"))]
         max_parallel: usize,
     },
-    /// Muda o nome ou o número de downloads ao mesmo tempo de uma fila
+    #[command(about = tr!("Muda o nome ou o número de downloads ao mesmo tempo de uma fila"))]
     Set {
         id: u64,
         #[arg(long)]
@@ -176,212 +148,170 @@ enum QueueCommand {
         #[arg(long)]
         max_parallel: Option<usize>,
     },
-    /// Exclui uma fila (os downloads dela vão para a fila principal)
+    #[command(about = tr!("Exclui uma fila (os downloads dela vão para a fila principal)"))]
     Rm { id: u64 },
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Envia um download para o daemon (fisgad)
+    #[command(about = tr!("Envia um download para o daemon (fisgad)"))]
     Add {
         #[command(flatten)]
         source: Source,
-        /// Acompanha o progresso até terminar
-        #[arg(short, long)]
+        #[arg(short, long, help = tr!("Acompanha o progresso até terminar"))]
         wait: bool,
-        /// Pede confirmação na janela "Novo download" (fisga-gui) antes de começar
-        #[arg(long, conflicts_with = "wait")]
+        #[arg(long, conflicts_with = "wait", help = tr!("Pede confirmação na janela \"Novo download\" (fisga-gui) antes de começar"))]
         confirm: bool,
-        /// Fila do download (número em "fisga queue")
-        #[arg(short = 'Q', long)]
+        #[arg(short = 'Q', long, help = tr!("Fila do download (número em \"fisga queue\")"))]
         queue_id: Option<u64>,
-        /// Soma SHA-256 (ou SHA-1/384/512) publicada na página: o arquivo é conferido ao terminar
-        #[arg(long, value_parser = Checksum::parse)]
+        #[arg(long, value_parser = Checksum::parse, help = tr!("Soma SHA-256 (ou SHA-1/384/512) publicada na página: o arquivo é conferido ao terminar"))]
         checksum: Option<Checksum>,
     },
-    /// Confere a soma SHA-256 (ou SHA-1/384/512) do arquivo de um download
+    #[command(about = tr!("Confere a soma SHA-256 (ou SHA-1/384/512) do arquivo de um download"))]
     Verify {
         id: u64,
-        /// A soma publicada na página do download; sem ela, só mostra a SHA-256 do arquivo
-        #[arg(value_parser = Checksum::parse)]
+        #[arg(value_parser = Checksum::parse, help = tr!("A soma publicada na página do download; sem ela, só mostra a SHA-256 do arquivo"))]
         checksum: Option<Checksum>,
     },
-    /// Limite de velocidade de um download, em KB/s (0 = só o limite geral)
+    #[command(about = tr!("Limite de velocidade de um download, em KB/s (0 = só o limite geral)"))]
     Limit { id: u64, kb_per_second: u64 },
-    /// Escreve os endereços da lista, um por linha (importe com "fisga batch --file")
+    #[command(about = tr!("Escreve os endereços da lista, um por linha (importe com \"fisga batch --file\")"))]
     Export {
-        /// Só os que ainda não terminaram
-        #[arg(long)]
+        #[arg(long, help = tr!("Só os que ainda não terminaram"))]
         unfinished: bool,
-        /// Só os desta fila (número em "fisga queue")
-        #[arg(short = 'Q', long)]
+        #[arg(short = 'Q', long, help = tr!("Só os desta fila (número em \"fisga queue\")"))]
         queue_id: Option<u64>,
     },
-    /// Procura os arquivos de um site (o "Grabber" do IDM): lista, ou adiciona com --add
+    #[command(about = tr!("Procura os arquivos de um site (o \"Grabber\" do IDM): lista, ou adiciona com --add"))]
     Grab {
         url: String,
-        /// Quantos níveis de páginas seguir (0 = só esta página; máximo 3)
-        #[arg(short, long, default_value_t = 1)]
+        #[arg(short, long, default_value_t = 1, help = tr!("Quantos níveis de páginas seguir (0 = só esta página; máximo 3)"))]
         depth: u8,
-        /// Só estes tipos: video, musica, imagem, documento, compactado, programa, outro
-        #[arg(short = 't', long = "type", value_parser = |text: &str| parse_categories(text).map(Categories))]
+        #[arg(short = 't', long = "type", help = tr!("Só estes tipos: video, musica, imagem, documento, compactado, programa, outro"), value_parser = |text: &str| parse_categories(text).map(Categories))]
         types: Option<Categories>,
-        /// Só nomes assim, com * e ? (ex.: "*.pdf aula_??.mp4")
-        #[arg(short, long, default_value = "")]
+        #[arg(short, long, default_value = "", help = tr!("Só nomes assim, com * e ? (ex.: \"*.pdf aula_??.mp4\")"))]
         pattern: String,
-        /// Adiciona os encontrados à fila em vez de só listar
-        #[arg(long)]
+        #[arg(long, help = tr!("Adiciona os encontrados à fila em vez de só listar"))]
         add: bool,
-        /// Pasta de destino (com --add)
-        #[arg(short = 'o', long, requires = "add")]
+        #[arg(short = 'o', long, requires = "add", help = tr!("Pasta de destino (com --add)"))]
         dir: Option<PathBuf>,
-        /// Fila (com --add)
-        #[arg(short = 'Q', long, requires = "add")]
+        #[arg(short = 'Q', long, requires = "add", help = tr!("Fila (com --add)"))]
         queue_id: Option<u64>,
-        /// Adiciona pausados (com --add)
-        #[arg(long, requires = "add")]
+        #[arg(long, requires = "add", help = tr!("Adiciona pausados (com --add)"))]
         paused: bool,
     },
-    /// Vários downloads de uma vez (o "download em lote" do IDM), direto na fila
+    #[command(about = tr!("Vários downloads de uma vez (o \"download em lote\" do IDM), direto na fila"))]
     Batch {
-        /// Endereço com um * no lugar do número ou da letra, ex.: https://site/aula_*.mp4
-        #[arg(required_unless_present = "file", requires_all = ["from", "to"])]
+        #[arg(required_unless_present = "file", requires_all = ["from", "to"], help = tr!("Endereço com um * no lugar do número ou da letra, ex.: https://site/aula_*.mp4"))]
         template: Option<String>,
-        /// Primeiro número ou letra (01 deixa os números com 2 dígitos)
-        #[arg(long)]
+        #[arg(long, help = tr!("Primeiro número ou letra (01 deixa os números com 2 dígitos)"))]
         from: Option<String>,
-        /// Último número ou letra
-        #[arg(long)]
+        #[arg(long, help = tr!("Último número ou letra"))]
         to: Option<String>,
-        /// Dígitos dos números, ex.: 3 dá 001, 002... (padrão: os do início)
-        #[arg(long, default_value_t = 0)]
+        #[arg(long, default_value_t = 0, help = tr!("Dígitos dos números, ex.: 3 dá 001, 002... (padrão: os do início)"))]
         width: usize,
-        /// Arquivo com os endereços, um por linha ("-" = entrada padrão)
-        #[arg(long, conflicts_with = "template")]
+        #[arg(long, conflicts_with = "template", help = tr!("Arquivo com os endereços, um por linha (\"-\" = entrada padrão)"))]
         file: Option<PathBuf>,
-        /// Pasta de destino (padrão: a de cada tipo de arquivo)
-        #[arg(short = 'o', long)]
+        #[arg(short = 'o', long, help = tr!("Pasta de destino (padrão: a de cada tipo de arquivo)"))]
         dir: Option<PathBuf>,
-        /// Fila (número em "fisga queue")
-        #[arg(short = 'Q', long)]
+        #[arg(short = 'Q', long, help = tr!("Fila (número em \"fisga queue\")"))]
         queue_id: Option<u64>,
-        /// Adiciona pausados, sem entrar na fila
-        #[arg(long)]
+        #[arg(long, help = tr!("Adiciona pausados, sem entrar na fila"))]
         paused: bool,
-        /// Só mostra os endereços, sem adicionar
-        #[arg(long)]
+        #[arg(long, help = tr!("Só mostra os endereços, sem adicionar"))]
         dry_run: bool,
     },
-    /// Atualiza o endereço de um download cujo link expirou (continua de onde parou)
+    #[command(about = tr!("Atualiza o endereço de um download cujo link expirou (continua de onde parou)"))]
     Refresh {
         id: u64,
-        /// O novo endereço do mesmo arquivo
-        #[arg(required_unless_present_any = ["capture", "cancel"], conflicts_with_all = ["capture", "cancel"])]
+        #[arg(required_unless_present_any = ["capture", "cancel"], conflicts_with_all = ["capture", "cancel"], help = tr!("O novo endereço do mesmo arquivo"))]
         url: Option<String>,
-        /// Espera o navegador mandar o mesmo arquivo de novo e usa o link dele
-        #[arg(long, conflicts_with = "cancel")]
+        #[arg(long, conflicts_with = "cancel", help = tr!("Espera o navegador mandar o mesmo arquivo de novo e usa o link dele"))]
         capture: bool,
-        /// Para de esperar o novo endereço
-        #[arg(long)]
+        #[arg(long, help = tr!("Para de esperar o novo endereço"))]
         cancel: bool,
     },
-    /// Usuário e senha por site (autenticação HTTP dos links diretos)
+    #[command(about = tr!("Usuário e senha por site (autenticação HTTP dos links diretos)"))]
     Login {
         #[command(subcommand)]
         command: Option<LoginCommand>,
     },
-    /// Mostra, cria, altera ou exclui filas
+    #[command(about = tr!("Mostra, cria, altera ou exclui filas"))]
     Queue {
         #[command(subcommand)]
         command: Option<QueueCommand>,
     },
-    /// Move um download para outra fila, ou dentro da fila dele
+    #[command(about = tr!("Move um download para outra fila, ou dentro da fila dele"))]
     Move {
         id: u64,
-        /// Para o fim desta fila
-        #[arg(short = 'Q', long, conflicts_with_all = ["up", "down", "top", "bottom"])]
+        #[arg(short = 'Q', long, conflicts_with_all = ["up", "down", "top", "bottom"], help = tr!("Para o fim desta fila"))]
         queue_id: Option<u64>,
         #[arg(long)]
         up: bool,
         #[arg(long)]
         down: bool,
-        /// Para o começo da fila
-        #[arg(long)]
+        #[arg(long, help = tr!("Para o começo da fila"))]
         top: bool,
-        /// Para o fim da fila
-        #[arg(long)]
+        #[arg(long, help = tr!("Para o fim da fila"))]
         bottom: bool,
     },
-    /// Baixa em primeiro plano, sem o daemon
+    #[command(about = tr!("Baixa em primeiro plano, sem o daemon"))]
     Get {
         #[command(flatten)]
         source: Source,
     },
-    /// Lista os downloads
+    #[command(about = tr!("Lista os downloads"))]
     List,
-    /// Confirma um download que aguarda na janela "Novo download"
+    #[command(about = tr!("Confirma um download que aguarda na janela \"Novo download\""))]
     Confirm {
         id: u64,
-        /// Coloca na fila em vez de começar agora
-        #[arg(long)]
+        #[arg(long, help = tr!("Coloca na fila em vez de começar agora"))]
         queue: bool,
-        /// Pasta de destino
-        #[arg(short = 'o', long)]
+        #[arg(short = 'o', long, help = tr!("Pasta de destino"))]
         dir: Option<PathBuf>,
-        /// Nome do arquivo
-        #[arg(short, long)]
+        #[arg(short, long, help = tr!("Nome do arquivo"))]
         name: Option<String>,
-        /// Qualidade de um vídeo de site: altura (1080, 720...) ou "audio"
-        #[arg(short, long)]
+        #[arg(short, long, help = tr!("Qualidade de um vídeo de site: altura (1080, 720...) ou \"audio\""))]
         quality: Option<String>,
-        /// Se o arquivo já existir: rename (novo nome), overwrite (substituir) ou resume (continuar)
-        #[arg(long, value_parser = parse_conflict)]
+        #[arg(long, value_parser = parse_conflict, help = tr!("Se o arquivo já existir: rename (novo nome), overwrite (substituir) ou resume (continuar)"))]
         if_exists: Option<Conflict>,
-        /// Fila do download (número em "fisga queue")
-        #[arg(short = 'Q', long)]
+        #[arg(short = 'Q', long, help = tr!("Fila do download (número em \"fisga queue\")"))]
         queue_id: Option<u64>,
-        /// Soma que o arquivo deve ter (SHA-256, SHA-1, SHA-384 ou SHA-512)
-        #[arg(long, value_parser = Checksum::parse)]
+        #[arg(long, value_parser = Checksum::parse, help = tr!("Soma que o arquivo deve ter (SHA-256, SHA-1, SHA-384 ou SHA-512)"))]
         checksum: Option<Checksum>,
     },
-    /// Pausa um download
+    #[command(about = tr!("Pausa um download"))]
     Pause { id: u64 },
-    /// Retoma um download pausado ou com erro
+    #[command(about = tr!("Retoma um download pausado ou com erro"))]
     Resume { id: u64 },
-    /// Remove um download da lista
+    #[command(about = tr!("Remove um download da lista"))]
     Rm {
         id: u64,
-        /// Apaga também o arquivo (ou as partes baixadas)
-        #[arg(long)]
+        #[arg(long, help = tr!("Apaga também o arquivo (ou as partes baixadas)"))]
         delete_file: bool,
     },
-    /// Mostra as mudanças em tempo real
+    #[command(about = tr!("Mostra as mudanças em tempo real"))]
     Watch,
-    /// Registra o host nativo nos navegadores (Chrome, Chromium, Brave, Edge, Vivaldi, Firefox...)
+    #[command(about = tr!("Registra o host nativo nos navegadores (Chrome, Chromium, Brave, Edge, Vivaldi, Firefox...)"))]
     InstallHosts {
-        /// ID extra de extensão Chrome autorizada (ex.: ao carregar sem a chave do manifesto)
-        #[arg(long = "chrome-id")]
+        #[arg(long = "chrome-id", help = tr!("ID extra de extensão Chrome autorizada (ex.: ao carregar sem a chave do manifesto)"))]
         chrome_ids: Vec<String>,
-        /// Remove os registros em vez de criar
-        #[arg(long, conflicts_with = "system")]
+        #[arg(long, conflicts_with = "system", help = tr!("Remove os registros em vez de criar"))]
         uninstall: bool,
-        /// Para pacotes: grava os registros do sistema (todos os usuários) dentro desta pasta ($pkgdir)
-        #[arg(long, requires = "host_path")]
+        #[arg(long, requires = "host_path", help = tr!("Para pacotes: grava os registros do sistema (todos os usuários) dentro desta pasta ($pkgdir)"))]
         system: Option<PathBuf>,
-        /// Para pacotes: onde o fisga-native-host fica depois de instalado (ex.: /usr/bin/fisga-native-host)
-        #[arg(long, requires = "system")]
+        #[arg(long, requires = "system", help = tr!("Para pacotes: onde o fisga-native-host fica depois de instalado (ex.: /usr/bin/fisga-native-host)"))]
         host_path: Option<PathBuf>,
     },
-    /// Mostra ou altera as configurações do daemon
+    #[command(about = tr!("Mostra ou altera as configurações do daemon"))]
     Settings(SettingsArgs),
-    /// Mostra ou altera o agendador (horário da fila e o que fazer ao terminar)
+    #[command(about = tr!("Mostra ou altera o agendador (horário da fila e o que fazer ao terminar)"))]
     Schedule(ScheduleArgs),
-    /// Encerra o daemon (pausa os downloads em andamento)
+    #[command(about = tr!("Encerra o daemon (pausa os downloads em andamento)"))]
     Stop,
-    /// Procura uma versão nova do Fisga
+    #[command(about = tr!("Procura uma versão nova do Fisga"))]
     Update {
-        /// Baixa e instala a versão nova (Windows e macOS); o Fisga fecha e abre de novo
-        #[arg(long)]
+        #[arg(long, help = tr!("Baixa e instala a versão nova (Windows e macOS); o Fisga fecha e abre de novo"))]
         install: bool,
     },
 }
@@ -408,28 +338,28 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Grab { url, depth, types, pattern, add, dir, queue_id, paused } => {
             fisga_ipc::ensure_daemon().await?;
-            eprintln!("procurando em {url} (profundidade {depth})…");
+            eprintln!("{}", trf!("procurando em {} (profundidade {})…", url, depth));
             let Response::Grabbed { links, pages } = fisga_ipc::call(&Request::Grab { url: url.clone(), depth }).await? else {
-                bail!("resposta inesperada do daemon");
+                bail!(tr!("resposta inesperada do daemon"));
             };
             let types = types.map(|Categories(types)| types).unwrap_or_default();
             let found: Vec<_> = links.iter().filter(|link| fisga_ipc::grab_filter(link, &types, &pattern)).collect();
-            eprintln!("{} arquivo(s) em {pages} página(s); {} com os filtros", links.len(), found.len());
+            eprintln!("{}", trf!("{} arquivo(s) em {} página(s); {} com os filtros", links.len(), pages, found.len()));
             if !add {
                 found.iter().for_each(|link| println!("{}", link.url));
                 return Ok(());
             }
             if found.is_empty() {
-                bail!("nada para adicionar");
+                bail!(tr!("nada para adicionar"));
             }
             let urls = found.iter().map(|link| link.url.clone()).collect();
             let output_dir = dir.map(|d| std::path::absolute(&d).unwrap_or(d));
             let Response::AddedBatch { ids } =
                 fisga_ipc::call(&Request::AddBatch { urls, output_dir, queue: queue_id, start: !paused, referrer: Some(url) }).await?
             else {
-                bail!("resposta inesperada do daemon");
+                bail!(tr!("resposta inesperada do daemon"));
             };
-            println!("{} downloads adicionados", ids.len());
+            println!("{}", trf!("{} downloads adicionados", ids.len()));
             Ok(())
         }
         Command::Batch { template, from, to, width, file, dir, queue_id, paused, dry_run } => {
@@ -441,14 +371,14 @@ async fn main() -> anyhow::Result<()> {
                 (None, Some(file)) => {
                     let text = match file.as_os_str() == "-" {
                         true => std::io::read_to_string(std::io::stdin())?,
-                        false => std::fs::read_to_string(&file).with_context(|| format!("não li {}", file.display()))?,
+                        false => std::fs::read_to_string(&file).with_context(|| trf!("não li {}", file.display()))?,
                     };
                     fisga_ipc::parse_url_list(&text)
                 }
-                (None, None) => bail!("diga o endereço com * (e --from/--to) ou --file"),
+                (None, None) => bail!(tr!("diga o endereço com * (e --from/--to) ou --file")),
             };
             if urls.is_empty() {
-                bail!("nenhum endereço encontrado");
+                bail!(tr!("nenhum endereço encontrado"));
             }
             if dry_run {
                 urls.iter().for_each(|url| println!("{url}"));
@@ -458,19 +388,19 @@ async fn main() -> anyhow::Result<()> {
             let output_dir = dir.map(|d| std::path::absolute(&d).unwrap_or(d));
             let request = Request::AddBatch { urls, output_dir, queue: queue_id, start: !paused, referrer: None };
             let Response::AddedBatch { ids } = fisga_ipc::call(&request).await? else {
-                bail!("resposta inesperada do daemon");
+                bail!(tr!("resposta inesperada do daemon"));
             };
             match (ids.first(), ids.last()) {
                 (Some(first), Some(last)) if ids.len() > 1 => {
-                    println!("{} downloads adicionados (#{first} a #{last})", ids.len())
+                    println!("{}", trf!("{} downloads adicionados (#{} a #{})", ids.len(), first, last))
                 }
-                _ => println!("1 download adicionado"),
+                _ => println!("{}", tr!("1 download adicionado")),
             }
             Ok(())
         }
         Command::Export { unfinished, queue_id } => {
             let Response::Downloads { mut items } = fisga_ipc::call(&Request::List).await? else {
-                bail!("resposta inesperada do daemon");
+                bail!(tr!("resposta inesperada do daemon"));
             };
             items.sort_by_key(|item| (item.order, item.id));
             items
@@ -483,21 +413,21 @@ async fn main() -> anyhow::Result<()> {
         Command::Limit { id, kb_per_second } => {
             simple(Request::SetSpeedLimit { id, limit: kb_per_second * 1024 }).await?;
             match kb_per_second {
-                0 => println!("download #{id}: sem limite próprio"),
-                kb => println!("download #{id}: no máximo {}/s", bytes(kb * 1024)),
+                0 => println!("{}", trf!("download #{}: sem limite próprio", id)),
+                kb => println!("{}", trf!("download #{}: no máximo {}/s", id, bytes(kb * 1024))),
             }
             Ok(())
         }
         Command::Refresh { id, url, capture, cancel } => match url {
             Some(url) => {
                 simple(Request::RefreshUrl { id, url }).await?;
-                println!("endereço atualizado: o download #{id} continua de onde parou");
+                println!("{}", trf!("endereço atualizado: o download #{} continua de onde parou", id));
                 Ok(())
             }
             None => {
                 simple(Request::AwaitUrl { id, waiting: capture && !cancel }).await?;
                 if capture {
-                    println!("aguardando: abra a página do arquivo e clique no link de novo no navegador");
+                    println!("{}", tr!("aguardando: abra a página do arquivo e clique no link de novo no navegador"));
                 }
                 Ok(())
             }
@@ -511,7 +441,7 @@ async fn main() -> anyhow::Result<()> {
             match (queue_id, direction) {
                 (Some(queue), _) => simple(Request::SetQueue { id, queue }).await,
                 (None, Some(direction)) => simple(Request::Reorder { id, direction }).await,
-                (None, None) => bail!("diga para onde: --queue-id N, --up, --down, --top ou --bottom"),
+                (None, None) => bail!(tr!("diga para onde: --queue-id N, --up, --down, --top ou --bottom")),
             }
         }
         Command::Get { source } => get(source).await,
@@ -530,7 +460,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Stop => match fisga_ipc::call(&Request::Shutdown).await {
             Ok(_) => Ok(()),
             Err(_) => {
-                eprintln!("o daemon não está rodando");
+                eprintln!("{}", tr!("o daemon não está rodando"));
                 Ok(())
             }
         },
@@ -584,12 +514,12 @@ async fn get(source: Source) -> anyhow::Result<()> {
                     bar.println(format!(
                         "→ {} {}",
                         path.display(),
-                        if resumable { "(retomável)" } else { "(sem retomada: o servidor não aceita Range)" }
+                        if resumable { tr!("(retomável)") } else { tr!("(sem retomada: o servidor não aceita Range)") }
                     ));
                 }
                 EngineEvent::Progress(p) => {
                     bar.set_position(p.downloaded);
-                    bar.set_message(format!("{} conexões", p.active_connections));
+                    bar.set_message(trf!("{} conexões", p.active_connections));
                 }
             },
             outcome = &mut download => break outcome,
@@ -598,8 +528,8 @@ async fn get(source: Source) -> anyhow::Result<()> {
     bar.finish_and_clear();
     match outcome {
         Ok(Outcome::Completed(path)) => println!("✓ {}", path.display()),
-        Ok(Outcome::Paused(path)) => println!("⏸ pausado: {} (rode o mesmo comando para retomar)", path.display()),
-        Err(fisga_core::Error::Cancelled) => println!("cancelado"),
+        Ok(Outcome::Paused(path)) => println!("⏸ {}", trf!("pausado: {} (rode o mesmo comando para retomar)", path.display())),
+        Err(fisga_core::Error::Cancelled) => println!("{}", tr!("cancelado")),
         Err(e) => bail!(e),
     }
     Ok(())
@@ -615,7 +545,7 @@ async fn add(
     fisga_ipc::ensure_daemon().await?;
     if let Ok(Response::Downloads { items }) = fisga_ipc::call(&Request::List).await {
         if let Some(other) = items.iter().filter(|item| item.url == source.url).max_by_key(|item| item.id) {
-            eprintln!("aviso: este endereço já está na lista (#{}, {})", other.id, other.name);
+            eprintln!("{}", trf!("aviso: este endereço já está na lista (#{}, {})", other.id, other.name));
         }
     }
     let request = AddRequest {
@@ -634,12 +564,12 @@ async fn add(
     };
     let mut connection = Connection::open().await?;
     let Response::Added { id } = connection.call(&Request::Add(request)).await? else {
-        bail!("resposta inesperada do daemon");
+        bail!(tr!("resposta inesperada do daemon"));
     };
     if confirm {
-        println!("download #{id} aguardando confirmação");
+        println!("{}", trf!("download #{} aguardando confirmação", id));
     } else {
-        println!("download #{id} adicionado");
+        println!("{}", trf!("download #{} adicionado", id));
     }
     if !wait {
         return Ok(());
@@ -656,7 +586,7 @@ async fn add(
                 Some(item) => item,
                 None => continue,
             },
-            Response::Removed { id: removed } if removed == id => bail!("o download foi removido"),
+            Response::Removed { id: removed } if removed == id => bail!(tr!("o download foi removido")),
             _ => continue,
         };
         if let Some(total) = item.total {
@@ -670,7 +600,7 @@ async fn add(
         let checked = item.checksum.is_none() || matches!(item.hash, Some(Hashing::Done { .. } | Hashing::Failed { .. }));
         match item.state {
             // With a checksum, done once the file is checked.
-            State::Completed if !checked => bar.set_message(format!("conferindo a soma de {}", item.name)),
+            State::Completed if !checked => bar.set_message(trf!("conferindo a soma de {}", item.name)),
             State::Completed => {
                 bar.finish_and_clear();
                 if let Some(problem) = check_problem(&item) {
@@ -681,11 +611,11 @@ async fn add(
             }
             State::Failed => {
                 bar.finish_and_clear();
-                bail!(item.error.unwrap_or_else(|| "falhou".into()));
+                bail!(item.error.unwrap_or_else(|| tr!("falhou").into()));
             }
             State::Paused => {
                 bar.finish_and_clear();
-                println!("⏸ pausado");
+                println!("⏸ {}", tr!("pausado"));
                 return Ok(());
             }
             _ => {}
@@ -696,17 +626,31 @@ async fn add(
 
 fn parse_force_key(value: &str) -> Result<ForceKey, String> {
     let value = value.to_ascii_lowercase().replace([' ', '-', '_'], "+");
+    // The label of `None` is in the language of the texts: both words are taken.
+    if matches!(value.as_str(), "nenhuma" | "none") {
+        return Ok(ForceKey::None);
+    }
     ForceKey::ALL
         .into_iter()
+        .filter(|key| *key != ForceKey::None)
         .find(|key| key.label().to_ascii_lowercase() == value)
-        .ok_or_else(|| "use nenhuma, alt, ctrl+alt, shift+alt ou ctrl+shift".into())
+        .ok_or_else(|| tr!("use nenhuma, alt, ctrl+alt, shift+alt ou ctrl+shift").into())
 }
 
 fn parse_theme(value: &str) -> Result<Theme, String> {
     match value.to_ascii_lowercase().as_str() {
         "escuro" | "dark" => Ok(Theme::Dark),
         "claro" | "light" => Ok(Theme::Light),
-        _ => Err("use escuro ou claro".into()),
+        _ => Err(tr!("use escuro ou claro").into()),
+    }
+}
+
+fn parse_language(value: &str) -> Result<Language, String> {
+    match value.to_lowercase().as_str() {
+        "auto" | "sistema" | "system" => Ok(Language::Auto),
+        "pt" | "português" | "portugues" | "portuguese" => Ok(Language::Portuguese),
+        "en" | "inglês" | "ingles" | "english" => Ok(Language::English),
+        _ => Err(tr!("use auto, pt ou en").into()),
     }
 }
 
@@ -715,7 +659,7 @@ fn parse_conflict(value: &str) -> Result<Conflict, String> {
         "rename" => Ok(Conflict::Rename),
         "overwrite" => Ok(Conflict::Overwrite),
         "resume" => Ok(Conflict::Resume),
-        _ => Err("use rename, overwrite ou resume".into()),
+        _ => Err(tr!("use rename, overwrite ou resume").into()),
     }
 }
 
@@ -739,11 +683,12 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         theme,
         festive,
         check_updates,
+        language,
     } = args;
     let mut current = get_settings().await?;
     if let Some(proxy) = &proxy {
         let proxy = match proxy.trim() {
-            "-" => read_secret("Endereço do proxy (com usuário:senha@, se precisar)")?,
+            "-" => read_secret(tr!("Endereço do proxy (com usuário:senha@, se precisar)"))?,
             other => other.to_string(),
         };
         current.proxy = match proxy.trim() {
@@ -769,7 +714,8 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         || excluded_sites.is_some()
         || theme.is_some()
         || festive.is_some()
-        || check_updates.is_some();
+        || check_updates.is_some()
+        || language.is_some();
     if let Some(types) = file_types {
         current.browser.file_types = match types.trim() {
             "padrao" | "padrão" | "default" => BrowserSettings::default().file_types,
@@ -789,7 +735,8 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         current.on_complete.command = command.trim().to_string();
     }
     if let Some(dir) = dir {
-        current.download_dir = if dir.as_os_str() == "padrao" { None } else { Some(std::path::absolute(&dir)?) };
+        let default = dir.as_os_str() == "padrao" || dir.as_os_str() == "default";
+        current.download_dir = if default { None } else { Some(std::path::absolute(&dir)?) };
     }
     current.category_folders = category_folders.unwrap_or(current.category_folders);
     current.max_parallel = max_parallel.unwrap_or(current.max_parallel);
@@ -801,39 +748,50 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
     current.theme = theme.unwrap_or(current.theme);
     current.festive = festive.unwrap_or(current.festive);
     current.check_updates = check_updates.unwrap_or(current.check_updates);
+    if let Some(language) = language {
+        current.language = language;
+        // What follows is shown in the language chosen.
+        language.apply();
+    }
     if changed {
         fisga_ipc::call(&Request::SetSettings { settings: current.clone() }).await?;
     }
-    let dir = current.download_dir.as_ref().map(|d| d.display().to_string()).unwrap_or_else(|| "(Downloads do sistema)".into());
-    println!("pasta de downloads:      {dir}");
-    println!("subpastas por tipo:      {}", if current.category_folders { "sim" } else { "não" });
-    println!("downloads ao mesmo tempo: {}", current.max_parallel);
-    println!("conexões por arquivo:    {}", current.connections);
-    println!("janela de progresso:     {}", if current.show_progress { "sim" } else { "não" });
+    let yes_no = |on: bool| if on { tr!("sim") } else { tr!("não") };
+    /// Each label padded to the same column, in either language.
+    fn line(label: &str, value: &dyn std::fmt::Display) {
+        println!("{label:<24} {value}");
+    }
+    let dir = current.download_dir.as_ref().map(|d| d.display().to_string()).unwrap_or_else(|| tr!("(Downloads do sistema)").into());
+    line(tr!("pasta de downloads:"), &dir);
+    line(tr!("subpastas por tipo:"), &yes_no(current.category_folders));
+    line(tr!("downloads ao mesmo tempo:"), &current.max_parallel);
+    line(tr!("conexões por arquivo:"), &current.connections);
+    line(tr!("janela de progresso:"), &yes_no(current.show_progress));
     match current.speed_limit {
-        0 => println!("limite de velocidade:    sem limite"),
-        limit => println!("limite de velocidade:    {}/s", bytes(limit)),
+        0 => line(tr!("limite de velocidade:"), &tr!("sem limite")),
+        limit => line(tr!("limite de velocidade:"), &format!("{}/s", bytes(limit))),
     }
-    println!("capturar links copiados: {}", if current.watch_clipboard { "sim" } else { "não" });
-    println!("ícone na bandeja:        {}", if current.tray { "sim" } else { "não" });
-    println!("agendador:               {}", schedule_summary(&current));
-    println!("proxy:                   {}", current.proxy.describe());
+    line(tr!("capturar links copiados:"), &yes_no(current.watch_clipboard));
+    line(tr!("ícone na bandeja:"), &yes_no(current.tray));
+    line(tr!("agendador:"), &schedule_summary(&current));
+    line(tr!("proxy:"), &current.proxy.describe());
     let done = &current.on_complete;
-    println!("ao concluir, som:        {}", if done.sound { "sim" } else { "não" });
-    println!("ao concluir, antivírus:  {}", if done.antivirus { "sim (ClamAV)" } else { "não" });
+    line(tr!("ao concluir, som:"), &yes_no(done.sound));
+    line(tr!("ao concluir, antivírus:"), &if done.antivirus { tr!("sim (ClamAV)") } else { tr!("não") });
     match done.command.as_str() {
-        "" => println!("ao concluir, comando:    nenhum"),
-        command => println!("ao concluir, comando:    {command}"),
+        "" => line(tr!("ao concluir, comando:"), &tr!("nenhum")),
+        command => line(tr!("ao concluir, comando:"), &command),
     }
-    println!("tipos do navegador:      {}", current.browser.file_types.join(" "));
-    println!("tecla do navegador:      {}", current.browser.force_key.label());
+    line(tr!("tipos do navegador:"), &current.browser.file_types.join(" "));
+    line(tr!("tecla do navegador:"), &current.browser.force_key.label());
     match current.browser.excluded_sites.as_slice() {
-        [] => println!("sites excluídos:         nenhum"),
-        sites => println!("sites excluídos:         {}", sites.join(" ")),
+        [] => line(tr!("sites excluídos:"), &tr!("nenhum")),
+        sites => line(tr!("sites excluídos:"), &sites.join(" ")),
     }
-    println!("tema:                    {}", if current.theme == Theme::Light { "claro" } else { "escuro" });
-    println!("efeitos de datas:        {}", if current.festive { "sim" } else { "não" });
-    println!("procurar versão nova:    {}", if current.check_updates { "sim" } else { "não" });
+    line(tr!("tema:"), &if current.theme == Theme::Light { tr!("claro") } else { tr!("escuro") });
+    line(tr!("efeitos de datas:"), &yes_no(current.festive));
+    line(tr!("procurar versão nova:"), &yes_no(current.check_updates));
+    line(tr!("idioma:"), &current.language.label());
     Ok(())
 }
 
@@ -842,22 +800,22 @@ async fn update(install: bool) -> anyhow::Result<()> {
     fisga_ipc::ensure_daemon().await?;
     let release = match fisga_ipc::call(&Request::CheckUpdate).await? {
         Response::NewVersion { release } => release,
-        other => anyhow::bail!("resposta inesperada: {other:?}"),
+        other => anyhow::bail!(trf!("resposta inesperada: {}", format!("{other:?}"))),
     };
     let Some(release) = release else {
-        println!("O Fisga {} é a versão mais nova.", fisga_ipc::VERSION);
+        println!("{}", trf!("O Fisga {} é a versão mais nova.", fisga_ipc::VERSION));
         return Ok(());
     };
-    println!("Fisga {} disponível (esta é a {}): {}", release.version, fisga_ipc::VERSION, release.page);
+    println!("{}", trf!("Fisga {} disponível (esta é a {}): {}", release.version, fisga_ipc::VERSION, release.page));
     if !install {
         if release.installable {
-            println!("Para instalar: fisga update --install");
+            println!("{}", tr!("Para instalar: fisga update --install"));
         } else {
-            println!("Atualize pelo gerenciador de pacotes do sistema.");
+            println!("{}", tr!("Atualize pelo gerenciador de pacotes do sistema."));
         }
         return Ok(());
     }
-    anyhow::ensure!(release.installable, "aqui quem instala a versão nova é o gerenciador de pacotes do sistema");
+    anyhow::ensure!(release.installable, tr!("aqui quem instala a versão nova é o gerenciador de pacotes do sistema"));
     // How it goes arrives to subscribers: follow it until the daemon closes for the install.
     let mut connection = Connection::open().await?;
     connection.send(&Request::Subscribe { confirmer: false }).await?;
@@ -944,12 +902,12 @@ fn set_echo(on: bool) {
 async fn logins(command: LoginCommand) -> anyhow::Result<()> {
     fisga_ipc::ensure_daemon().await?;
     let Response::Logins { mut logins } = fisga_ipc::call(&Request::GetLogins).await? else {
-        bail!("resposta inesperada do daemon");
+        bail!(tr!("resposta inesperada do daemon"));
     };
     match command {
         LoginCommand::List => {}
         LoginCommand::Add { host, user } => {
-            let password = read_secret(&format!("Senha de {user} em {host}"))?;
+            let password = read_secret(&trf!("Senha de {} em {}", user, host))?;
             logins.push(SiteLogin { host, user, password });
         }
         LoginCommand::Rm { host } => {
@@ -957,16 +915,16 @@ async fn logins(command: LoginCommand) -> anyhow::Result<()> {
             let before = logins.len();
             logins.retain(|login| login.host != host);
             if logins.len() == before {
-                bail!("nenhum login para {host}");
+                bail!(trf!("nenhum login para {}", host));
             }
         }
     }
     fisga_ipc::call(&Request::SetLogins { logins }).await?;
     let Response::Logins { logins } = fisga_ipc::call(&Request::GetLogins).await? else {
-        bail!("resposta inesperada do daemon");
+        bail!(tr!("resposta inesperada do daemon"));
     };
     if logins.is_empty() {
-        println!("nenhum login por site");
+        println!("{}", tr!("nenhum login por site"));
     }
     for login in logins {
         println!("{:<30} {}", login.host, login.user);
@@ -978,14 +936,14 @@ async fn get_settings() -> anyhow::Result<Settings> {
     fisga_ipc::ensure_daemon().await?;
     match fisga_ipc::call(&Request::GetSettings).await? {
         Response::Settings { settings } => Ok(settings),
-        _ => bail!("resposta inesperada do daemon"),
+        _ => bail!(tr!("resposta inesperada do daemon")),
     }
 }
 
 fn schedule_text(queue: &Queue) -> String {
     match queue.schedule.enabled {
         true => queue.schedule.describe(),
-        false => "desligado (a fila roda sempre)".into(),
+        false => tr!("desligado (a fila roda sempre)").into(),
     }
 }
 
@@ -997,11 +955,11 @@ async fn schedule(args: ScheduleArgs) -> anyhow::Result<()> {
     if args.cancel {
         fisga_ipc::ensure_daemon().await?;
         fisga_ipc::call(&Request::CancelPower).await?;
-        println!("cancelado");
+        println!("{}", tr!("cancelado"));
         return Ok(());
     }
     let mut settings = get_settings().await?;
-    let Some(mut queue) = settings.queue(args.queue_id) else { bail!("fila não encontrada: {}", args.queue_id) };
+    let Some(mut queue) = settings.queue(args.queue_id) else { bail!(trf!("fila não encontrada: {}", args.queue_id)) };
     let before = queue.clone();
     let schedule = &mut queue.schedule;
     if args.on || args.off {
@@ -1017,9 +975,9 @@ async fn schedule(args: ScheduleArgs) -> anyhow::Result<()> {
         settings.set_queue(queue.clone());
         fisga_ipc::call(&Request::SetSettings { settings }).await?;
     }
-    println!("fila:             {}", queue.name);
-    println!("agendador:        {}", schedule_text(&queue));
-    println!("ao terminar:      {}", queue.schedule.when_done.label().to_lowercase());
+    println!("{:<17} {}", tr!("fila:"), queue.name);
+    println!("{:<17} {}", tr!("agendador:"), schedule_text(&queue));
+    println!("{:<17} {}", tr!("ao terminar:"), queue.schedule.when_done.label().to_lowercase());
     Ok(())
 }
 
@@ -1032,10 +990,10 @@ async fn queues(command: QueueCommand) -> anyhow::Result<()> {
             settings.set_queue(Queue { id, name, max_parallel, ..Queue::default() });
         }
         QueueCommand::Set { id, name, max_parallel } => {
-            let Some(mut queue) = settings.queue(id) else { bail!("fila não encontrada: {id}") };
+            let Some(mut queue) = settings.queue(id) else { bail!(trf!("fila não encontrada: {}", id)) };
             if let Some(name) = name {
                 if id == MAIN_QUEUE {
-                    bail!("a fila principal não pode ser renomeada");
+                    bail!(tr!("a fila principal não pode ser renomeada"));
                 }
                 queue.name = name;
             }
@@ -1044,10 +1002,10 @@ async fn queues(command: QueueCommand) -> anyhow::Result<()> {
         }
         QueueCommand::Rm { id } => {
             if id == MAIN_QUEUE {
-                bail!("a fila principal não pode ser excluída");
+                bail!(tr!("a fila principal não pode ser excluída"));
             }
             if settings.queue(id).is_none() {
-                bail!("fila não encontrada: {id}");
+                bail!(trf!("fila não encontrada: {}", id));
             }
             settings.remove_queue(id);
         }
@@ -1056,16 +1014,16 @@ async fn queues(command: QueueCommand) -> anyhow::Result<()> {
     // Read back: the daemon names and limits them (sanitized).
     for queue in get_settings().await?.all_queues() {
         let at_once = match queue.max_parallel {
-            1 => "1 por vez".to_string(),
-            n => format!("{n} ao mesmo tempo"),
+            1 => tr!("1 por vez").to_string(),
+            n => trf!("{} ao mesmo tempo", n),
         };
-        println!("{:>4}  {:<20} {:<18} agendador: {}", queue.id, queue.name, at_once, schedule_text(&queue));
+        println!("{:>4}  {:<20} {:<18} {} {}", queue.id, queue.name, at_once, tr!("agendador:"), schedule_text(&queue));
     }
     Ok(())
 }
 
 fn parse_time(value: &str) -> Result<TimeOfDay, String> {
-    TimeOfDay::parse(value).ok_or_else(|| "use HH:MM, como 02:00 ou 23:30".into())
+    TimeOfDay::parse(value).ok_or_else(|| tr!("use HH:MM, como 02:00 ou 23:30").into())
 }
 
 /// `--days seg,qua,sex`: one argument holding a list (clap reads an
@@ -1096,7 +1054,12 @@ fn parse_days(value: &str) -> Result<Vec<u8>, String> {
         .split(',')
         .map(|day| {
             let day = day.trim().to_lowercase().replace("sab", "sáb");
-            WEEKDAYS.iter().position(|w| *w == day).map(|i| i as u8).ok_or_else(|| format!("dia desconhecido: {day}"))
+            WEEKDAYS
+                .iter()
+                .position(|w| *w == day)
+                .or_else(|| WEEKDAYS_EN.iter().position(|w| *w == day))
+                .map(|i| i as u8)
+                .ok_or_else(|| trf!("dia desconhecido: {}", day))
         })
         .collect::<Result<Vec<u8>, String>>()?;
     days.sort_unstable();
@@ -1113,13 +1076,13 @@ fn parse_categories(value: &str) -> Result<Vec<Category>, String> {
             let word = word.trim_end_matches('s');
             match word {
                 "video" | "vídeo" => Ok(Category::Video),
-                "musica" | "música" | "audio" | "áudio" => Ok(Category::Music),
+                "musica" | "música" | "audio" | "áudio" | "music" => Ok(Category::Music),
                 "imagem" | "image" | "imagen" | "foto" => Ok(Category::Image),
-                "documento" | "doc" => Ok(Category::Document),
-                "compactado" | "arquivo" => Ok(Category::Compressed),
-                "programa" => Ok(Category::Program),
-                "outro" => Ok(Category::Other),
-                other => Err(format!("tipo desconhecido: {other} (use video, musica, imagem, documento, compactado, programa ou outro)")),
+                "documento" | "doc" | "document" => Ok(Category::Document),
+                "compactado" | "arquivo" | "compressed" | "archive" => Ok(Category::Compressed),
+                "programa" | "program" => Ok(Category::Program),
+                "outro" | "other" => Ok(Category::Other),
+                other => Err(trf!("tipo desconhecido: {} (use video, musica, imagem, documento, compactado, programa ou outro)", other)),
             }
         })
         .collect()
@@ -1130,26 +1093,26 @@ fn parse_when_done(value: &str) -> Result<WhenDone, String> {
         "nada" | "nothing" => Ok(WhenDone::Nothing),
         "suspender" | "suspend" => Ok(WhenDone::Suspend),
         "desligar" | "poweroff" => Ok(WhenDone::Poweroff),
-        _ => Err("use nada, suspender ou desligar".into()),
+        _ => Err(tr!("use nada, suspender ou desligar").into()),
     }
 }
 
 fn state_label(state: State) -> &'static str {
     match state {
-        State::Pending => "aguardando",
-        State::Queued => "na fila",
-        State::Running => "baixando",
-        State::Paused => "pausado",
-        State::Completed => "concluído",
-        State::Failed => "erro",
+        State::Pending => tr!("aguardando"),
+        State::Queued => tr!("na fila"),
+        State::Running => tr!("baixando"),
+        State::Paused => tr!("pausado"),
+        State::Completed => tr!("concluído"),
+        State::Failed => tr!("erro"),
     }
 }
 
 /// What is wrong with a finished download's check, if anything.
 fn check_problem(item: &DownloadInfo) -> Option<String> {
     match (&item.hash, item.checksum_matches()) {
-        (Some(Hashing::Failed { error }), _) => Some(format!("não foi possível conferir a soma: {error}")),
-        (Some(Hashing::Done { digest }), Some(false)) => Some(format!(
+        (Some(Hashing::Failed { error }), _) => Some(trf!("não foi possível conferir a soma: {}", error)),
+        (Some(Hashing::Done { digest }), Some(false)) => Some(trf!(
             "o {} não confere: o arquivo pode estar corrompido ou ter sido trocado\n  esperado: {}\n  arquivo:  {}",
             digest.algo.label(),
             item.checksum.as_ref().map_or("", |c| c.hex.as_str()),
@@ -1162,26 +1125,26 @@ fn check_problem(item: &DownloadInfo) -> Option<String> {
 /// Checks the file of a download (`Request::Verify`) and waits for the result.
 async fn verify(id: u64, checksum: Option<Checksum>) -> anyhow::Result<()> {
     let Response::Downloads { items } = fisga_ipc::call(&Request::List).await? else {
-        bail!("resposta inesperada do daemon");
+        bail!(tr!("resposta inesperada do daemon"));
     };
-    let item = items.into_iter().find(|item| item.id == id).with_context(|| format!("download #{id} não encontrado"))?;
+    let item = items.into_iter().find(|item| item.id == id).with_context(|| trf!("download #{} não encontrado", id))?;
     // Subscribed before asking (the list arrives once it is), so no update is missed.
     let mut updates = Connection::open().await?;
     updates.send(&Request::Subscribe { confirmer: false }).await?;
-    while !matches!(updates.recv().await?.context("o daemon encerrou a conexão")?, Response::Downloads { .. }) {}
+    while !matches!(updates.recv().await?.context(tr!("o daemon encerrou a conexão"))?, Response::Downloads { .. }) {}
     fisga_ipc::call(&Request::Verify { id, checksum }).await?;
     if item.state != State::Completed {
-        println!("download #{id}: a soma será conferida quando ele terminar");
+        println!("{}", trf!("download #{}: a soma será conferida quando ele terminar", id));
         return Ok(());
     }
     let bar = ProgressBar::new(item.total.unwrap_or(item.downloaded));
     bar.set_style(bar_style());
-    bar.set_message("conferindo");
+    bar.set_message(tr!("conferindo"));
     let mut started = false;
     while let Some(message) = updates.recv().await? {
         let item = match message {
             Response::Update { item } if item.id == id => item,
-            Response::Removed { id: removed } if removed == id => bail!("o download foi removido"),
+            Response::Removed { id: removed } if removed == id => bail!(tr!("o download foi removido")),
             _ => continue,
         };
         match &item.hash {
@@ -1196,7 +1159,7 @@ async fn verify(id: u64, checksum: Option<Checksum>) -> anyhow::Result<()> {
                 }
                 println!("{}: {}", digest.algo.label(), digest.hex);
                 if item.checksum_matches() == Some(true) {
-                    println!("✓ confere com a soma da página");
+                    println!("✓ {}", tr!("confere com a soma da página"));
                 }
                 return Ok(());
             }
@@ -1207,32 +1170,33 @@ async fn verify(id: u64, checksum: Option<Checksum>) -> anyhow::Result<()> {
             _ => {}
         }
     }
-    bail!("o daemon encerrou a conexão")
+    bail!(tr!("o daemon encerrou a conexão"))
 }
 
 fn row(item: &DownloadInfo) -> String {
     let progress = match item.total {
-        Some(total) if total > 0 => format!(
-            "{:>5.1}% de {}",
-            item.downloaded as f64 * 100.0 / total as f64,
-            bytes(total)
-        ),
+        Some(total) if total > 0 => {
+            let percent = format!("{:>5.1}", item.downloaded as f64 * 100.0 / total as f64);
+            trf!("{}% de {}", percent, bytes(total))
+        }
         _ => bytes(item.downloaded),
     };
     let speed = if item.state == State::Running { format!("{}/s", bytes(item.speed as u64)) } else { String::new() };
     let mut line = format!("{:>4}  {:<10} {:<20} {:>11}  {}", item.id, state_label(item.state), progress, speed, item.name);
     if item.speed_limit > 0 {
-        line.push_str(&format!("  (máx. {}/s)", bytes(item.speed_limit)));
+        line.push_str(&format!("  {}", trf!("(máx. {}/s)", bytes(item.speed_limit))));
     }
     if let Some(error) = &item.error {
         line.push_str(&format!("\n      └ {error}"));
     }
     if item.awaiting_url {
-        line.push_str("\n      └ aguardando novo endereço: clique no link de novo no navegador");
+        line.push_str(&format!("\n      └ {}", tr!("aguardando novo endereço: clique no link de novo no navegador")));
     }
     match (&item.hash, item.checksum_matches()) {
-        (Some(Hashing::Running { done }), _) => line.push_str(&format!("\n      └ conferindo a soma… {}", bytes(*done))),
-        (_, Some(true)) => line.push_str("\n      └ soma conferida: é o arquivo da página"),
+        (Some(Hashing::Running { done }), _) => {
+            line.push_str(&format!("\n      └ {}", trf!("conferindo a soma… {}", bytes(*done))))
+        }
+        (_, Some(true)) => line.push_str(&format!("\n      └ {}", tr!("soma conferida: é o arquivo da página"))),
         _ => {}
     }
     if let Some(problem) = check_problem(item) {
@@ -1244,10 +1208,10 @@ fn row(item: &DownloadInfo) -> String {
 /// In queue order; downloads outside the main queue show theirs.
 async fn list() -> anyhow::Result<()> {
     let Response::Downloads { mut items } = fisga_ipc::call(&Request::List).await? else {
-        bail!("resposta inesperada do daemon");
+        bail!(tr!("resposta inesperada do daemon"));
     };
     if items.is_empty() {
-        println!("nenhum download");
+        println!("{}", tr!("nenhum download"));
     }
     let settings = get_settings().await?;
     items.sort_by_key(|item| (item.order, item.id));
@@ -1274,7 +1238,7 @@ async fn watch() -> anyhow::Result<()> {
         match message {
             Response::Downloads { items } => items.iter().for_each(|i| println!("{}", row(i))),
             Response::Update { item } => println!("{}", row(&item)),
-            Response::Removed { id } => println!("{id:>4}  removido"),
+            Response::Removed { id } => println!("{id:>4}  {}", tr!("removido")),
             other => println!("{}", serde_json::to_string(&other)?),
         }
     }

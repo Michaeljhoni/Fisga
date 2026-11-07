@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context};
+use fisga_i18n::{tr, trf};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 
@@ -209,17 +210,18 @@ impl Category {
 
     pub fn label(self) -> &'static str {
         match self {
-            Category::Video => "Vídeos",
-            Category::Music => "Músicas",
-            Category::Image => "Imagens",
-            Category::Document => "Documentos",
-            Category::Compressed => "Compactados",
-            Category::Program => "Programas",
-            Category::Other => "Outros",
+            Category::Video => tr!("Vídeos"),
+            Category::Music => tr!("Músicas"),
+            Category::Image => tr!("Imagens"),
+            Category::Document => tr!("Documentos"),
+            Category::Compressed => tr!("Compactados"),
+            Category::Program => tr!("Programas"),
+            Category::Other => tr!("Outros"),
         }
     }
 
-    /// Subfolder of the download folder; `Other` stays at its root.
+    /// Subfolder of the download folder, named in the current language (its
+    /// label); `Other` stays at its root.
     pub fn folder(self) -> Option<&'static str> {
         (self != Category::Other).then(|| self.label())
     }
@@ -450,7 +452,7 @@ impl ForceKey {
 
     pub fn label(self) -> &'static str {
         match self {
-            ForceKey::None => "Nenhuma",
+            ForceKey::None => tr!("Nenhuma"),
             ForceKey::Alt => "Alt",
             ForceKey::CtrlAlt => "Ctrl+Alt",
             ForceKey::ShiftAlt => "Shift+Alt",
@@ -525,12 +527,12 @@ impl ProxySettings {
             return Ok(());
         }
         let url = url::Url::parse(self.url.trim())
-            .map_err(|_| format!("endereço de proxy inválido: {} (use http://host:porta ou socks5://host:porta)", redact_url(&self.url)))?;
+            .map_err(|_| trf!("endereço de proxy inválido: {} (use http://host:porta ou socks5://host:porta)", redact_url(&self.url)))?;
         if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h") {
-            return Err(format!("tipo de proxy não suportado: {} (use http, https, socks5 ou socks5h)", url.scheme()));
+            return Err(trf!("tipo de proxy não suportado: {} (use http, https, socks5 ou socks5h)", url.scheme()));
         }
         if url.host_str().map_or(true, str::is_empty) {
-            return Err("o endereço do proxy precisa de um host".into());
+            return Err(tr!("o endereço do proxy precisa de um host").into());
         }
         Ok(())
     }
@@ -546,8 +548,8 @@ impl ProxySettings {
 
     pub fn describe(&self) -> String {
         match self.mode {
-            ProxyMode::System => "o do sistema (variáveis http_proxy/https_proxy)".into(),
-            ProxyMode::None => "nenhum".into(),
+            ProxyMode::System => tr!("o do sistema (variáveis http_proxy/https_proxy)").into(),
+            ProxyMode::None => tr!("nenhum").into(),
             ProxyMode::Manual => redact_url(self.url.trim()),
         }
     }
@@ -726,7 +728,7 @@ impl Settings {
     }
 
     pub fn queue_name(&self, id: u64) -> String {
-        self.queue(id).map(|queue| queue.name).unwrap_or_else(|| format!("fila {id}"))
+        self.queue(id).map(|queue| queue.name).unwrap_or_else(|| trf!("fila {}", id))
     }
 
     /// Adds or replaces a queue (for the main one: its limit and schedule).
@@ -786,7 +788,7 @@ impl std::fmt::Display for TimeOfDay {
 impl TryFrom<String> for TimeOfDay {
     type Error = String;
     fn try_from(text: String) -> Result<Self, String> {
-        Self::parse(&text).ok_or_else(|| format!("horário inválido: {text} (use HH:MM)"))
+        Self::parse(&text).ok_or_else(|| trf!("horário inválido: {} (use HH:MM)", text))
     }
 }
 
@@ -811,15 +813,27 @@ impl WhenDone {
 
     pub fn label(self) -> &'static str {
         match self {
-            WhenDone::Nothing => "Não fazer nada",
-            WhenDone::Suspend => "Suspender o computador",
-            WhenDone::Poweroff => "Desligar o computador",
+            WhenDone::Nothing => tr!("Não fazer nada"),
+            WhenDone::Suspend => tr!("Suspender o computador"),
+            WhenDone::Poweroff => tr!("Desligar o computador"),
         }
     }
 }
 
-/// Short weekday names, indexed like `Schedule::days` (0 = Sunday).
+/// Short weekday names, indexed like `Schedule::days` (0 = Sunday). Also what
+/// users type (`fisga schedule --days seg,qua`), in whatever language.
 pub const WEEKDAYS: [&str; 7] = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+
+/// The same in English, also accepted when typed.
+pub const WEEKDAYS_EN: [&str; 7] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+/// A day of `Schedule::days` by its short name, in the current language.
+pub fn weekday_name(day: u8) -> &'static str {
+    match fisga_i18n::current() {
+        fisga_i18n::Lang::Portuguese => WEEKDAYS[day as usize % 7],
+        fisga_i18n::Lang::English => WEEKDAYS_EN[day as usize % 7],
+    }
+}
 
 /// IDM's scheduler: the queue starts at `start` on the chosen days and runs
 /// until `stop` (running downloads go back to the queue) or, without `stop`,
@@ -873,13 +887,13 @@ impl Schedule {
     /// "todos os dias, das 02:00 às 08:00", "seg, qua, sex, às 23:00 até terminar a fila".
     pub fn describe(&self) -> String {
         let days = match self.days.len() {
-            7 => "todos os dias".to_string(),
-            0 => "nenhum dia".to_string(),
-            _ => self.days.iter().map(|d| WEEKDAYS[*d as usize % 7]).collect::<Vec<_>>().join(", "),
+            7 => tr!("todos os dias").to_string(),
+            0 => tr!("nenhum dia").to_string(),
+            _ => self.days.iter().map(|d| weekday_name(*d)).collect::<Vec<_>>().join(", "),
         };
         match self.stop {
-            Some(stop) => format!("{days}, das {} às {stop}", self.start),
-            None => format!("{days}, às {} até terminar a fila", self.start),
+            Some(stop) => trf!("{}, das {} às {}", days, self.start, stop),
+            None => trf!("{}, às {} até terminar a fila", days, self.start),
         }
     }
 }
@@ -1146,14 +1160,14 @@ impl Checksum {
         });
         let Some(hex) = digits else {
             return Err(match named {
-                Some(algo) => format!("o {} tem {} dígitos hexadecimais", algo.label(), algo.hex_len()),
-                None => "não há uma soma SHA-1, SHA-256, SHA-384 ou SHA-512 no texto".into(),
+                Some(algo) => trf!("o {} tem {} dígitos hexadecimais", algo.label(), algo.hex_len()),
+                None => tr!("não há uma soma SHA-1, SHA-256, SHA-384 ou SHA-512 no texto").into(),
             });
         };
         let by_length = HashAlgo::ALL.into_iter().find(|algo| algo.hex_len() == hex.len()).expect("checked above");
         match named {
             Some(algo) if algo != by_length => {
-                Err(format!("o {} tem {} dígitos hexadecimais; este tem {}", algo.label(), algo.hex_len(), hex.len()))
+                Err(trf!("o {} tem {} dígitos hexadecimais; este tem {}", algo.label(), algo.hex_len(), hex.len()))
             }
             _ => Ok(Checksum { algo: by_length, hex: hex.clone() }),
         }
@@ -1199,7 +1213,7 @@ pub const MAX_BATCH: usize = 5000;
 pub fn expand_batch(template: &str, from: &str, to: &str, width: usize) -> Result<Vec<String>, String> {
     let template = template.trim();
     if template.matches('*').count() != 1 {
-        return Err("o endereço precisa de exatamente um * no lugar do número ou da letra".into());
+        return Err(tr!("o endereço precisa de exatamente um * no lugar do número ou da letra").into());
     }
     let (from, to) = (from.trim(), to.trim());
     let letters = |text: &str| {
@@ -1212,10 +1226,10 @@ pub fn expand_batch(template: &str, from: &str, to: &str, width: usize) -> Resul
     let items: Vec<String> = match (from.parse::<u64>(), to.parse::<u64>(), letters(from), letters(to)) {
         (Ok(first), Ok(last), _, _) => {
             if first > last {
-                return Err(format!("o início ({first}) passa do fim ({last})"));
+                return Err(trf!("o início ({}) passa do fim ({})", first, last));
             }
             if last - first >= MAX_BATCH as u64 {
-                return Err(format!("são {} endereços; o máximo é {MAX_BATCH}", last - first + 1));
+                return Err(trf!("são {} endereços; o máximo é {}", last - first + 1, MAX_BATCH));
             }
             let width = match width {
                 0 if from.len() > 1 && from.starts_with('0') => from.len(),
@@ -1225,11 +1239,11 @@ pub fn expand_batch(template: &str, from: &str, to: &str, width: usize) -> Resul
         }
         (_, _, Some(first), Some(last)) if first.is_ascii_lowercase() == last.is_ascii_lowercase() => {
             if first > last {
-                return Err(format!("o início ({first}) passa do fim ({last})"));
+                return Err(trf!("o início ({}) passa do fim ({})", first, last));
             }
             (first..=last).map(String::from).collect()
         }
-        _ => return Err("use números (1 a 20, 01 a 20) ou letras (a a z) no início e no fim".into()),
+        _ => return Err(tr!("use números (1 a 20, 01 a 20) ou letras (a a z) no início e no fim").into()),
     };
     Ok(items.into_iter().map(|item| template.replacen('*', &item, 1)).collect())
 }
@@ -1345,11 +1359,11 @@ impl UpdateStage {
     pub fn describe(&self) -> String {
         let mb = |bytes: u64| bytes / 1_000_000;
         match self {
-            UpdateStage::Downloading { done, total: Some(total) } => format!("Baixando: {} de {} MB", mb(*done), mb(*total)),
-            UpdateStage::Downloading { done, total: None } => format!("Baixando: {} MB", mb(*done)),
-            UpdateStage::Installing => "Instalando: o Fisga fecha e abre de novo na versão nova.".into(),
-            UpdateStage::Opened => "Arraste o Fisga do disco que se abriu para a pasta Aplicativos.".into(),
-            UpdateStage::Failed { error } => format!("Não foi possível atualizar: {error}"),
+            UpdateStage::Downloading { done, total: Some(total) } => trf!("Baixando: {} de {} MB", mb(*done), mb(*total)),
+            UpdateStage::Downloading { done, total: None } => trf!("Baixando: {} MB", mb(*done)),
+            UpdateStage::Installing => tr!("Instalando: o Fisga fecha e abre de novo na versão nova.").into(),
+            UpdateStage::Opened => tr!("Arraste o Fisga do disco que se abriu para a pasta Aplicativos.").into(),
+            UpdateStage::Failed { error } => trf!("Não foi possível atualizar: {}", error),
         }
     }
 }
@@ -1539,7 +1553,7 @@ pub struct Connection {
 
 impl Connection {
     pub async fn open() -> anyhow::Result<Self> {
-        let stream = transport::connect().await.context("o daemon fisgad não está rodando")?;
+        let stream = transport::connect().await.context(tr!("o daemon fisgad não está rodando"))?;
         let (reader, writer) = tokio::io::split(stream);
         Ok(Self { lines: BufReader::new(reader).lines(), writer })
     }
@@ -1564,7 +1578,7 @@ impl Connection {
         match self.recv().await? {
             Some(Response::Error { message }) => bail!(message),
             Some(response) => Ok(response),
-            None => bail!("o daemon fechou a conexão"),
+            None => bail!(tr!("o daemon fechou a conexão")),
         }
     }
 }
@@ -1623,18 +1637,18 @@ pub async fn ensure_daemon() -> anyhow::Result<()> {
         command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
         if command.spawn().is_err() {
             command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
-            command.spawn().context("não foi possível iniciar o fisgad")?;
+            command.spawn().context(tr!("não foi possível iniciar o fisgad"))?;
         }
     }
     #[cfg(not(windows))]
-    command.spawn().context("não foi possível iniciar o fisgad")?;
+    command.spawn().context(tr!("não foi possível iniciar o fisgad"))?;
     for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(100)).await;
         if is_running().await {
             return Ok(());
         }
     }
-    bail!("o fisgad não respondeu após ser iniciado")
+    bail!(tr!("o fisgad não respondeu após ser iniciado"))
 }
 
 #[cfg(test)]

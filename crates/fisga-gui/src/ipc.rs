@@ -6,6 +6,7 @@ use std::future::Future;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use fisga_i18n::tr;
 use fisga_ipc::{Connection, DownloadInfo, GrabbedLink, NewVersion, PowerPlan, Request, Response, Settings};
 use tokio::sync::mpsc;
 
@@ -54,7 +55,7 @@ pub fn subscribe() -> mpsc::UnboundedReceiver<Event> {
     runtime().spawn(async move {
         loop {
             let reason = match session(&tx).await {
-                Ok(()) => "o fisgad encerrou a conexão".to_string(),
+                Ok(()) => tr!("o fisgad encerrou a conexão").to_string(),
                 Err(e) => e.to_string(),
             };
             if tx.send(Event::Disconnected(reason)).is_err() {

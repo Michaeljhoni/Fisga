@@ -1,3 +1,11 @@
 # The English of fisga-native-host's texts: each Portuguese text as it is in the code,
 # then its English after "= ", then a blank line. See crates/fisga-i18n.
 
+mensagem grande demais
+= message too large
+
+resposta inesperada: {}
+= unexpected answer: {}
+
+mensagem inválida: {}
+= invalid message: {}

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context};
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{Checksum, HashAlgo, Hashing, Response, State};
 use ring::digest;
 
@@ -54,17 +55,17 @@ impl Manager {
     pub fn verify(self: &Arc<Self>, id: u64, checksum: Option<Checksum>) -> anyhow::Result<()> {
         let path = {
             let mut inner = self.inner.lock().unwrap();
-            let job = inner.jobs.get_mut(&id).context("download não encontrado")?;
+            let job = inner.jobs.get_mut(&id).context(tr!("download não encontrado"))?;
             if matches!(job.info.hash, Some(Hashing::Running { .. })) {
-                bail!("o arquivo já está sendo verificado");
+                bail!(tr!("o arquivo já está sendo verificado"));
             }
             let finished = job.info.state == State::Completed;
             if !finished && checksum.is_none() {
-                bail!("o download ainda não terminou; diga a soma que o arquivo deve ter para conferir quando terminar");
+                bail!(tr!("o download ainda não terminou; diga a soma que o arquivo deve ter para conferir quando terminar"));
             }
             let path = match (finished, &job.info.path) {
                 (true, Some(path)) => Some(path.clone()),
-                (true, None) => bail!("o download #{id} não tem arquivo"),
+                (true, None) => bail!(trf!("o download #{} não tem arquivo", id)),
                 (false, _) => None,
             };
             if checksum.is_some() {
@@ -118,8 +119,8 @@ impl Manager {
         let digest = match result {
             Ok(Ok(Some(digest))) => digest,
             Ok(Ok(None)) => return false,
-            Ok(Err(e)) => return self.check_failed(id, &name, format!("não foi possível ler o arquivo: {e}")),
-            Err(e) => return self.check_failed(id, &name, format!("a verificação falhou: {e}")),
+            Ok(Err(e)) => return self.check_failed(id, &name, trf!("não foi possível ler o arquivo: {}", e)),
+            Err(e) => return self.check_failed(id, &name, trf!("a verificação falhou: {}", e)),
         };
         let matches = expected.as_ref().map_or(true, |expected| *expected == digest);
         tracing::info!(id, algo = algo.name(), matches, secs = started.elapsed().as_secs_f64(), "arquivo verificado");
@@ -127,8 +128,8 @@ impl Manager {
         self.save();
         if !matches {
             notify::send(
-                "Arquivo diferente do esperado",
-                &format!("{name}\nO {} não confere: o arquivo pode estar corrompido ou ter sido trocado.", algo.label()),
+                tr!("Arquivo diferente do esperado"),
+                &trf!("{}\nO {} não confere: o arquivo pode estar corrompido ou ter sido trocado.", name, algo.label()),
             );
         }
         matches
@@ -136,7 +137,7 @@ impl Manager {
 
     fn check_failed(&self, id: u64, name: &str, error: String) -> bool {
         tracing::warn!(id, error, "não foi possível verificar o arquivo");
-        notify::send("Não foi possível verificar o arquivo", &format!("{name}\n{error}"));
+        notify::send(tr!("Não foi possível verificar o arquivo"), &format!("{name}\n{error}"));
         self.set_hash(id, Hashing::Failed { error });
         self.save();
         false

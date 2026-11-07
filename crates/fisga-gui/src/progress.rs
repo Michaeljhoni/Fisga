@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{gdk, glib, pango};
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{DownloadInfo, Request, State};
 
 use crate::format;
@@ -49,8 +50,8 @@ fn caption(text: &str) -> gtk::Label {
 /// Window title, like IDM's: "45% arquivo.mp4".
 pub fn title(info: &DownloadInfo) -> String {
     match info.state {
-        State::Completed => "Download concluído".into(),
-        State::Failed => format!("Erro: {}", info.name),
+        State::Completed => tr!("Download concluído").into(),
+        State::Failed => trf!("Erro: {}", info.name),
         _ if info.total.is_some() => format!("{} {}", format::progress_text(info), info.name),
         _ => info.name.clone(),
     }
@@ -89,12 +90,12 @@ impl ProgressWindow {
             (value_label(), value_label(), value_label(), value_label(), value_label(), value_label());
         let grid = gtk::Grid::builder().column_spacing(12).row_spacing(6).build();
         for (row, (text, label)) in [
-            ("Estado", &status),
-            ("Baixado", &downloaded),
-            ("Velocidade", &speed),
-            ("Restante", &remaining),
-            ("Retomável", &resumable),
-            ("Salvar em", &dir),
+            (tr!("Estado"), &status),
+            (tr!("Baixado"), &downloaded),
+            (tr!("Velocidade"), &speed),
+            (tr!("Restante"), &remaining),
+            (tr!("Retomável"), &resumable),
+            (tr!("Salvar em"), &dir),
         ]
         .into_iter()
         .enumerate()
@@ -102,14 +103,14 @@ impl ProgressWindow {
             grid.attach(&caption(text), 0, row as i32, 1, 1);
             grid.attach(label, 1, row as i32, 1, 1);
         }
-        let limit_on = gtk::CheckButton::with_label("No máximo");
+        let limit_on = gtk::CheckButton::with_label(tr!("No máximo"));
         let limit = gtk::SpinButton::with_range(1.0, 1_000_000.0, 64.0);
         limit.set_value(512.0);
         let limit_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         limit_row.append(&limit_on);
         limit_row.append(&limit);
         limit_row.append(&gtk::Label::new(Some("KB/s")));
-        let limit_caption = caption("Limite");
+        let limit_caption = caption(tr!("Limite"));
         grid.attach(&limit_caption, 0, 6, 1, 1);
         grid.attach(&limit_row, 1, 6, 1, 1);
         limit_row.bind_property("visible", &limit_caption, "visible").sync_create().build();
@@ -117,11 +118,11 @@ impl ProgressWindow {
         let error = gtk::Label::builder().xalign(0.0).wrap(true).visible(false).selectable(true).build();
         error.add_css_class("error");
 
-        let folder_button = gtk::Button::with_label("Abrir pasta");
-        let open = gtk::Button::with_label("Abrir");
+        let folder_button = gtk::Button::with_label(tr!("Abrir pasta"));
+        let open = gtk::Button::with_label(tr!("Abrir"));
         open.add_css_class("suggested-action");
-        let pause = gtk::Button::with_label("Pausar");
-        let close = gtk::Button::with_label("Fechar");
+        let pause = gtk::Button::with_label(tr!("Pausar"));
+        let close = gtk::Button::with_label(tr!("Fechar"));
         let buttons = gtk::Box::builder().spacing(8).margin_top(6).build();
         let spacer = gtk::Box::builder().hexpand(true).build();
         buttons.append(&folder_button);
@@ -268,7 +269,7 @@ impl ProgressWindow {
         self.downloaded.set_label(&format::downloaded(info));
         self.speed.set_label(&or_dash(format::speed(info)));
         self.remaining.set_label(&or_dash(format::remaining(info)));
-        self.resumable.set_label(if info.resumable { "Sim (pode pausar e continuar depois)" } else { "Não" });
+        self.resumable.set_label(if info.resumable { tr!("Sim (pode pausar e continuar depois)") } else { tr!("Não") });
         let dir = info
             .path
             .as_ref()
@@ -296,9 +297,9 @@ impl ProgressWindow {
         self.open_folder.set_visible(done || info.path.is_some());
         self.pause.set_visible(!done && info.state != State::Pending);
         self.pause.set_label(match info.state {
-            State::Running | State::Queued => "Pausar",
-            State::Failed => "Tentar de novo",
-            _ => "Retomar",
+            State::Running | State::Queued => tr!("Pausar"),
+            State::Failed => tr!("Tentar de novo"),
+            _ => tr!("Retomar"),
         });
         if finished_now {
             self.window.set_default_widget(Some(&self.open));

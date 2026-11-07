@@ -3,9 +3,19 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{Category, DownloadInfo, Hashing, SourceKind, State, MAP_PARTS};
 
-/// Binary units with a decimal comma: "1,5 MB".
+/// A number written with a point ("1.5"), with a decimal comma in Portuguese.
+fn decimal(text: String) -> String {
+    if fisga_i18n::current() == fisga_i18n::Lang::English {
+        text
+    } else {
+        text.replace('.', ",")
+    }
+}
+
+/// Binary units with a decimal comma: "1,5 MB" ("1.5 MB" in English).
 pub fn bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut value = n as f64;
@@ -17,7 +27,7 @@ pub fn bytes(n: u64) -> String {
     if unit == 0 {
         format!("{n} B")
     } else {
-        format!("{value:.1} {}", UNITS[unit]).replace('.', ",")
+        decimal(format!("{value:.1} {}", UNITS[unit]))
     }
 }
 
@@ -26,14 +36,14 @@ pub fn activity(infos: &[DownloadInfo]) -> String {
     let running: Vec<&DownloadInfo> = infos.iter().filter(|i| i.state == State::Running).collect();
     let queued = infos.iter().filter(|i| i.state == State::Queued).count();
     let mut parts = match running.len() {
-        0 => vec!["Nenhum download em andamento".to_string()],
+        0 => vec![tr!("Nenhum download em andamento").to_string()],
         n => {
             let speed: f64 = running.iter().map(|i| i.speed).sum();
-            vec![format!("{n} baixando"), format!("{}/s", bytes(speed as u64))]
+            vec![trf!("{} baixando", n), format!("{}/s", bytes(speed as u64))]
         }
     };
     if queued > 0 {
-        parts.push(format!("{queued} na fila"));
+        parts.push(trf!("{} na fila", queued));
     }
     parts.join(" · ")
 }
@@ -41,9 +51,9 @@ pub fn activity(infos: &[DownloadInfo]) -> String {
 pub fn size(info: &DownloadInfo) -> String {
     match info.total {
         Some(total) => bytes(total),
-        None if info.probing => "verificando…".into(),
+        None if info.probing => tr!("verificando…").into(),
         None if info.state == State::Completed => bytes(info.downloaded),
-        None => "desconhecido".into(),
+        None => tr!("desconhecido").into(),
     }
 }
 
@@ -58,7 +68,7 @@ pub fn fraction(info: &DownloadInfo) -> f64 {
 pub fn progress_text(info: &DownloadInfo) -> String {
     match info.total {
         _ if info.state == State::Completed => "100%".into(),
-        Some(total) if total > 0 => format!("{:.1}%", fraction(info) * 100.0).replace('.', ","),
+        Some(total) if total > 0 => decimal(format!("{:.1}%", fraction(info) * 100.0)),
         _ if info.downloaded > 0 => bytes(info.downloaded),
         _ => String::new(),
     }
@@ -68,7 +78,7 @@ pub fn progress_text(info: &DownloadInfo) -> String {
 pub fn downloaded(info: &DownloadInfo) -> String {
     match info.total {
         Some(total) if info.state == State::Completed => bytes(total),
-        Some(total) => format!("{} de {}", bytes(info.downloaded.min(total)), bytes(total)),
+        Some(total) => trf!("{} de {}", bytes(info.downloaded.min(total)), bytes(total)),
         None => bytes(info.downloaded),
     }
 }
@@ -99,8 +109,8 @@ pub fn badge(info: &DownloadInfo) -> String {
     let extension = Path::new(&info.name).extension().and_then(OsStr::to_str).filter(|ext| (1..=5).contains(&ext.len()));
     match (extension, info.kind) {
         (Some(ext), _) => ext.to_uppercase(),
-        (None, SourceKind::Direct) => "ARQUIVO".into(),
-        (None, _) => "VÍDEO".into(),
+        (None, SourceKind::Direct) => tr!("ARQUIVO").into(),
+        (None, _) => tr!("VÍDEO").into(),
     }
 }
 
@@ -129,7 +139,7 @@ pub fn category_icon(category: Category) -> &'static str {
 /// When it was added, in local time: "23/10/2026 14:05".
 pub fn added(info: &DownloadInfo) -> String {
     gtk::glib::DateTime::from_unix_local(info.created_at as i64)
-        .and_then(|date| date.format("%d/%m/%Y %H:%M"))
+        .and_then(|date| date.format(tr!("%d/%m/%Y %H:%M")))
         .map(|text| text.to_string())
         .unwrap_or_default()
 }
@@ -183,12 +193,12 @@ pub fn remaining(info: &DownloadInfo) -> String {
 
 pub fn state_label(state: State) -> &'static str {
     match state {
-        State::Pending => "Aguardando confirmação",
-        State::Queued => "Na fila",
-        State::Running => "Baixando",
-        State::Paused => "Pausado",
-        State::Completed => "Concluído",
-        State::Failed => "Erro",
+        State::Pending => tr!("Aguardando confirmação"),
+        State::Queued => tr!("Na fila"),
+        State::Running => tr!("Baixando"),
+        State::Paused => tr!("Pausado"),
+        State::Completed => tr!("Concluído"),
+        State::Failed => tr!("Erro"),
     }
 }
 
@@ -197,9 +207,9 @@ pub fn duplicate(other: &DownloadInfo) -> String {
     let state = state_label(other.state).to_lowercase();
     match (&other.path, other.state) {
         (Some(path), State::Completed) => {
-            format!("Este endereço já foi baixado: \u{201c}{}\u{201d}, em {}.", other.name, path.display())
+            trf!("Este endereço já foi baixado: \u{201c}{}\u{201d}, em {}.", other.name, path.display())
         }
-        _ => format!("Este endereço já está na lista: \u{201c}{}\u{201d} ({state}).", other.name),
+        _ => trf!("Este endereço já está na lista: \u{201c}{}\u{201d} ({}).", other.name, state),
     }
 }
 
@@ -207,21 +217,21 @@ pub fn duplicate(other: &DownloadInfo) -> String {
 pub fn check_status(info: &DownloadInfo) -> Option<String> {
     match (&info.hash, info.checksum_matches()) {
         (Some(Hashing::Running { done }), _) => Some(match info.total.filter(|total| *total > 0) {
-            Some(total) => format!("Conferindo a soma… {}%", (done * 100 / total).min(100)),
-            None => format!("Conferindo a soma… {}", bytes(*done)),
+            Some(total) => trf!("Conferindo a soma… {}%", (done * 100 / total).min(100)),
+            None => trf!("Conferindo a soma… {}", bytes(*done)),
         }),
-        (Some(Hashing::Failed { .. }), _) => Some("Concluído \u{2014} atenção: não foi possível conferir a soma".into()),
+        (Some(Hashing::Failed { .. }), _) => Some(tr!("Concluído \u{2014} atenção: não foi possível conferir a soma").into()),
         (Some(Hashing::Done { digest }), Some(false)) => {
-            Some(format!("Concluído \u{2014} atenção: o {} não confere", digest.algo.label()))
+            Some(trf!("Concluído \u{2014} atenção: o {} não confere", digest.algo.label()))
         }
-        (Some(Hashing::Done { .. }), Some(true)) => Some("Concluído · soma conferida".into()),
+        (Some(Hashing::Done { .. }), Some(true)) => Some(tr!("Concluído · soma conferida").into()),
         _ => None,
     }
 }
 
 pub fn status(info: &DownloadInfo) -> String {
     if info.awaiting_url {
-        return "Aguardando novo endereço".into();
+        return tr!("Aguardando novo endereço").into();
     }
     if let Some(note) = &info.note {
         return note.clone();
@@ -230,16 +240,16 @@ pub fn status(info: &DownloadInfo) -> String {
         return check;
     }
     let status: String = match (&info.error, info.state) {
-        (Some(error), State::Failed) => return format!("Erro: {error}"),
+        (Some(error), State::Failed) => return trf!("Erro: {}", error),
         // Finished, but the antivirus flagged it.
-        (Some(warning), State::Completed) => return format!("Concluído \u{2014} atenção: {warning}"),
-        (_, State::Running) if info.connections > 1 => format!("Baixando ({} conexões)", info.connections),
+        (Some(warning), State::Completed) => return trf!("Concluído \u{2014} atenção: {}", warning),
+        (_, State::Running) if info.connections > 1 => trf!("Baixando ({} conexões)", info.connections),
         (_, state) => state_label(state).into(),
     };
     match info.speed_limit {
         0 => status,
         _ if info.state == State::Completed => status,
-        limit => format!("{status} · máx. {}/s", bytes(limit)),
+        limit => trf!("{} · máx. {}/s", status, bytes(limit)),
     }
 }
 

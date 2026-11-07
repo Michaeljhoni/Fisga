@@ -41,7 +41,7 @@ pub async fn connect() -> io::Result<BoxStream> {
             result => return Ok(Box::new(result?)),
         }
     }
-    Err(io::Error::new(io::ErrorKind::TimedOut, "o fisgad está ocupado"))
+    Err(io::Error::new(io::ErrorKind::TimedOut, fisga_i18n::tr!("o fisgad está ocupado")))
 }
 
 #[cfg(windows)]

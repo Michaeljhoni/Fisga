@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{glib, pango};
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{Category, GrabbedLink, Queue, Request, Response};
 
 use crate::ipc;
@@ -65,7 +66,7 @@ fn fill(list: &gtk::ListBox, found: &Rc<RefCell<Vec<Found>>>, refresh: &Rc<dyn F
 /// `page`: the links a page open in the browser sent, already listed.
 pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, page: Option<(String, Vec<GrabbedLink>)>) {
     let window = gtk::Window::builder()
-        .title("Baixar de um site")
+        .title(tr!("Baixar de um site"))
         .transient_for(parent)
         .modal(true)
         .default_width(720)
@@ -76,18 +77,18 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, page: Option<(S
     let url = gtk::Entry::builder().placeholder_text("https://site.com/pasta/").hexpand(true).activates_default(true).build();
     let depth = gtk::SpinButton::with_range(0.0, fisga_ipc::MAX_GRAB_DEPTH as f64, 1.0);
     depth.set_value(1.0);
-    depth.set_tooltip_text(Some("Quantos níveis de páginas seguir: 0 = só esta página"));
-    let search = gtk::Button::with_label("Procurar");
+    depth.set_tooltip_text(Some(tr!("Quantos níveis de páginas seguir: 0 = só esta página")));
+    let search = gtk::Button::with_label(tr!("Procurar"));
     search.add_css_class("suggested-action");
     let spinner = gtk::Spinner::new();
     let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     top.append(&url);
-    top.append(&gtk::Label::new(Some("níveis")));
+    top.append(&gtk::Label::new(Some(tr!("níveis"))));
     top.append(&depth);
     top.append(&search);
     top.append(&spinner);
     let hint = gtk::Label::builder()
-        .label("Lê a página e, até o número de níveis, as páginas abaixo dela no mesmo site, e lista os arquivos que elas apontam.")
+        .label(tr!("Lê a página e, até o número de níveis, as páginas abaixo dela no mesmo site, e lista os arquivos que elas apontam."))
         .xalign(0.0)
         .wrap(true)
         .build();
@@ -107,20 +108,21 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, page: Option<(S
         .collect();
     let pattern = gtk::Entry::builder().placeholder_text("*.pdf aula_??.mp4").hexpand(true).build();
     let filters = gtk::Grid::builder().column_spacing(12).row_spacing(8).build();
-    filters.attach(&caption("Tipos"), 0, 0, 1, 1);
+    filters.attach(&caption(tr!("Tipos")), 0, 0, 1, 1);
     filters.attach(&types, 1, 0, 1, 1);
-    filters.attach(&caption("Nomes"), 0, 1, 1, 1);
+    filters.attach(&caption(tr!("Nomes")), 0, 1, 1, 1);
     filters.attach(&pattern, 1, 1, 1, 1);
 
     let list = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::None).build();
     list.add_css_class("boxed-list");
-    let placeholder = gtk::Label::builder().label("Digite o endereço e clique em Procurar.").margin_top(24).margin_bottom(24).build();
+    let placeholder =
+        gtk::Label::builder().label(tr!("Digite o endereço e clique em Procurar.")).margin_top(24).margin_bottom(24).build();
     placeholder.add_css_class("dim-label");
     list.set_placeholder(Some(&placeholder));
     let scroll = gtk::ScrolledWindow::builder().child(&list).vexpand(true).min_content_height(260).build();
 
-    let all = gtk::Button::with_label("Marcar todos");
-    let none = gtk::Button::with_label("Desmarcar todos");
+    let all = gtk::Button::with_label(tr!("Marcar todos"));
+    let none = gtk::Button::with_label(tr!("Desmarcar todos"));
     let count = gtk::Label::builder().xalign(1.0).hexpand(true).build();
     count.add_css_class("dim-label");
     let marks = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -132,31 +134,31 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, page: Option<(S
     let names: Vec<&str> = queues.iter().map(|q| q.name.as_str()).collect();
     let queue = gtk::DropDown::from_strings(&names);
     queue.set_visible(queues.len() > 1);
-    let queue_caption = caption("Fila");
+    let queue_caption = caption(tr!("Fila"));
     queue_caption.set_visible(queues.len() > 1);
     let dir: Rc<RefCell<Option<PathBuf>>> = Rc::default();
     let dir_label = gtk::Label::builder()
-        .label("a de cada tipo de arquivo")
+        .label(tr!("a de cada tipo de arquivo"))
         .xalign(0.0)
         .hexpand(true)
         .ellipsize(pango::EllipsizeMode::Start)
         .build();
-    let change_dir = gtk::Button::with_label("Alterar…");
+    let change_dir = gtk::Button::with_label(tr!("Alterar…"));
     let dir_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     dir_row.append(&dir_label);
     dir_row.append(&change_dir);
-    let start = gtk::CheckButton::builder().label("Começar a baixar (entrar na fila)").active(true).build();
+    let start = gtk::CheckButton::builder().label(tr!("Começar a baixar (entrar na fila)")).active(true).build();
     let options = gtk::Grid::builder().column_spacing(12).row_spacing(8).build();
     options.attach(&queue_caption, 0, 0, 1, 1);
     options.attach(&queue, 1, 0, 1, 1);
-    options.attach(&caption("Pasta"), 0, 1, 1, 1);
+    options.attach(&caption(tr!("Pasta")), 0, 1, 1, 1);
     options.attach(&dir_row, 1, 1, 1, 1);
     options.attach(&start, 1, 2, 1, 1);
 
     let error = gtk::Label::builder().xalign(0.0).wrap(true).visible(false).build();
     error.add_css_class("error");
-    let cancel = gtk::Button::with_label("Cancelar");
-    let add = gtk::Button::with_label("Adicionar");
+    let cancel = gtk::Button::with_label(tr!("Cancelar"));
+    let add = gtk::Button::with_label(tr!("Adicionar"));
     add.add_css_class("suggested-action");
     add.set_sensitive(false);
     let buttons = gtk::Box::builder().spacing(8).halign(gtk::Align::End).build();
@@ -209,11 +211,11 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, page: Option<(S
             let total = found.borrow().len();
             count.set_label(&match total {
                 0 => String::new(),
-                _ => format!("{ticked} marcados · {shown} de {total} com os filtros"),
+                _ => trf!("{} marcados · {} de {} com os filtros", ticked, shown, total),
             });
             add.set_label(&match ticked {
-                0 => "Adicionar".to_string(),
-                n => format!("Adicionar {n}"),
+                0 => tr!("Adicionar").to_string(),
+                n => trf!("Adicionar {}", n),
             });
             add.set_sensitive(ticked > 0);
         })
@@ -257,14 +259,14 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, page: Option<(S
                     referrer.replace(Some(address));
                     fill(&list, &found, &r, links);
                     if found.borrow().is_empty() {
-                        error.set_label(&format!("Nenhum arquivo nas {pages} página(s) lida(s)."));
+                        error.set_label(&trf!("Nenhum arquivo nas {} página(s) lida(s).", pages));
                         error.set_visible(true);
                     }
-                    w.set_title(Some(&format!("Baixar de um site — {pages} página(s)")));
+                    w.set_title(Some(&trf!("Baixar de um site — {} página(s)", pages)));
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    error.set_label(&format!("Não foi possível procurar: {e}"));
+                    error.set_label(&trf!("Não foi possível procurar: {}", e));
                     error.set_visible(true);
                 }
             }
@@ -273,10 +275,10 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, page: Option<(S
     });
 
     if let Some((page, links)) = page {
-        window.set_title(Some("Links da página"));
-        hint.set_label(
-            "Os links para arquivos da página aberta no navegador. Marque os que quiser baixar; \u{201c}Procurar\u{201d} lê a página de novo, seguindo os níveis.",
-        );
+        window.set_title(Some(tr!("Links da página")));
+        hint.set_label(tr!(
+            "Os links para arquivos da página aberta no navegador. Marque os que quiser baixar; \u{201c}Procurar\u{201d} lê a página de novo, seguindo os níveis."
+        ));
         url.set_text(&page);
         referrer.replace(Some(page));
         fill(&list, &found, &refresh, links);
@@ -288,7 +290,7 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, page: Option<(S
     change_dir.connect_clicked(move |_| {
         let (w, d, l) = (w.clone(), d.clone(), l.clone());
         glib::spawn_future_local(async move {
-            let dialog = gtk::FileDialog::builder().title("Salvar os arquivos em").modal(true).build();
+            let dialog = gtk::FileDialog::builder().title(tr!("Salvar os arquivos em")).modal(true).build();
             if let Ok(folder) = dialog.select_folder_future(Some(&w)).await {
                 if let Some(path) = folder.path() {
                     l.set_label(&path.display().to_string());
@@ -323,7 +325,7 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, page: Option<(S
             match ipc::call(request).await {
                 Ok(_) => w.close(),
                 Err(e) => {
-                    error.set_label(&format!("Não foi possível adicionar: {e}"));
+                    error.set_label(&trf!("Não foi possível adicionar: {}", e));
                     error.set_visible(true);
                     button.set_sensitive(true);
                 }

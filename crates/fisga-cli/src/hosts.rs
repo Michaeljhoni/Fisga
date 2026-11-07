@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{CHROME_EXTENSION_ID, FIREFOX_EXTENSION_ID, NATIVE_HOST_NAME};
 use serde_json::json;
 
@@ -94,17 +95,22 @@ fn manifests(host: &Path, extra_chrome_ids: &[String]) -> (serde_json::Value, se
 /// For packages: the system-wide manifests under `root` (the package's
 /// staging folder, `$pkgdir`), pointing to `host` as installed (`/usr/bin/...`).
 pub fn install_system(root: &Path, host: &Path, extra_chrome_ids: &[String]) -> anyhow::Result<()> {
-    anyhow::ensure!(host.is_absolute(), "--host-path precisa ser um caminho absoluto: {}", host.display());
+    anyhow::ensure!(host.is_absolute(), trf!("--host-path precisa ser um caminho absoluto: {}", host.display()));
     let (chrome, firefox) = manifests(host, extra_chrome_ids);
     let targets = CHROMIUM_SYSTEM.iter().map(|dir| (dir, &chrome)).chain(FIREFOX_SYSTEM.iter().map(|dir| (dir, &firefox)));
     for (dir, manifest) in targets {
-        println!("instalado {}", write_manifest(&root.join(dir), manifest)?.display());
+        report(tr!("instalado"), write_manifest(&root.join(dir), manifest)?.display());
     }
     Ok(())
 }
 
+/// "instalado /caminho", the paths of every line in the same column.
+fn report(what: &str, target: impl std::fmt::Display) {
+    println!("{what:<9} {target}");
+}
+
 fn write_manifest(dir: &Path, manifest: &serde_json::Value) -> anyhow::Result<PathBuf> {
-    std::fs::create_dir_all(dir).with_context(|| format!("criar {}", dir.display()))?;
+    std::fs::create_dir_all(dir).with_context(|| trf!("criar {}", dir.display()))?;
     let path = dir.join(format!("{NATIVE_HOST_NAME}.json"));
     std::fs::write(&path, serde_json::to_vec_pretty(manifest)?)?;
     Ok(path)
@@ -114,14 +120,14 @@ pub fn install(extra_chrome_ids: &[String], uninstall: bool) -> anyhow::Result<(
     let host = fisga_ipc::sibling_executable("fisga-native-host");
     let host = host
         .canonicalize()
-        .with_context(|| format!("fisga-native-host não encontrado ({}); instale-o junto com o fisga", host.display()))?;
+        .with_context(|| trf!("fisga-native-host não encontrado ({}); instale-o junto com o fisga", host.display()))?;
     let host = plain_path(host);
 
     let (chrome_manifest, firefox_manifest) = manifests(&host, extra_chrome_ids);
     register(&chrome_manifest, &firefox_manifest, uninstall)?;
     if !uninstall {
         println!("\nhost: {}", host.display());
-        println!("Recarregue a extensão no navegador para ela encontrar o app.");
+        println!("{}", tr!("Recarregue a extensão no navegador para ela encontrar o app."));
     }
     Ok(())
 }
@@ -138,7 +144,7 @@ fn plain_path(path: PathBuf) -> PathBuf {
 /// The manifest goes in each browser's own folder, for those found.
 #[cfg(not(windows))]
 fn register(chrome_manifest: &serde_json::Value, firefox_manifest: &serde_json::Value, uninstall: bool) -> anyhow::Result<()> {
-    let home = dirs::home_dir().context("pasta pessoal não encontrada")?;
+    let home = dirs::home_dir().context(tr!("pasta pessoal não encontrada"))?;
     let mut targets: Vec<(PathBuf, &serde_json::Value)> = Vec::new();
 
     #[cfg(not(target_os = "macos"))]
@@ -173,15 +179,15 @@ fn register(chrome_manifest: &serde_json::Value, firefox_manifest: &serde_json::
         // The host from before the rename (LDM) points to a program that no longer exists.
         let legacy = dir.join("io.ldm.native.json");
         if std::fs::remove_file(&legacy).is_ok() {
-            println!("removido  {}", legacy.display());
+            report(tr!("removido"), legacy.display());
         }
         if uninstall {
             let path = dir.join(format!("{NATIVE_HOST_NAME}.json"));
             if std::fs::remove_file(&path).is_ok() {
-                println!("removido  {}", path.display());
+                report(tr!("removido"), path.display());
             }
         } else {
-            println!("instalado {}", write_manifest(&dir, manifest)?.display());
+            report(tr!("instalado"), write_manifest(&dir, manifest)?.display());
         }
     }
     Ok(())
@@ -192,18 +198,18 @@ fn register(chrome_manifest: &serde_json::Value, firefox_manifest: &serde_json::
 /// Through `reg.exe`, which every Windows has.
 #[cfg(windows)]
 fn register(chrome_manifest: &serde_json::Value, firefox_manifest: &serde_json::Value, uninstall: bool) -> anyhow::Result<()> {
-    let dir = dirs::data_local_dir().context("pasta LOCALAPPDATA não encontrada")?.join("fisga").join("native-messaging-hosts");
+    let dir = dirs::data_local_dir().context(tr!("pasta LOCALAPPDATA não encontrada"))?.join("fisga").join("native-messaging-hosts");
     let families = [("chrome", chrome_manifest, CHROMIUM_KEYS), ("firefox", firefox_manifest, FIREFOX_KEYS)];
     for (family, manifest, keys) in families {
         let file = dir.join(format!("{NATIVE_HOST_NAME}.{family}.json"));
         if uninstall {
             if std::fs::remove_file(&file).is_ok() {
-                println!("removido  {}", file.display());
+                report(tr!("removido"), file.display());
             }
         } else {
-            std::fs::create_dir_all(&dir).with_context(|| format!("criar {}", dir.display()))?;
+            std::fs::create_dir_all(&dir).with_context(|| trf!("criar {}", dir.display()))?;
             std::fs::write(&file, serde_json::to_vec_pretty(manifest)?)?;
-            println!("instalado {}", file.display());
+            report(tr!("instalado"), file.display());
         }
         for key in keys {
             let key = format!(r"HKCU\Software\{key}\NativeMessagingHosts\{NATIVE_HOST_NAME}");
@@ -218,9 +224,9 @@ fn register(chrome_manifest: &serde_json::Value, firefox_manifest: &serde_json::
                 .status()
                 .is_ok_and(|status| status.success());
             match (uninstall, done) {
-                (false, false) => anyhow::bail!("não foi possível gravar {key} no registro"),
-                (false, true) => println!("registrado {key}"),
-                (true, true) => println!("removido  {key}"),
+                (false, false) => anyhow::bail!(trf!("não foi possível gravar {} no registro", key)),
+                (false, true) => report(tr!("registrado"), &key),
+                (true, true) => report(tr!("removido"), &key),
                 // The key was not there.
                 (true, false) => {}
             }

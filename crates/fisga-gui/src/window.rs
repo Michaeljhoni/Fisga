@@ -10,6 +10,7 @@ use std::rc::{Rc, Weak};
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib, pango};
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{AddRequest, Category, Direction, DownloadInfo, Queue, Request, State};
 
 use crate::app::App;
@@ -40,10 +41,10 @@ impl View {
 
     pub fn label(self, queues: &[Queue]) -> String {
         match self {
-            View::All => "Todos os downloads".into(),
-            View::Unfinished => "Em andamento".into(),
-            View::Finished => "Concluídos".into(),
-            View::Failed => "Com erro".into(),
+            View::All => tr!("Todos os downloads").into(),
+            View::Unfinished => tr!("Em andamento").into(),
+            View::Finished => tr!("Concluídos").into(),
+            View::Failed => tr!("Com erro").into(),
             View::Category(category) => category.label().into(),
             View::Queue(id) => queues.iter().find(|q| q.id == id).map(|q| q.name.clone()).unwrap_or_default(),
         }
@@ -63,8 +64,8 @@ impl View {
     /// Heading above the first entry of a group.
     fn group(self) -> Option<&'static str> {
         match self {
-            View::Category(_) => Some("Categorias"),
-            View::Queue(_) => Some("Filas"),
+            View::Category(_) => Some(tr!("Categorias")),
+            View::Queue(_) => Some(tr!("Filas")),
             _ => None,
         }
     }
@@ -74,10 +75,10 @@ impl View {
 
     fn chip_label(self) -> &'static str {
         match self {
-            View::All => "Todos",
-            View::Unfinished => "Em andamento",
-            View::Finished => "Concluídos",
-            _ => "Com erro",
+            View::All => tr!("Todos"),
+            View::Unfinished => tr!("Em andamento"),
+            View::Finished => tr!("Concluídos"),
+            _ => tr!("Com erro"),
         }
     }
 
@@ -169,19 +170,19 @@ fn add_row_menu(list_item: &gtk::ListItem, cell: &impl IsA<gtk::Widget>, menu: &
 fn row_menu_model(queues: &[Queue]) -> gio::Menu {
     let menu = gio::Menu::new();
     let section = gio::Menu::new();
-    section.append(Some("Abrir"), Some("win.open-file"));
-    section.append(Some("Abrir pasta"), Some("win.open-folder"));
-    section.append(Some("Conferir soma (SHA-256)…"), Some("win.verify"));
+    section.append(Some(tr!("Abrir")), Some("win.open-file"));
+    section.append(Some(tr!("Abrir pasta")), Some("win.open-folder"));
+    section.append(Some(tr!("Conferir soma (SHA-256)…")), Some("win.verify"));
     menu.append_section(None, &section);
     let section = gio::Menu::new();
-    section.append(Some("Retomar"), Some("win.resume"));
-    section.append(Some("Pausar"), Some("win.pause"));
-    section.append(Some("Atualizar endereço…"), Some("win.refresh-url"));
-    section.append(Some("Limitar velocidade…"), Some("win.limit-speed"));
+    section.append(Some(tr!("Retomar")), Some("win.resume"));
+    section.append(Some(tr!("Pausar")), Some("win.pause"));
+    section.append(Some(tr!("Atualizar endereço…")), Some("win.refresh-url"));
+    section.append(Some(tr!("Limitar velocidade…")), Some("win.limit-speed"));
     menu.append_section(None, &section);
     let section = gio::Menu::new();
-    section.append(Some("Mover para cima"), Some("win.move-up"));
-    section.append(Some("Mover para baixo"), Some("win.move-down"));
+    section.append(Some(tr!("Mover para cima")), Some("win.move-up"));
+    section.append(Some(tr!("Mover para baixo")), Some("win.move-down"));
     if queues.len() > 1 {
         let targets = gio::Menu::new();
         for queue in queues {
@@ -189,15 +190,15 @@ fn row_menu_model(queues: &[Queue]) -> gio::Menu {
             item.set_action_and_target_value(Some("win.move-to-queue"), Some(&queue.id.to_variant()));
             targets.append_item(&item);
         }
-        section.append_submenu(Some("Mover para a fila"), &targets);
+        section.append_submenu(Some(tr!("Mover para a fila")), &targets);
     }
     menu.append_section(None, &section);
     let section = gio::Menu::new();
-    section.append(Some("Copiar endereço"), Some("win.copy-url"));
-    section.append(Some("Remover…"), Some("win.remove"));
+    section.append(Some(tr!("Copiar endereço")), Some("win.copy-url"));
+    section.append(Some(tr!("Remover…")), Some("win.remove"));
     menu.append_section(None, &section);
     let section = gio::Menu::new();
-    section.append(Some("Propriedades"), Some("win.properties"));
+    section.append(Some(tr!("Propriedades")), Some("win.properties"));
     menu.append_section(None, &section);
     menu
 }
@@ -234,7 +235,7 @@ fn progress_column(menu: &RowMenu) -> gtk::ColumnViewColumn {
         add_row_menu(list_item, &bar, &menu);
         list_item.set_child(Some(&bar));
     });
-    let column = gtk::ColumnViewColumn::new(Some("Progresso"), Some(factory));
+    let column = gtk::ColumnViewColumn::new(Some(tr!("Progresso")), Some(factory));
     column.set_fixed_width(170);
     column.set_resizable(true);
     column
@@ -270,14 +271,16 @@ fn sidebar_row(view: View, queues: &[Queue]) -> (gtk::ListBoxRow, gtk::Label) {
 
 /// The list's columns besides "Nome" (always there): the id kept in
 /// `Settings::hidden_columns`, and the title.
-pub const COLUMNS: [(&str, &str); 6] = [
-    ("size", "Tamanho"),
-    ("progress", "Progresso"),
-    ("speed", "Velocidade"),
-    ("remaining", "Restante"),
-    ("status", "Estado"),
-    ("added", "Adicionado em"),
-];
+pub fn columns() -> [(&'static str, &'static str); 6] {
+    [
+        ("size", tr!("Tamanho")),
+        ("progress", tr!("Progresso")),
+        ("speed", tr!("Velocidade")),
+        ("remaining", tr!("Restante")),
+        ("status", tr!("Estado")),
+        ("added", tr!("Adicionado em")),
+    ]
+}
 
 struct Column {
     id: &'static str,
@@ -289,31 +292,31 @@ struct Column {
 fn main_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     let section = gio::Menu::new();
-    section.append(Some("Adicionar em lote…"), Some("win.batch"));
-    section.append(Some("Baixar de um site…"), Some("win.grab"));
-    section.append(Some("Importar lista…"), Some("win.import"));
-    section.append(Some("Exportar lista…"), Some("win.export"));
+    section.append(Some(tr!("Adicionar em lote…")), Some("win.batch"));
+    section.append(Some(tr!("Baixar de um site…")), Some("win.grab"));
+    section.append(Some(tr!("Importar lista…")), Some("win.import"));
+    section.append(Some(tr!("Exportar lista…")), Some("win.export"));
     menu.append_section(None, &section);
     let columns = gio::Menu::new();
-    for (id, title) in COLUMNS {
+    for (id, title) in self::columns() {
         columns.append(Some(title), Some(&format!("win.column-{id}")));
     }
     let section = gio::Menu::new();
-    section.append_submenu(Some("Colunas"), &columns);
+    section.append_submenu(Some(tr!("Colunas")), &columns);
     menu.append_section(None, &section);
     let section = gio::Menu::new();
-    section.append(Some("Retomar todos"), Some("win.resume-all"));
-    section.append(Some("Pausar todos"), Some("win.pause-all"));
+    section.append(Some(tr!("Retomar todos")), Some("win.resume-all"));
+    section.append(Some(tr!("Pausar todos")), Some("win.pause-all"));
     menu.append_section(None, &section);
     let section = gio::Menu::new();
-    section.append(Some("Copiar endereço"), Some("win.copy-url"));
-    section.append(Some("Remover concluídos da lista"), Some("win.clear-completed"));
+    section.append(Some(tr!("Copiar endereço")), Some("win.copy-url"));
+    section.append(Some(tr!("Remover concluídos da lista")), Some("win.clear-completed"));
     menu.append_section(None, &section);
     let section = gio::Menu::new();
-    section.append(Some("Filas e agendador"), Some("win.queues"));
-    section.append(Some("Preferências"), Some("win.preferences"));
-    section.append(Some("Procurar atualizações"), Some("win.check-update"));
-    section.append(Some("Sobre o Fisga"), Some("win.about"));
+    section.append(Some(tr!("Filas e agendador")), Some("win.queues"));
+    section.append(Some(tr!("Preferências")), Some("win.preferences"));
+    section.append(Some(tr!("Procurar atualizações")), Some("win.check-update"));
+    section.append(Some(tr!("Sobre o Fisga")), Some("win.about"));
     menu.append_section(None, &section);
     menu
 }
@@ -342,16 +345,16 @@ impl MainWindow {
         brand.append(&logo);
         brand.append(&title);
         header.pack_start(&brand);
-        header.pack_start(&header_button("media-playback-start-symbolic", "Retomar / confirmar", "win.resume"));
-        header.pack_start(&header_button("media-playback-pause-symbolic", "Pausar", "win.pause"));
-        header.pack_start(&header_button("user-trash-symbolic", "Remover (Delete)", "win.remove"));
+        header.pack_start(&header_button("media-playback-start-symbolic", tr!("Retomar / confirmar"), "win.resume"));
+        header.pack_start(&header_button("media-playback-pause-symbolic", tr!("Pausar"), "win.pause"));
+        header.pack_start(&header_button("user-trash-symbolic", tr!("Remover (Delete)"), "win.remove"));
         let menu = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
-            .tooltip_text("Menu")
+            .tooltip_text(tr!("Menu"))
             .menu_model(&main_menu())
             .build();
         header.pack_end(&menu);
-        let as_list = gtk::ToggleButton::builder().icon_name("view-list-symbolic").tooltip_text("Ver como lista").build();
+        let as_list = gtk::ToggleButton::builder().icon_name("view-list-symbolic").tooltip_text(tr!("Ver como lista")).build();
         header.pack_end(&as_list);
         // Newest or oldest on top, in words: icon themes rarely have the sort icons.
         // GTK's own arrow and the text follow `set_view`.
@@ -362,12 +365,12 @@ impl MainWindow {
         order_box.append(&order_label);
         let order = gtk::Button::builder().child(&order_box).build();
         header.pack_end(&order);
-        header.pack_end(&header_button("folder-symbolic", "Abrir pasta", "win.open-folder"));
+        header.pack_end(&header_button("folder-symbolic", tr!("Abrir pasta"), "win.open-folder"));
         header.pack_end(
-            &gtk::Button::builder().label("Abrir").tooltip_text("Abrir o arquivo").action_name("win.open-file").build(),
+            &gtk::Button::builder().label(tr!("Abrir")).tooltip_text(tr!("Abrir o arquivo")).action_name("win.open-file").build(),
         );
         // The window title stays "Fisga" (compositor rules); the search sits in its place.
-        let search = gtk::SearchEntry::builder().placeholder_text("Buscar (Ctrl+F)").width_chars(28).build();
+        let search = gtk::SearchEntry::builder().placeholder_text(tr!("Buscar (Ctrl+F)")).width_chars(28).build();
         header.set_title_widget(Some(&search));
         window.set_titlebar(Some(&header));
 
@@ -470,9 +473,9 @@ impl MainWindow {
             popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             popover.popup();
         });
-        view.append_column(&text_column("Nome", "name", true, 0.0, &menu));
+        view.append_column(&text_column(tr!("Nome"), "name", true, 0.0, &menu));
         let mut columns = Vec::new();
-        for (id, title) in COLUMNS {
+        for (id, title) in self::columns() {
             let column = match id {
                 "progress" => progress_column(&menu),
                 "size" | "speed" | "remaining" => text_column(title, id, false, 1.0, &menu),
@@ -517,10 +520,10 @@ impl MainWindow {
         // The add button floats over the downloads, bottom right.
         let fab_box = gtk::Box::builder().spacing(8).build();
         fab_box.append(&gtk::Image::from_icon_name("list-add-symbolic"));
-        fab_box.append(&gtk::Label::new(Some("Adicionar URL")));
+        fab_box.append(&gtk::Label::new(Some(tr!("Adicionar URL"))));
         let fab = gtk::Button::builder()
             .child(&fab_box)
-            .tooltip_text("Adicionar um endereço (Ctrl+N)")
+            .tooltip_text(tr!("Adicionar um endereço (Ctrl+N)"))
             .action_name("win.add")
             .build();
         fab.add_css_class("fisga-fab");
@@ -740,8 +743,8 @@ impl MainWindow {
             self.scroll_to_top(true, true);
         }
         let (icon, label, tooltip) = match newest_first {
-            true => ("pan-up-symbolic", "Recentes", "Mais recentes no topo (clique para inverter)"),
-            false => ("pan-down-symbolic", "Antigos", "Mais antigos no topo (clique para inverter)"),
+            true => ("pan-up-symbolic", tr!("Recentes"), tr!("Mais recentes no topo (clique para inverter)")),
+            false => ("pan-down-symbolic", tr!("Antigos"), tr!("Mais antigos no topo (clique para inverter)")),
         };
         self.order_icon.set_icon_name(Some(icon));
         self.order_label.set_label(label);
@@ -848,14 +851,14 @@ impl MainWindow {
                 let parent = parent.clone();
                 glib::spawn_future_local(async move {
                     if urls.is_empty() {
-                        show_error(Some(parent.upcast_ref()), "Nada para exportar", "A lista mostrada está vazia.");
+                        show_error(Some(parent.upcast_ref()), tr!("Nada para exportar"), tr!("A lista mostrada está vazia."));
                         return;
                     }
-                    let dialog = gtk::FileDialog::builder().title("Exportar lista").initial_name("downloads.txt").modal(true).build();
+                    let dialog = gtk::FileDialog::builder().title(tr!("Exportar lista")).initial_name("downloads.txt").modal(true).build();
                     let Ok(file) = dialog.save_future(Some(&parent)).await else { return };
                     let Some(path) = file.path() else { return };
                     if let Err(e) = std::fs::write(&path, urls.join("\n") + "\n") {
-                        show_error(Some(parent.upcast_ref()), "Não foi possível exportar", &e.to_string());
+                        show_error(Some(parent.upcast_ref()), tr!("Não foi possível exportar"), &e.to_string());
                     }
                 });
             }),
@@ -866,7 +869,7 @@ impl MainWindow {
             Box::new(move || {
                 let (parent, a) = (parent.clone(), a.clone());
                 glib::spawn_future_local(async move {
-                    let dialog = gtk::FileDialog::builder().title("Importar lista").modal(true).build();
+                    let dialog = gtk::FileDialog::builder().title(tr!("Importar lista")).modal(true).build();
                     let Ok(file) = dialog.open_future(Some(&parent)).await else { return };
                     let Some(path) = file.path() else { return };
                     match std::fs::read_to_string(&path) {
@@ -876,7 +879,7 @@ impl MainWindow {
                                 crate::batch::show(&parent, app.settings().all_queues(), Some(text));
                             }
                         }
-                        Err(e) => show_error(Some(parent.upcast_ref()), "Não foi possível ler o arquivo", &e.to_string()),
+                        Err(e) => show_error(Some(parent.upcast_ref()), tr!("Não foi possível ler o arquivo"), &e.to_string()),
                     }
                 });
             }),
@@ -1061,7 +1064,7 @@ impl MainWindow {
         let text = match connection {
             Err(reason) => {
                 self.speed.set(0.0, 0, 0, None);
-                format!("Sem conexão com o fisgad ({reason}). Tentando de novo…")
+                trf!("Sem conexão com o fisgad ({}). Tentando de novo…", reason)
             }
             Ok(()) => {
                 let (mut total, mut running, mut speed, mut connections, mut left) = (0, 0, 0.0, 0, 0u64);
@@ -1079,15 +1082,15 @@ impl MainWindow {
                 let eta = (speed >= 1.0 && left > 0).then(|| (left as f64 / speed).ceil() as u64);
                 self.speed.set(speed, running, connections, eta);
                 let mut text = match total {
-                    0 => "Nenhum download".to_string(),
-                    1 => "1 download".to_string(),
-                    n => format!("{n} downloads"),
+                    0 => tr!("Nenhum download").to_string(),
+                    1 => tr!("1 download").to_string(),
+                    n => trf!("{} downloads", n),
                 };
                 if running > 0 {
-                    text.push_str(&format!(" · {running} baixando · {}/s", format::bytes(speed as u64)));
+                    text.push_str(&format!(" · {} · {}/s", trf!("{} baixando", running), format::bytes(speed as u64)));
                 }
                 if self.speed_limit.get() > 0 {
-                    text.push_str(&format!(" · limite de {}/s", format::bytes(self.speed_limit.get())));
+                    text.push_str(&format!(" · {}", trf!("limite de {}/s", format::bytes(self.speed_limit.get()))));
                 }
                 let scheduled: Vec<String> = self
                     .queues
@@ -1097,7 +1100,7 @@ impl MainWindow {
                     .map(|queue| format!("{}: {}", queue.name, queue.schedule.describe()))
                     .collect();
                 if !scheduled.is_empty() {
-                    text.push_str(&format!(" · agendado — {}", scheduled.join("; ")));
+                    text.push_str(&format!(" · {}", trf!("agendado — {}", scheduled.join("; "))));
                 }
                 text
             }
@@ -1144,7 +1147,7 @@ fn about(parent: &gtk::ApplicationWindow) {
         .transient_for(parent)
         .modal(true)
         .program_name("Fisga")
-        .comments("Gerenciador de downloads para Linux, Windows e macOS, inspirado no Internet Download Manager.")
+        .comments(tr!("Gerenciador de downloads para Linux, Windows e macOS, inspirado no Internet Download Manager."))
         .version(env!("CARGO_PKG_VERSION"))
         .logo_icon_name("folder-download")
         .build()
@@ -1169,7 +1172,7 @@ pub fn close_on_escape(window: &impl IsA<gtk::Window>) {
 pub fn send(request: Request, parent: Option<gtk::Window>) {
     glib::spawn_future_local(async move {
         if let Err(e) = ipc::call(request).await {
-            show_error(parent.as_ref(), "O fisgad recusou o pedido", &e.to_string());
+            show_error(parent.as_ref(), tr!("O fisgad recusou o pedido"), &e.to_string());
         }
     });
 }
@@ -1182,9 +1185,9 @@ pub fn show_error(parent: Option<&gtk::Window>, message: &str, detail: &str) {
 async fn confirm_remove(window: gtk::ApplicationWindow, info: DownloadInfo) {
     let dialog = gtk::AlertDialog::builder()
         .modal(true)
-        .message(format!("Remover \u{201c}{}\u{201d}?", info.name))
-        .detail("O arquivo pode continuar na pasta ou ser apagado junto (inclusive as partes já baixadas).")
-        .buttons(["Cancelar", "Remover da lista", "Remover e apagar o arquivo"])
+        .message(trf!("Remover \u{201c}{}\u{201d}?", info.name))
+        .detail(tr!("O arquivo pode continuar na pasta ou ser apagado junto (inclusive as partes já baixadas)."))
+        .buttons([tr!("Cancelar"), tr!("Remover da lista"), tr!("Remover e apagar o arquivo")])
         .cancel_button(0)
         .default_button(1)
         .build();
@@ -1209,7 +1212,7 @@ pub fn open_file_then(window: &gtk::Window, path: PathBuf, then: impl FnOnce() +
     let parent = window.clone();
     launcher.launch(Some(window), gio::Cancellable::NONE, move |result| match result {
         Ok(()) => then(),
-        Err(e) => show_error(Some(&parent), "Não foi possível abrir o arquivo", &e.to_string()),
+        Err(e) => show_error(Some(&parent), tr!("Não foi possível abrir o arquivo"), &e.to_string()),
     });
 }
 
@@ -1217,7 +1220,7 @@ pub fn open_folder(window: &gtk::Window, info: &DownloadInfo) {
     let parent = window.clone();
     let callback = move |result: Result<(), glib::Error>| {
         if let Err(e) = result {
-            show_error(Some(&parent), "Não foi possível abrir a pasta", &e.to_string());
+            show_error(Some(&parent), tr!("Não foi possível abrir a pasta"), &e.to_string());
         }
     };
     match &info.path {
@@ -1286,16 +1289,16 @@ fn accept_dropped_links(window: &gtk::ApplicationWindow, app: &Rc<App>) {
 /// usual "Novo download" window opens to confirm it.
 fn add_url_dialog(parent: &gtk::ApplicationWindow) {
     let dialog = gtk::Window::builder()
-        .title("Adicionar URL")
+        .title(tr!("Adicionar URL"))
         .transient_for(parent)
         .modal(true)
         .default_width(520)
         .resizable(false)
         .build();
     let entry = gtk::Entry::builder().placeholder_text("https://…").activates_default(true).hexpand(true).build();
-    let ok = gtk::Button::with_label("Adicionar");
+    let ok = gtk::Button::with_label(tr!("Adicionar"));
     ok.add_css_class("suggested-action");
-    let cancel = gtk::Button::with_label("Cancelar");
+    let cancel = gtk::Button::with_label(tr!("Cancelar"));
     let buttons = gtk::Box::builder().spacing(8).halign(gtk::Align::End).build();
     buttons.append(&cancel);
     buttons.append(&ok);
@@ -1307,7 +1310,7 @@ fn add_url_dialog(parent: &gtk::ApplicationWindow) {
         .margin_start(18)
         .margin_end(18)
         .build();
-    content.append(&gtk::Label::builder().label("Endereço do arquivo:").xalign(0.0).build());
+    content.append(&gtk::Label::builder().label(tr!("Endereço do arquivo:")).xalign(0.0).build());
     content.append(&entry);
     content.append(&buttons);
     dialog.set_child(Some(&content));

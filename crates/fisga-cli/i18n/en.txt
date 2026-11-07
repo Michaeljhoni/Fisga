@@ -1,3 +1,644 @@
 # The English of fisga-cli's texts: each Portuguese text as it is in the code,
 # then its English after "= ", then a blank line. See crates/fisga-i18n.
 
+Fisga: gerenciador de downloads para Linux, Windows e macOS
+= Fisga: download manager for Linux, Windows and macOS
+
+Pasta de destino (padrão: pasta de Downloads)
+= Destination folder (default: the Downloads folder)
+
+Nome do arquivo (padrão: detectado pelo servidor)
+= File name (default: the one the server gives)
+
+Número máximo de conexões
+= Maximum number of connections
+
+Cabeçalho extra, no formato "Nome: valor" (pode repetir)
+= Extra header, as "Name: value" (can be repeated)
+
+cabeçalho inválido: {}
+= invalid header: {}
+
+Pasta de downloads ("padrao" volta para a pasta de Downloads do sistema)
+= Download folder ("default" goes back to the system's Downloads folder)
+
+Separar por tipo de arquivo em subpastas (Vídeos, Músicas, Programas...)
+= Sort by file type into subfolders (Videos, Music, Programs...)
+
+Downloads ao mesmo tempo
+= Downloads at the same time
+
+Conexões por arquivo
+= Connections per file
+
+Abrir a janela de progresso ao confirmar um download
+= Open the progress window when a download is confirmed
+
+Limite de velocidade de todos os downloads juntos, em KB/s (0 = sem limite)
+= Speed limit for all downloads together, in KB/s (0 = no limit)
+
+Abrir a janela "Novo download" ao copiar o link de um arquivo
+= Open the "New download" window when a link to a file is copied
+
+Ícone na bandeja (o fisga-gui continua rodando ao fechar a janela)
+= Tray icon (fisga-gui keeps running when its window is closed)
+
+Proxy: "sistema" (variáveis http_proxy...), "nenhum", um endereço como http://host:3128, ou "-" para ler o endereço da entrada padrão (com senha, socks5://usuário:senha@host:1080, sem deixá-la no histórico do shell)
+= Proxy: "system" (http_proxy... variables), "none", an address like http://host:3128, or "-" to read the address from standard input (with a password, socks5://user:password@host:1080, without leaving it in the shell history)
+
+Tocar um som ao concluir um download
+= Play a sound when a download finishes
+
+Verificar cada download concluído com o ClamAV
+= Scan each finished download with ClamAV
+
+Comando a rodar ao concluir (no shell, com o arquivo em "$FISGA_FILE"; "" = nenhum)
+= Command to run when a download finishes (in the shell, with the file in "$FISGA_FILE"; "" = none)
+
+Extensões que o navegador entrega ao Fisga, separadas por espaço ("padrao" = a lista padrão)
+= Extensions the browser hands over to Fisga, separated by spaces ("default" = the default list)
+
+Tecla que, segurada ao clicar num link, manda o link ao Fisga: nenhuma, alt, ctrl+alt, shift+alt ou ctrl+shift
+= Key that, held while clicking a link, sends the link to Fisga: none, alt, ctrl+alt, shift+alt or ctrl+shift
+
+Sites cujos downloads ficam com o navegador, separados por espaço ("nenhum" = limpa a lista)
+= Sites whose downloads stay with the browser, separated by spaces ("none" clears the list)
+
+Tema das janelas: escuro ou claro
+= Window theme: dark or light
+
+Temas de datas comemorativas na janela principal (confete no Carnaval, neve no Natal...)
+= Holiday themes in the main window (confetti at Carnival, snow at Christmas...)
+
+Procurar uma versão nova do Fisga uma vez por dia
+= Look for a new version of Fisga once a day
+
+Idioma dos textos: auto (o do sistema), pt ou en
+= Language of the texts: auto (the system's), pt or en
+
+Lista os sites com login (sem as senhas)
+= List the sites with a login (without the passwords)
+
+Guarda o usuário e a senha de um site; a senha é lida da entrada padrão
+= Save the user and password for a site; the password is read from standard input
+
+Esquece o login de um site
+= Forget the login for a site
+
+Liga o agendador: a fila só roda no horário
+= Turn the scheduler on: the queue only runs at its hours
+
+Desliga o agendador: a fila roda sempre
+= Turn the scheduler off: the queue always runs
+
+Horário de início, HH:MM
+= Start time, HH:MM
+
+Horário de parada, HH:MM, ou "nenhum" (vai até terminar a fila)
+= Stop time, HH:MM, or "none" (runs until the queue is done)
+
+Dias: "todos" ou uma lista como "seg,ter,qua,qui,sex"
+= Days: "all" or a list like "mon,tue,wed,thu,fri"
+
+Ao terminar a fila: nada, suspender ou desligar
+= When the queue is done: nothing, suspend or poweroff
+
+Cancela a suspensão ou o desligamento planejado
+= Cancel the planned suspend or shutdown
+
+Fila (número em "fisga queue"; padrão: a principal)
+= Queue (its number in "fisga queue"; default: the main one)
+
+Lista as filas
+= List the queues
+
+Cria uma fila
+= Create a queue
+
+Downloads desta fila ao mesmo tempo
+= Downloads of this queue at the same time
+
+Muda o nome ou o número de downloads ao mesmo tempo de uma fila
+= Change a queue's name or its number of downloads at the same time
+
+Exclui uma fila (os downloads dela vão para a fila principal)
+= Delete a queue (its downloads go to the main queue)
+
+Envia um download para o daemon (fisgad)
+= Send a download to the daemon (fisgad)
+
+Acompanha o progresso até terminar
+= Follow the progress until it finishes
+
+Pede confirmação na janela "Novo download" (fisga-gui) antes de começar
+= Ask for confirmation in the "New download" window (fisga-gui) before starting
+
+Fila do download (número em "fisga queue")
+= The download's queue (its number in "fisga queue")
+
+Soma SHA-256 (ou SHA-1/384/512) publicada na página: o arquivo é conferido ao terminar
+= SHA-256 (or SHA-1/384/512) checksum published on the page: the file is checked when it finishes
+
+Confere a soma SHA-256 (ou SHA-1/384/512) do arquivo de um download
+= Check the SHA-256 (or SHA-1/384/512) checksum of a download's file
+
+A soma publicada na página do download; sem ela, só mostra a SHA-256 do arquivo
+= The checksum published on the download's page; without it, only shows the file's SHA-256
+
+Limite de velocidade de um download, em KB/s (0 = só o limite geral)
+= A download's speed limit, in KB/s (0 = only the global limit)
+
+Escreve os endereços da lista, um por linha (importe com "fisga batch --file")
+= Print the list's addresses, one per line (import them with "fisga batch --file")
+
+Só os que ainda não terminaram
+= Only the ones not finished yet
+
+Só os desta fila (número em "fisga queue")
+= Only the ones in this queue (its number in "fisga queue")
+
+Procura os arquivos de um site (o "Grabber" do IDM): lista, ou adiciona com --add
+= Find the files of a site (IDM's "Grabber"): lists them, or adds them with --add
+
+Quantos níveis de páginas seguir (0 = só esta página; máximo 3)
+= How many levels of pages to follow (0 = only this page; at most 3)
+
+Só estes tipos: video, musica, imagem, documento, compactado, programa, outro
+= Only these types: video, music, image, document, compressed, program, other
+
+Só nomes assim, com * e ? (ex.: "*.pdf aula_??.mp4")
+= Only names like these, with * and ? (e.g. "*.pdf lesson_??.mp4")
+
+Adiciona os encontrados à fila em vez de só listar
+= Add the ones found to the queue instead of only listing them
+
+Pasta de destino (com --add)
+= Destination folder (with --add)
+
+Fila (com --add)
+= Queue (with --add)
+
+Adiciona pausados (com --add)
+= Add them paused (with --add)
+
+Vários downloads de uma vez (o "download em lote" do IDM), direto na fila
+= Many downloads at once (IDM's "batch download"), straight into the queue
+
+Endereço com um * no lugar do número ou da letra, ex.: https://site/aula_*.mp4
+= Address with a * in place of the number or letter, e.g. https://site/lesson_*.mp4
+
+Primeiro número ou letra (01 deixa os números com 2 dígitos)
+= First number or letter (01 gives the numbers 2 digits)
+
+Último número ou letra
+= Last number or letter
+
+Dígitos dos números, ex.: 3 dá 001, 002... (padrão: os do início)
+= Digits of the numbers, e.g. 3 gives 001, 002... (default: those of the start)
+
+Arquivo com os endereços, um por linha ("-" = entrada padrão)
+= File with the addresses, one per line ("-" = standard input)
+
+Pasta de destino (padrão: a de cada tipo de arquivo)
+= Destination folder (default: the one of each file type)
+
+Fila (número em "fisga queue")
+= Queue (its number in "fisga queue")
+
+Adiciona pausados, sem entrar na fila
+= Add them paused, out of the queue
+
+Só mostra os endereços, sem adicionar
+= Only show the addresses, without adding them
+
+Atualiza o endereço de um download cujo link expirou (continua de onde parou)
+= Update the address of a download whose link expired (it continues where it stopped)
+
+O novo endereço do mesmo arquivo
+= The new address of the same file
+
+Espera o navegador mandar o mesmo arquivo de novo e usa o link dele
+= Wait for the browser to send the same file again and use its link
+
+Para de esperar o novo endereço
+= Stop waiting for the new address
+
+Usuário e senha por site (autenticação HTTP dos links diretos)
+= User and password per site (HTTP authentication of direct links)
+
+Mostra, cria, altera ou exclui filas
+= Show, create, change or delete queues
+
+Move um download para outra fila, ou dentro da fila dele
+= Move a download to another queue, or within its queue
+
+Para o fim desta fila
+= To the end of this queue
+
+Para o começo da fila
+= To the start of the queue
+
+Para o fim da fila
+= To the end of the queue
+
+Baixa em primeiro plano, sem o daemon
+= Download in the foreground, without the daemon
+
+Lista os downloads
+= List the downloads
+
+Confirma um download que aguarda na janela "Novo download"
+= Confirm a download waiting in the "New download" window
+
+Coloca na fila em vez de começar agora
+= Put it in the queue instead of starting now
+
+Pasta de destino
+= Destination folder
+
+Nome do arquivo
+= File name
+
+Qualidade de um vídeo de site: altura (1080, 720...) ou "audio"
+= Quality of a site video: height (1080, 720...) or "audio"
+
+Se o arquivo já existir: rename (novo nome), overwrite (substituir) ou resume (continuar)
+= If the file already exists: rename (new name), overwrite (replace) or resume (continue)
+
+Soma que o arquivo deve ter (SHA-256, SHA-1, SHA-384 ou SHA-512)
+= Checksum the file must have (SHA-256, SHA-1, SHA-384 or SHA-512)
+
+Pausa um download
+= Pause a download
+
+Retoma um download pausado ou com erro
+= Resume a paused or failed download
+
+Remove um download da lista
+= Remove a download from the list
+
+Apaga também o arquivo (ou as partes baixadas)
+= Also delete the file (or the downloaded parts)
+
+Mostra as mudanças em tempo real
+= Show the changes in real time
+
+Registra o host nativo nos navegadores (Chrome, Chromium, Brave, Edge, Vivaldi, Firefox...)
+= Register the native host in the browsers (Chrome, Chromium, Brave, Edge, Vivaldi, Firefox...)
+
+ID extra de extensão Chrome autorizada (ex.: ao carregar sem a chave do manifesto)
+= Extra allowed Chrome extension ID (e.g. when loaded without the manifest's key)
+
+Remove os registros em vez de criar
+= Remove the registrations instead of creating them
+
+Para pacotes: grava os registros do sistema (todos os usuários) dentro desta pasta ($pkgdir)
+= For packages: write the system-wide registrations (all users) inside this folder ($pkgdir)
+
+Para pacotes: onde o fisga-native-host fica depois de instalado (ex.: /usr/bin/fisga-native-host)
+= For packages: where fisga-native-host is once installed (e.g. /usr/bin/fisga-native-host)
+
+Mostra ou altera as configurações do daemon
+= Show or change the daemon's settings
+
+Mostra ou altera o agendador (horário da fila e o que fazer ao terminar)
+= Show or change the scheduler (the queue's hours and what to do when it is done)
+
+Encerra o daemon (pausa os downloads em andamento)
+= Stop the daemon (pauses the running downloads)
+
+Procura uma versão nova do Fisga
+= Look for a new version of Fisga
+
+Baixa e instala a versão nova (Windows e macOS); o Fisga fecha e abre de novo
+= Download and install the new version (Windows and macOS); Fisga closes and opens again
+
+procurando em {} (profundidade {})…
+= searching {} (depth {})…
+
+resposta inesperada do daemon
+= unexpected answer from the daemon
+
+{} arquivo(s) em {} página(s); {} com os filtros
+= {} file(s) in {} page(s); {} with the filters
+
+nada para adicionar
+= nothing to add
+
+{} downloads adicionados
+= {} downloads added
+
+não li {}
+= could not read {}
+
+diga o endereço com * (e --from/--to) ou --file
+= give the address with * (and --from/--to) or --file
+
+nenhum endereço encontrado
+= no addresses found
+
+{} downloads adicionados (#{} a #{})
+= {} downloads added (#{} to #{})
+
+1 download adicionado
+= 1 download added
+
+download #{}: sem limite próprio
+= download #{}: no limit of its own
+
+download #{}: no máximo {}/s
+= download #{}: at most {}/s
+
+endereço atualizado: o download #{} continua de onde parou
+= address updated: download #{} continues where it stopped
+
+aguardando: abra a página do arquivo e clique no link de novo no navegador
+= waiting: open the file's page and click the link again in the browser
+
+diga para onde: --queue-id N, --up, --down, --top ou --bottom
+= say where to: --queue-id N, --up, --down, --top or --bottom
+
+o daemon não está rodando
+= the daemon is not running
+
+(retomável)
+= (resumable)
+
+(sem retomada: o servidor não aceita Range)
+= (not resumable: the server does not accept Range)
+
+{} conexões
+= {} connections
+
+pausado: {} (rode o mesmo comando para retomar)
+= paused: {} (run the same command to resume)
+
+cancelado
+= canceled
+
+aviso: este endereço já está na lista (#{}, {})
+= warning: this address is already in the list (#{}, {})
+
+download #{} aguardando confirmação
+= download #{} waiting for confirmation
+
+download #{} adicionado
+= download #{} added
+
+o download foi removido
+= the download was removed
+
+conferindo a soma de {}
+= checking the checksum of {}
+
+falhou
+= failed
+
+pausado
+= paused
+
+use nenhuma, alt, ctrl+alt, shift+alt ou ctrl+shift
+= use none, alt, ctrl+alt, shift+alt or ctrl+shift
+
+use escuro ou claro
+= use dark or light
+
+use auto, pt ou en
+= use auto, pt or en
+
+use rename, overwrite ou resume
+= use rename, overwrite or resume
+
+Endereço do proxy (com usuário:senha@, se precisar)
+= Proxy address (with user:password@, if needed)
+
+sim
+= yes
+
+não
+= no
+
+(Downloads do sistema)
+= (the system's Downloads)
+
+pasta de downloads:
+= download folder:
+
+subpastas por tipo:
+= subfolders by type:
+
+downloads ao mesmo tempo:
+= downloads at once:
+
+conexões por arquivo:
+= connections per file:
+
+janela de progresso:
+= progress window:
+
+limite de velocidade:
+= speed limit:
+
+sem limite
+= no limit
+
+capturar links copiados:
+= catch copied links:
+
+ícone na bandeja:
+= tray icon:
+
+agendador:
+= scheduler:
+
+proxy:
+= proxy:
+
+ao concluir, som:
+= when done, sound:
+
+ao concluir, antivírus:
+= when done, antivirus:
+
+sim (ClamAV)
+= yes (ClamAV)
+
+ao concluir, comando:
+= when done, command:
+
+nenhum
+= none
+
+tipos do navegador:
+= browser file types:
+
+tecla do navegador:
+= browser key:
+
+sites excluídos:
+= excluded sites:
+
+tema:
+= theme:
+
+claro
+= light
+
+escuro
+= dark
+
+efeitos de datas:
+= holiday effects:
+
+procurar versão nova:
+= check for updates:
+
+idioma:
+= language:
+
+resposta inesperada: {}
+= unexpected answer: {}
+
+O Fisga {} é a versão mais nova.
+= Fisga {} is the newest version.
+
+Fisga {} disponível (esta é a {}): {}
+= Fisga {} available (this is {}): {}
+
+Para instalar: fisga update --install
+= To install it: fisga update --install
+
+Atualize pelo gerenciador de pacotes do sistema.
+= Update it through the system's package manager.
+
+aqui quem instala a versão nova é o gerenciador de pacotes do sistema
+= here the new version is installed by the system's package manager
+
+Senha de {} em {}
+= Password of {} at {}
+
+nenhum login para {}
+= no login for {}
+
+nenhum login por site
+= no site logins
+
+desligado (a fila roda sempre)
+= off (the queue always runs)
+
+fila não encontrada: {}
+= queue not found: {}
+
+fila:
+= queue:
+
+ao terminar:
+= when done:
+
+a fila principal não pode ser renomeada
+= the main queue cannot be renamed
+
+a fila principal não pode ser excluída
+= the main queue cannot be deleted
+
+1 por vez
+= 1 at a time
+
+{} ao mesmo tempo
+= {} at the same time
+
+use HH:MM, como 02:00 ou 23:30
+= use HH:MM, like 02:00 or 23:30
+
+dia desconhecido: {}
+= unknown day: {}
+
+tipo desconhecido: {} (use video, musica, imagem, documento, compactado, programa ou outro)
+= unknown type: {} (use video, music, image, document, compressed, program or other)
+
+use nada, suspender ou desligar
+= use nothing, suspend or poweroff
+
+aguardando
+= waiting
+
+na fila
+= queued
+
+baixando
+= running
+
+concluído
+= completed
+
+erro
+= failed
+
+não foi possível conferir a soma: {}
+= could not check the checksum: {}
+
+o {} não confere: o arquivo pode estar corrompido ou ter sido trocado\n  esperado: {}\n  arquivo:  {}
+= {} does not match: the file may be corrupted or have been swapped\n  expected: {}\n  file:     {}
+
+download #{} não encontrado
+= download #{} not found
+
+o daemon encerrou a conexão
+= the daemon ended the connection
+
+download #{}: a soma será conferida quando ele terminar
+= download #{}: the checksum will be checked when it finishes
+
+conferindo
+= checking
+
+confere com a soma da página
+= matches the page's checksum
+
+{}% de {}
+= {}% of {}
+
+(máx. {}/s)
+= (max. {}/s)
+
+aguardando novo endereço: clique no link de novo no navegador
+= waiting for a new address: click the link again in the browser
+
+conferindo a soma… {}
+= checking the checksum… {}
+
+soma conferida: é o arquivo da página
+= checksum checked: this is the page's file
+
+nenhum download
+= no downloads
+
+removido
+= removed
+
+--host-path precisa ser um caminho absoluto: {}
+= --host-path must be an absolute path: {}
+
+instalado
+= installed
+
+criar {}
+= creating {}
+
+fisga-native-host não encontrado ({}); instale-o junto com o fisga
+= fisga-native-host not found ({}); install it along with fisga
+
+Recarregue a extensão no navegador para ela encontrar o app.
+= Reload the extension in the browser so it finds the app.
+
+pasta pessoal não encontrada
+= home folder not found
+
+pasta LOCALAPPDATA não encontrada
+= LOCALAPPDATA folder not found
+
+não foi possível gravar {} no registro
+= could not write {} to the registry
+
+registrado
+= registered

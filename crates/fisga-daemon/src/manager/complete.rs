@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
+use fisga_i18n::{tr, trf};
 use fisga_ipc::DownloadInfo;
 use tokio::process::Command;
 
@@ -36,7 +37,7 @@ fn signature(stdout: &str) -> String {
         .lines()
         .find_map(|line| line.trim().strip_suffix(" FOUND"))
         .and_then(|line| line.rsplit_once(": ").map(|(_, name)| name.to_string()))
-        .unwrap_or_else(|| "um vírus".into())
+        .unwrap_or_else(|| tr!("um vírus").into())
 }
 
 fn last_line(text: &[u8]) -> String {
@@ -55,14 +56,14 @@ impl Manager {
                 Scan::Clean => tracing::info!(id, "ClamAV: limpo"),
                 Scan::Infected(found) => {
                     tracing::warn!(id, found, "ClamAV encontrou um vírus");
-                    self.update(id, |info| info.error = Some(format!("o ClamAV encontrou {found}; não abra este arquivo")));
-                    notify::send("Vírus encontrado", &format!("{}\nO ClamAV encontrou {found}.", info.name));
+                    self.update(id, |info| info.error = Some(trf!("o ClamAV encontrou {}; não abra este arquivo", found)));
+                    notify::send(tr!("Vírus encontrado"), &trf!("{}\nO ClamAV encontrou {}.", info.name, found));
                     self.save();
                     return;
                 }
                 Scan::Unavailable(why) => {
                     tracing::warn!(id, why, "ClamAV indisponível");
-                    notify::send("Antivírus indisponível", &format!("{} não foi verificado: {why}", info.name));
+                    notify::send(tr!("Antivírus indisponível"), &trf!("{} não foi verificado: {}", info.name, why));
                 }
             }
         }
@@ -101,12 +102,12 @@ impl Manager {
             },
         };
         match output {
-            Err(e) => Scan::Unavailable(format!("o ClamAV não está instalado ({e})")),
+            Err(e) => Scan::Unavailable(trf!("o ClamAV não está instalado ({})", e)),
             Ok(output) => match output.status.code() {
                 Some(0) => Scan::Clean,
                 Some(1) => Scan::Infected(signature(&String::from_utf8_lossy(&output.stdout))),
                 _ => Scan::Unavailable(match last_line(&output.stderr) {
-                    line if line.is_empty() => "o ClamAV falhou".into(),
+                    line if line.is_empty() => tr!("o ClamAV falhou").into(),
                     line => line,
                 }),
             },
@@ -138,7 +139,7 @@ impl Manager {
             Ok(output) => {
                 let why = last_line(&output.stderr);
                 tracing::warn!(id = info.id, status = ?output.status, why, "o comando ao concluir falhou");
-                notify::send("O comando ao concluir falhou", &format!("{}\n{why}", info.name));
+                notify::send(tr!("O comando ao concluir falhou"), &format!("{}\n{why}", info.name));
             }
             Err(e) => tracing::warn!(id = info.id, error = %e, "não foi possível rodar o comando ao concluir"),
         }

@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use fisga_i18n::tr;
 use fisga_ipc::{AddRequest, ProxyMode, ProxySettings, SiteLogin};
 
 use super::{request_headers, write_json, Manager};
@@ -23,7 +24,7 @@ pub fn build_client(proxy: &ProxySettings) -> anyhow::Result<reqwest::Client> {
         ProxyMode::None => fisga_core::Proxy::Direct,
         ProxyMode::Manual => fisga_core::Proxy::Url(proxy.url.trim()),
     };
-    fisga_core::build_client_with(choice).context("proxy inválido")
+    fisga_core::build_client_with(choice).context(tr!("proxy inválido"))
 }
 
 pub fn logins_path(settings_path: &Path) -> PathBuf {

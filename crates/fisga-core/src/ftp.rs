@@ -12,6 +12,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use fisga_i18n::{tr, trf};
 use url::Url;
 
 use crate::engine::{finalize, resolve_target, SpeedMeter};
@@ -38,14 +39,14 @@ struct Address {
 
 impl Address {
     fn parse(url: &Url) -> Result<Address> {
-        let host = url.host_str().ok_or_else(|| Error::Other("endereço FTP sem servidor".into()))?;
+        let host = url.host_str().ok_or_else(|| Error::Other(tr!("endereço FTP sem servidor").into()))?;
         let decode = |text: &str| percent_decode_str(text).decode_utf8_lossy().into_owned();
         let path = decode(url.path().strip_prefix('/').unwrap_or(url.path()));
         if path.is_empty() || path.ends_with('/') {
-            return Err(Error::Other("o endereço FTP é de uma pasta, não de um arquivo".into()));
+            return Err(Error::Other(tr!("o endereço FTP é de uma pasta, não de um arquivo").into()));
         }
         if path.contains(['\r', '\n']) {
-            return Err(Error::Other("endereço FTP inválido".into()));
+            return Err(Error::Other(tr!("endereço FTP inválido").into()));
         }
         let (user, password) = match url.username() {
             "" => ("anonymous".to_string(), "fisga@".to_string()),
@@ -73,12 +74,12 @@ struct Reply {
 impl Reply {
     fn error(&self, what: &str) -> Error {
         let reason = match self.code {
-            530 => "o servidor recusou o login (usuário ou senha)".to_string(),
-            550 => "o arquivo não existe no servidor, ou o usuário não pode lê-lo".to_string(),
-            421 => "o servidor FTP encerrou a conexão (ocupado ou muitas conexões)".to_string(),
+            530 => tr!("o servidor recusou o login (usuário ou senha)").to_string(),
+            550 => tr!("o arquivo não existe no servidor, ou o usuário não pode lê-lo").to_string(),
+            421 => tr!("o servidor FTP encerrou a conexão (ocupado ou muitas conexões)").to_string(),
             _ => format!("{} {}", self.code, self.text),
         };
-        Error::Other(format!("FTP, {what}: {reason}"))
+        Error::Other(trf!("FTP, {}: {}", what, reason))
     }
 }
 
@@ -94,14 +95,14 @@ impl Control {
         let target = (address.host.as_str(), address.port);
         let stream = match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(target)).await {
             Ok(stream) => stream?,
-            Err(_) => return Err(Error::Other(format!("o servidor FTP {} não respondeu", address.host))),
+            Err(_) => return Err(Error::Other(trf!("o servidor FTP {} não respondeu", address.host))),
         };
         let peer = stream.peer_addr()?;
         let (reader, writer) = stream.into_split();
         let mut control = Control { reader: BufReader::new(reader), writer, peer };
         let greeting = control.reply().await?;
         if greeting.code != 220 {
-            return Err(greeting.error("ao conectar"));
+            return Err(greeting.error(tr!("ao conectar")));
         }
         Ok(control)
     }
@@ -112,9 +113,9 @@ impl Control {
         loop {
             let mut line = String::new();
             let read = tokio::time::timeout(REPLY_TIMEOUT, self.reader.read_line(&mut line)).await;
-            let read = read.map_err(|_| Error::Other("o servidor FTP parou de responder".into()))??;
+            let read = read.map_err(|_| Error::Other(tr!("o servidor FTP parou de responder").into()))??;
             if read == 0 {
-                return Err(Error::Other("o servidor FTP fechou a conexão".into()));
+                return Err(Error::Other(tr!("o servidor FTP fechou a conexão").into()));
             }
             let line = line.trim_end_matches(['\r', '\n']);
             let code = line.get(..3).and_then(|code| code.parse::<u16>().ok());
@@ -125,7 +126,7 @@ impl Control {
                 (Some(first), Some(code)) if code == first && last => {
                     return Ok(Reply { code, text: line[3..].trim().to_string() });
                 }
-                (None, None) => return Err(Error::Other(format!("resposta FTP inválida: {line}"))),
+                (None, None) => return Err(Error::Other(trf!("resposta FTP inválida: {}", line))),
                 _ => {}
             }
         }
@@ -143,11 +144,11 @@ impl Control {
             _ => reply,
         };
         if !matches!(reply.code, 230 | 202) {
-            return Err(reply.error("no login"));
+            return Err(reply.error(tr!("no login")));
         }
         let binary = self.command("TYPE I").await?;
         if binary.code != 200 {
-            return Err(binary.error("no modo binário"));
+            return Err(binary.error(tr!("no modo binário")));
         }
         Ok(())
     }
@@ -157,7 +158,7 @@ impl Control {
         let reply = self.command(&format!("SIZE {path}")).await?;
         match reply.code {
             213 => Ok(reply.text.trim().parse().ok()),
-            550 => Err(reply.error("ao procurar o arquivo")),
+            550 => Err(reply.error(tr!("ao procurar o arquivo"))),
             _ => Ok(None),
         }
     }
@@ -171,16 +172,16 @@ impl Control {
             _ => {
                 let reply = self.command("PASV").await?;
                 if reply.code != 227 {
-                    return Err(reply.error("no modo passivo"));
+                    return Err(reply.error(tr!("no modo passivo")));
                 }
                 passive_port(&reply.text)
             }
         };
-        let port = port.ok_or_else(|| Error::Other("FTP: o servidor não informou a porta de dados".into()))?;
+        let port = port.ok_or_else(|| Error::Other(tr!("FTP: o servidor não informou a porta de dados").into()))?;
         let address = SocketAddr::new(self.peer.ip(), port);
         match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address)).await {
             Ok(stream) => Ok(stream?),
-            Err(_) => Err(Error::Other("FTP: a conexão de dados não abriu".into())),
+            Err(_) => Err(Error::Other(tr!("FTP: a conexão de dados não abriu").into())),
         }
     }
 
@@ -266,7 +267,7 @@ pub async fn download(
     }
     let retrieve = control.command(&format!("RETR {}", address.path)).await?;
     if !matches!(retrieve.code, 125 | 150) {
-        return Err(retrieve.error("ao pedir o arquivo"));
+        return Err(retrieve.error(tr!("ao pedir o arquivo")));
     }
 
     let mut file = tokio::fs::OpenOptions::new().create(true).write(true).truncate(offset == 0).open(&part).await?;
@@ -284,7 +285,7 @@ pub async fn download(
             read = tokio::time::timeout(opts.idle_timeout, data.read(&mut buffer)) => read,
         };
         let n = match read {
-            Err(_) => return Err(Error::Other("tempo esgotado esperando dados do servidor FTP".into())),
+            Err(_) => return Err(Error::Other(tr!("tempo esgotado esperando dados do servidor FTP").into())),
             Ok(read) => read?,
         };
         if n == 0 {
@@ -314,10 +315,10 @@ pub async fn download(
     let done = control.reply().await?;
     control.quit().await;
     if !matches!(done.code, 226 | 250) {
-        return Err(done.error("ao terminar"));
+        return Err(done.error(tr!("ao terminar")));
     }
     if let Some(total) = total.filter(|total| downloaded != *total) {
-        return Err(Error::Other(format!("conexão FTP encerrada em {downloaded} de {total} bytes")));
+        return Err(Error::Other(trf!("conexão FTP encerrada em {} de {} bytes", downloaded, total)));
     }
     let progress = Progress { downloaded, total: Some(downloaded), speed: 0.0, active_connections: 0, segments: Vec::new() };
     let _ = events.send(EngineEvent::Progress(progress));

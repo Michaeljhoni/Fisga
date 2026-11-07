@@ -1,3 +1,116 @@
 # The English of fisga-core's texts: each Portuguese text as it is in the code,
 # then its English after "= ", then a blank line. See crates/fisga-i18n.
 
+erro HTTP: {}
+= HTTP error: {}
+
+erro de E/S: {}
+= I/O error: {}
+
+o servidor respondeu com status {}
+= the server responded with status {}
+
+URL inválida: {}
+= invalid URL: {}
+
+o servidor está ocupado (status {})
+= the server is busy (status {})
+
+o servidor ignorou o Range: o arquivo mudou no servidor ou ele não aceita mais retomar
+= the server ignored the Range request: the file changed on the server, or it no longer allows resuming
+
+download cancelado
+= download canceled
+
+endereço FTP sem servidor
+= FTP address without a server
+
+o endereço FTP é de uma pasta, não de um arquivo
+= the FTP address points to a folder, not a file
+
+endereço FTP inválido
+= invalid FTP address
+
+o servidor recusou o login (usuário ou senha)
+= the server refused the login (user name or password)
+
+o arquivo não existe no servidor, ou o usuário não pode lê-lo
+= the file does not exist on the server, or the user cannot read it
+
+o servidor FTP encerrou a conexão (ocupado ou muitas conexões)
+= the FTP server closed the connection (busy, or too many connections)
+
+FTP, {}: {}
+= FTP error {}: {}
+
+o servidor FTP {} não respondeu
+= the FTP server {} did not respond
+
+ao conectar
+= while connecting
+
+o servidor FTP parou de responder
+= the FTP server stopped responding
+
+o servidor FTP fechou a conexão
+= the FTP server closed the connection
+
+resposta FTP inválida: {}
+= invalid FTP reply: {}
+
+no login
+= while logging in
+
+no modo binário
+= while switching to binary mode
+
+ao procurar o arquivo
+= while looking for the file
+
+no modo passivo
+= while entering passive mode
+
+FTP: o servidor não informou a porta de dados
+= FTP: the server did not give the data port
+
+FTP: a conexão de dados não abriu
+= FTP: the data connection did not open
+
+ao pedir o arquivo
+= while requesting the file
+
+tempo esgotado esperando dados do servidor FTP
+= timed out waiting for data from the FTP server
+
+ao terminar
+= while finishing
+
+conexão FTP encerrada em {} de {} bytes
+= FTP connection closed at {} of {} bytes
+
+tempo esgotado esperando dados do servidor
+= timed out waiting for data from the server
+
+conexão encerrada em {} de {} bytes
+= connection closed at {} of {} bytes
+
+falha na escrita: {}
+= write failed: {}
+
+tempo esgotado esperando a resposta do servidor
+= timed out waiting for the server's response
+
+Content-Range diferente do pedido
+= Content-Range differs from the one requested
+
+conexão encerrada antes do fim do segmento
+= connection closed before the end of the segment
+
+tempo esgotado esperando dados
+= timed out waiting for data
+
+conexão abortou: {}
+= connection aborted: {}
+
+download incompleto
+= incomplete download

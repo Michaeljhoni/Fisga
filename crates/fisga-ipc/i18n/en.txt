@@ -3,3 +3,120 @@
 
 Automático (o do sistema)
 = Automatic (the system's)
+
+Vídeos
+= Videos
+
+Músicas
+= Music
+
+Imagens
+= Images
+
+Documentos
+= Documents
+
+Compactados
+= Compressed
+
+Programas
+= Programs
+
+Outros
+= Other
+
+Nenhuma
+= None
+
+endereço de proxy inválido: {} (use http://host:porta ou socks5://host:porta)
+= invalid proxy address: {} (use http://host:port or socks5://host:port)
+
+tipo de proxy não suportado: {} (use http, https, socks5 ou socks5h)
+= unsupported proxy type: {} (use http, https, socks5 or socks5h)
+
+o endereço do proxy precisa de um host
+= the proxy address needs a host
+
+o do sistema (variáveis http_proxy/https_proxy)
+= the system's (http_proxy/https_proxy variables)
+
+nenhum
+= none
+
+fila {}
+= queue {}
+
+horário inválido: {} (use HH:MM)
+= invalid time: {} (use HH:MM)
+
+Não fazer nada
+= Do nothing
+
+Suspender o computador
+= Suspend the computer
+
+Desligar o computador
+= Shut down the computer
+
+todos os dias
+= every day
+
+nenhum dia
+= no days
+
+{}, das {} às {}
+= {}, from {} to {}
+
+{}, às {} até terminar a fila
+= {}, at {} until the queue is done
+
+o {} tem {} dígitos hexadecimais
+= {} has {} hex digits
+
+não há uma soma SHA-1, SHA-256, SHA-384 ou SHA-512 no texto
+= there is no SHA-1, SHA-256, SHA-384 or SHA-512 checksum in the text
+
+o {} tem {} dígitos hexadecimais; este tem {}
+= {} has {} hex digits; this one has {}
+
+o endereço precisa de exatamente um * no lugar do número ou da letra
+= the address needs exactly one * in place of the number or letter
+
+o início ({}) passa do fim ({})
+= the start ({}) is past the end ({})
+
+são {} endereços; o máximo é {}
+= that is {} addresses; the maximum is {}
+
+use números (1 a 20, 01 a 20) ou letras (a a z) no início e no fim
+= use numbers (1 to 20, 01 to 20) or letters (a to z) for the start and the end
+
+Baixando: {} de {} MB
+= Downloading: {} of {} MB
+
+Baixando: {} MB
+= Downloading: {} MB
+
+Instalando: o Fisga fecha e abre de novo na versão nova.
+= Installing: Fisga closes and opens again in the new version.
+
+Arraste o Fisga do disco que se abriu para a pasta Aplicativos.
+= Drag Fisga from the disk that opened to the Applications folder.
+
+Não foi possível atualizar: {}
+= Could not update: {}
+
+o daemon fisgad não está rodando
+= the fisgad daemon is not running
+
+o daemon fechou a conexão
+= the daemon closed the connection
+
+não foi possível iniciar o fisgad
+= could not start fisgad
+
+o fisgad não respondeu após ser iniciado
+= fisgad did not respond after being started
+
+o fisgad está ocupado
+= fisgad is busy

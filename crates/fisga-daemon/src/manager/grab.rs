@@ -9,6 +9,7 @@ use std::collections::{HashSet, VecDeque};
 use std::time::Duration;
 
 use anyhow::{bail, Context};
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{AddRequest, Category, GrabbedLink, SourceKind};
 use url::Url;
 
@@ -128,7 +129,7 @@ impl Manager {
     /// The files among the links of `page` (sent by the browser), once each
     /// and in order: what "Baixar todos os links" lists.
     pub fn page_files(page: &str, links: &[String]) -> anyhow::Result<Vec<GrabbedLink>> {
-        let page = Url::parse(page).context("URL inválida")?;
+        let page = Url::parse(page).context(tr!("URL inválida"))?;
         let mut seen = HashSet::new();
         let files: Vec<GrabbedLink> = links
             .iter()
@@ -140,7 +141,7 @@ impl Manager {
             .take(MAX_PAGE_LINKS)
             .collect();
         if files.is_empty() {
-            bail!("nenhum link para arquivo nesta página");
+            bail!(tr!("nenhum link para arquivo nesta página"));
         }
         Ok(files)
     }
@@ -148,9 +149,9 @@ impl Manager {
     /// Reads `start` and, up to `depth` levels, its pages: every file linked,
     /// once, in the order found; and how many pages were read.
     pub async fn grab(&self, start: &str, depth: u8) -> anyhow::Result<(Vec<GrabbedLink>, usize)> {
-        let start = Url::parse(start).context("URL inválida")?;
+        let start = Url::parse(start).context(tr!("URL inválida"))?;
         if !matches!(start.scheme(), "http" | "https") {
-            bail!("o grabber lê páginas http ou https");
+            bail!(tr!("o grabber lê páginas http ou https"));
         }
         let depth = depth.min(fisga_ipc::MAX_GRAB_DEPTH);
         let client = self.client();
@@ -171,7 +172,7 @@ impl Manager {
                     continue;
                 }
                 Err(_) => {
-                    first_error.get_or_insert_with(|| anyhow::anyhow!("{page} demorou demais"));
+                    first_error.get_or_insert_with(|| anyhow::anyhow!(trf!("{} demorou demais", page)));
                     continue;
                 }
             };
@@ -195,7 +196,7 @@ impl Manager {
         // Nothing read at all: say why (the first page failed).
         if pages == 0 {
             if let Some(e) = first_error {
-                return Err(e.context(format!("não foi possível ler {start}")));
+                return Err(e.context(trf!("não foi possível ler {}", start)));
             }
         }
         tracing::info!(start = %start, pages, files = files.len(), "grabber");
@@ -210,7 +211,7 @@ impl Manager {
         }
         let mut response = request.send().await?;
         if !response.status().is_success() {
-            bail!("{url}: o servidor respondeu {}", response.status());
+            bail!(trf!("{}: o servidor respondeu {}", url, response.status()));
         }
         let html = response
             .headers()
@@ -218,7 +219,7 @@ impl Manager {
             .and_then(|v| v.to_str().ok())
             .map_or(true, |kind| kind.contains("html"));
         if !html {
-            bail!("{url} não é uma página");
+            bail!(trf!("{} não é uma página", url));
         }
         let mut body = Vec::new();
         while let Some(chunk) = response.chunk().await? {

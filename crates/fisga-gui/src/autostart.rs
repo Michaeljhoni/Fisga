@@ -11,6 +11,11 @@ use std::path::Path;
 #[cfg(not(windows))]
 use std::path::PathBuf;
 
+#[cfg(not(windows))]
+use fisga_i18n::tr;
+#[cfg(windows)]
+use fisga_i18n::trf;
+
 #[cfg(not(any(windows, target_os = "macos")))]
 const FILE: &str = "io.fisga.Fisga.desktop";
 
@@ -99,7 +104,7 @@ pub fn migrate_legacy() {
 
 #[cfg(not(windows))]
 pub fn set_enabled(enabled: bool) -> anyhow::Result<()> {
-    let path = path().ok_or_else(|| anyhow::anyhow!("não encontrei a pasta de configuração (HOME)"))?;
+    let path = path().ok_or_else(|| anyhow::anyhow!(tr!("não encontrei a pasta de configuração (HOME)")))?;
     if !enabled {
         return match std::fs::remove_file(&path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
@@ -143,12 +148,13 @@ pub fn is_enabled() -> bool {
 pub fn set_enabled(enabled: bool) -> anyhow::Result<()> {
     if !enabled {
         if is_enabled() && !reg(&["delete", RUN_KEY, "/v", "Fisga", "/f"]) {
-            anyhow::bail!("não foi possível remover a entrada de {RUN_KEY}");
+            anyhow::bail!(trf!("não foi possível remover a entrada de {}", RUN_KEY));
         }
         return Ok(());
     }
     let command = format!("\"{}\" --background", std::env::current_exe()?.display());
-    anyhow::ensure!(reg(&["add", RUN_KEY, "/v", "Fisga", "/t", "REG_SZ", "/d", &command, "/f"]), "não foi possível gravar em {RUN_KEY}");
+    let added = reg(&["add", RUN_KEY, "/v", "Fisga", "/t", "REG_SZ", "/d", &command, "/f"]);
+    anyhow::ensure!(added, trf!("não foi possível gravar em {}", RUN_KEY));
     Ok(())
 }
 

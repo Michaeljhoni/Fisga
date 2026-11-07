@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{LocalTime, PowerPlan, Response, Schedule, Settings, State as JobState, WhenDone, MAIN_QUEUE};
 use serde::{Deserialize, Serialize};
 
@@ -191,15 +192,15 @@ impl Manager {
             let name = &queue.name;
             if opened && queue.schedule.enabled {
                 tracing::info!(queue = queue.id, "agendador: a fila começou");
-                notify::send("Agendador", &format!("A fila \u{201c}{name}\u{201d} começou."));
+                notify::send(tr!("Agendador"), &trf!("A fila \u{201c}{}\u{201d} começou.", name));
             }
             start |= opened;
             if stopped {
                 tracing::info!(queue = queue.id, "agendador: horário encerrado");
                 if self.requeue_running(queue.id) > 0 {
                     notify::send(
-                        "Agendador",
-                        &format!("O horário da fila \u{201c}{name}\u{201d} acabou: os downloads voltaram para ela."),
+                        tr!("Agendador"),
+                        &trf!("O horário da fila \u{201c}{}\u{201d} acabou: os downloads voltaram para ela.", name),
                     );
                 }
             }
@@ -207,7 +208,7 @@ impl Manager {
                 tracing::info!(queue = queue.id, when_done = ?queue.schedule.when_done, "agendador: a fila terminou");
                 match queue.schedule.when_done {
                     WhenDone::Nothing => {
-                        notify::send("Fila concluída", &format!("Os downloads da fila \u{201c}{name}\u{201d} terminaram."))
+                        notify::send(tr!("Fila concluída"), &trf!("Os downloads da fila \u{201c}{}\u{201d} terminaram.", name))
                     }
                     action => {
                         let mut scheduler = self.scheduler.lock().unwrap();
@@ -234,10 +235,10 @@ impl Manager {
         let mut scheduler = self.scheduler.lock().unwrap();
         if busy {
             if !std::mem::replace(&mut scheduler.waiting_for_others, true) {
-                let what = if action == WhenDone::Suspend { "suspenso" } else { "desligado" };
+                let what = if action == WhenDone::Suspend { tr!("suspenso") } else { tr!("desligado") };
                 notify::send(
-                    "Fila concluída",
-                    &format!("O computador será {what} quando os outros downloads terminarem."),
+                    tr!("Fila concluída"),
+                    &trf!("O computador será {} quando os outros downloads terminarem.", what),
                 );
             }
             return;
@@ -275,11 +276,12 @@ impl Manager {
         let plan = PowerPlan { action, at: now() + self.power_delay.as_secs() };
         *self.power.lock().unwrap() = Some(plan.clone());
         let _ = self.updates.send(Response::Power { plan: Some(plan.clone()) });
-        let what = if action == WhenDone::Suspend { "suspenso" } else { "desligado" };
+        let what = if action == WhenDone::Suspend { tr!("suspenso") } else { tr!("desligado") };
         notify::send(
-            "Fila concluída",
-            &format!(
-                "O computador será {what} em {} s. Para cancelar, use a janela do Fisga ou \u{201c}fisga schedule --cancel\u{201d}.",
+            tr!("Fila concluída"),
+            &trf!(
+                "O computador será {} em {} s. Para cancelar, use a janela do Fisga ou \u{201c}fisga schedule --cancel\u{201d}.",
+                what,
                 self.power_delay.as_secs()
             ),
         );
@@ -302,7 +304,7 @@ impl Manager {
 
     pub fn cancel_power(&self) -> anyhow::Result<()> {
         if self.power.lock().unwrap().take().is_none() {
-            bail!("não há suspensão nem desligamento planejado");
+            bail!(tr!("não há suspensão nem desligamento planejado"));
         }
         tracing::info!("desligamento cancelado");
         let _ = self.updates.send(Response::Power { plan: None });
@@ -326,10 +328,10 @@ impl Manager {
             result => {
                 tracing::warn!(?result, verb, "não foi possível suspender/desligar");
                 let what = match action {
-                    WhenDone::Suspend => "suspender",
-                    _ => "desligar",
+                    WhenDone::Suspend => tr!("suspender"),
+                    _ => tr!("desligar"),
                 };
-                notify::send("Agendador", &format!("Não foi possível {what} o computador."));
+                notify::send(tr!("Agendador"), &trf!("Não foi possível {} o computador.", what));
             }
         }
     }

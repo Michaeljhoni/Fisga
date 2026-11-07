@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use gtk::prelude::*;
 use gtk::{cairo, gdk, glib};
+use fisga_i18n::tr;
 
 use crate::theme;
 
@@ -52,13 +53,13 @@ impl Season {
 
     pub fn label(self) -> &'static str {
         match self {
-            Season::Carnival => "Carnaval",
-            Season::Easter => "Páscoa",
-            Season::Valentines => "Dia dos Namorados",
-            Season::June => "Festa junina",
-            Season::Halloween => "Halloween",
-            Season::Christmas => "Natal",
-            Season::NewYear => "Ano-novo",
+            Season::Carnival => tr!("Carnaval"),
+            Season::Easter => tr!("Páscoa"),
+            Season::Valentines => tr!("Dia dos Namorados"),
+            Season::June => tr!("Festa junina"),
+            Season::Halloween => tr!("Halloween"),
+            Season::Christmas => tr!("Natal"),
+            Season::NewYear => tr!("Ano-novo"),
         }
     }
 

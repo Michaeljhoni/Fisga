@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{glib, pango};
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{Queue, Request};
 
 use crate::ipc;
@@ -28,8 +29,8 @@ fn addresses(
     let text = list.text(&list.start_iter(), &list.end_iter(), false);
     let urls = fisga_ipc::parse_url_list(&text);
     match urls.len() {
-        0 => Err("Cole os endereços acima, um por linha.".into()),
-        n if n > fisga_ipc::MAX_BATCH => Err(format!("São {n} endereços; o máximo é {}.", fisga_ipc::MAX_BATCH)),
+        0 => Err(tr!("Cole os endereços acima, um por linha.").into()),
+        n if n > fisga_ipc::MAX_BATCH => Err(trf!("São {} endereços; o máximo é {}.", n, fisga_ipc::MAX_BATCH)),
         _ => Ok(urls),
     }
 }
@@ -37,8 +38,8 @@ fn addresses(
 fn preview(urls: &[String]) -> String {
     match urls {
         [] => String::new(),
-        [one] => format!("1 endereço: {one}"),
-        [first, .., last] => format!("{} endereços: {first} … {last}", urls.len()),
+        [one] => trf!("1 endereço: {}", one),
+        [first, .., last] => trf!("{} endereços: {} … {}", urls.len(), first, last),
     }
 }
 
@@ -51,7 +52,7 @@ fn caption(text: &str) -> gtk::Label {
 /// `initial`: links to start with (an imported file); otherwise the clipboard's.
 pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, initial: Option<String>) {
     let window = gtk::Window::builder()
-        .title("Adicionar em lote")
+        .title(tr!("Adicionar em lote"))
         .transient_for(parent)
         .modal(true)
         .default_width(620)
@@ -65,12 +66,12 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, initial: Option
     let width = gtk::SpinButton::with_range(0.0, 10.0, 1.0);
     let range = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     range.append(&from);
-    range.append(&gtk::Label::new(Some("até")));
+    range.append(&gtk::Label::new(Some(tr!("até"))));
     range.append(&to);
-    range.append(&gtk::Label::new(Some("  dígitos")));
+    range.append(&gtk::Label::new(Some(tr!("  dígitos"))));
     range.append(&width);
     let hint = gtk::Label::builder()
-        .label("O * vira cada número (ou letra, de a até z). Começar em 01 deixa todos com 2 dígitos; ou escolha os dígitos (0 = como no início).")
+        .label(tr!("O * vira cada número (ou letra, de a até z). Começar em 01 deixa todos com 2 dígitos; ou escolha os dígitos (0 = como no início)."))
         .xalign(0.0)
         .wrap(true)
         .max_width_chars(70)
@@ -78,9 +79,9 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, initial: Option
     hint.add_css_class("dim-label");
     hint.add_css_class("caption");
     let pattern_grid = gtk::Grid::builder().column_spacing(12).row_spacing(10).margin_top(12).margin_start(6).margin_end(6).build();
-    pattern_grid.attach(&caption("Endereço"), 0, 0, 1, 1);
+    pattern_grid.attach(&caption(tr!("Endereço")), 0, 0, 1, 1);
     pattern_grid.attach(&template, 1, 0, 1, 1);
-    pattern_grid.attach(&caption("De"), 0, 1, 1, 1);
+    pattern_grid.attach(&caption(tr!("De")), 0, 1, 1, 1);
     pattern_grid.attach(&range, 1, 1, 1, 1);
     pattern_grid.attach(&hint, 1, 2, 1, 1);
 
@@ -90,8 +91,8 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, initial: Option
     let buffer = list.buffer();
 
     let notebook = gtk::Notebook::new();
-    notebook.append_page(&pattern_grid, Some(&gtk::Label::new(Some("Padrão com *"))));
-    notebook.append_page(&list_scroll, Some(&gtk::Label::new(Some("Lista de endereços"))));
+    notebook.append_page(&pattern_grid, Some(&gtk::Label::new(Some(tr!("Padrão com *")))));
+    notebook.append_page(&list_scroll, Some(&gtk::Label::new(Some(tr!("Lista de endereços")))));
 
     let summary = gtk::Label::builder().xalign(0.0).ellipsize(pango::EllipsizeMode::Middle).build();
     let error = gtk::Label::builder().xalign(0.0).wrap(true).visible(false).build();
@@ -101,30 +102,30 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, initial: Option
     let names: Vec<&str> = queues.iter().map(|q| q.name.as_str()).collect();
     let queue = gtk::DropDown::from_strings(&names);
     queue.set_halign(gtk::Align::Start);
-    let queue_caption = caption("Fila");
+    let queue_caption = caption(tr!("Fila"));
     queue.set_visible(queues.len() > 1);
     queue_caption.set_visible(queues.len() > 1);
     let dir: Rc<RefCell<Option<PathBuf>>> = Rc::default();
     let dir_label = gtk::Label::builder()
-        .label("a de cada tipo de arquivo")
+        .label(tr!("a de cada tipo de arquivo"))
         .xalign(0.0)
         .hexpand(true)
         .ellipsize(pango::EllipsizeMode::Start)
         .build();
-    let change_dir = gtk::Button::with_label("Alterar…");
+    let change_dir = gtk::Button::with_label(tr!("Alterar…"));
     let dir_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     dir_row.append(&dir_label);
     dir_row.append(&change_dir);
-    let start = gtk::CheckButton::builder().label("Começar a baixar (entrar na fila)").active(true).build();
+    let start = gtk::CheckButton::builder().label(tr!("Começar a baixar (entrar na fila)")).active(true).build();
     let options = gtk::Grid::builder().column_spacing(12).row_spacing(10).build();
     options.attach(&queue_caption, 0, 0, 1, 1);
     options.attach(&queue, 1, 0, 1, 1);
-    options.attach(&caption("Pasta"), 0, 1, 1, 1);
+    options.attach(&caption(tr!("Pasta")), 0, 1, 1, 1);
     options.attach(&dir_row, 1, 1, 1, 1);
     options.attach(&start, 1, 2, 1, 1);
 
-    let cancel = gtk::Button::with_label("Cancelar");
-    let add = gtk::Button::with_label("Adicionar");
+    let cancel = gtk::Button::with_label(tr!("Cancelar"));
+    let add = gtk::Button::with_label(tr!("Adicionar"));
     add.add_css_class("suggested-action");
     let buttons = gtk::Box::builder().spacing(8).halign(gtk::Align::End).build();
     buttons.append(&cancel);
@@ -209,7 +210,7 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, initial: Option
     change_dir.connect_clicked(move |_| {
         let (w, d, l) = (w.clone(), d.clone(), l.clone());
         glib::spawn_future_local(async move {
-            let dialog = gtk::FileDialog::builder().title("Salvar o lote em").modal(true).build();
+            let dialog = gtk::FileDialog::builder().title(tr!("Salvar o lote em")).modal(true).build();
             if let Ok(folder) = dialog.select_folder_future(Some(&w)).await {
                 if let Some(path) = folder.path() {
                     l.set_label(&path.display().to_string());
@@ -239,7 +240,7 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, initial: Option
             match ipc::call(request).await {
                 Ok(_) => w.close(),
                 Err(e) => {
-                    error.set_label(&format!("Não foi possível adicionar o lote: {e}"));
+                    error.set_label(&trf!("Não foi possível adicionar o lote: {}", e));
                     error.set_visible(true);
                     button.set_sensitive(true);
                 }

@@ -5,6 +5,7 @@
 
 use gtk::prelude::*;
 use gtk::{gio, glib};
+use fisga_i18n::{tr, trf};
 use fisga_ipc::{DownloadInfo, Request};
 
 use crate::ipc;
@@ -14,21 +15,21 @@ fn open_page(parent: &gtk::Window, page: &str) {
     let parent_ = parent.clone();
     gtk::UriLauncher::new(page).launch(Some(parent), gio::Cancellable::NONE, move |result| {
         if let Err(e) = result {
-            show_error(Some(&parent_), "Não foi possível abrir a página", &e.to_string());
+            show_error(Some(&parent_), tr!("Não foi possível abrir a página"), &e.to_string());
         }
     });
 }
 
 pub fn show(parent: &gtk::Window, info: &DownloadInfo) {
     let window = gtk::Window::builder()
-        .title("Atualizar endereço")
+        .title(tr!("Atualizar endereço"))
         .transient_for(parent)
         .modal(true)
         .default_width(560)
         .resizable(false)
         .build();
     let explanation = gtk::Label::builder()
-        .label(format!(
+        .label(trf!(
             "O link de \u{201c}{}\u{201d} expirou ou mudou? Cole abaixo um novo endereço do mesmo arquivo. \
              Ou clique em \u{201c}Capturar do navegador\u{201d} e baixe o arquivo de novo na página: o Fisga \
              usa o link novo e continua de onde parou.",
@@ -42,13 +43,13 @@ pub fn show(parent: &gtk::Window, info: &DownloadInfo) {
     let error = gtk::Label::builder().xalign(0.0).wrap(true).visible(false).build();
     error.add_css_class("error");
 
-    let page = gtk::Button::builder().label("Abrir a página").visible(info.page.is_some()).build();
-    let cancel = gtk::Button::with_label("Cancelar");
+    let page = gtk::Button::builder().label(tr!("Abrir a página")).visible(info.page.is_some()).build();
+    let cancel = gtk::Button::with_label(tr!("Cancelar"));
     let capture = gtk::Button::with_label(match info.awaiting_url {
-        true => "Parar de esperar",
-        false => "Capturar do navegador",
+        true => tr!("Parar de esperar"),
+        false => tr!("Capturar do navegador"),
     });
-    let refresh = gtk::Button::with_label("Atualizar");
+    let refresh = gtk::Button::with_label(tr!("Atualizar"));
     refresh.add_css_class("suggested-action");
     let buttons = gtk::Box::builder().spacing(8).build();
     buttons.append(&page);
@@ -92,7 +93,7 @@ pub fn show(parent: &gtk::Window, info: &DownloadInfo) {
                     }
                     w.close();
                 }
-                Err(e) => show_error(Some(w.upcast_ref()), "Não foi possível", &e.to_string()),
+                Err(e) => show_error(Some(w.upcast_ref()), tr!("Não foi possível"), &e.to_string()),
             }
         });
     });
@@ -110,7 +111,7 @@ pub fn show(parent: &gtk::Window, info: &DownloadInfo) {
             match ipc::call(Request::RefreshUrl { id, url }).await {
                 Ok(_) => w.close(),
                 Err(e) => {
-                    err.set_label(&format!("Não foi possível usar este endereço: {e}"));
+                    err.set_label(&trf!("Não foi possível usar este endereço: {}", e));
                     err.set_visible(true);
                     button.set_sensitive(true);
                 }

@@ -385,6 +385,12 @@ fi
 grep "gerenciador de pacotes" "$SANDBOX/update.err"
 "$BIN/fisga" settings --check-updates false | grep "procurar versão nova:    não"
 
+step "in English: the help and the settings, and the language setting"
+FISGA_LANG=en "$BIN/fisga" --help | grep "Show or change the daemon's settings"
+FISGA_LANG=en "$BIN/fisga" settings | grep "^download folder:"
+"$BIN/fisga" settings --language en | grep "^language: *English"
+"$BIN/fisga" settings --language auto | grep "^idioma: *Autom"
+
 step "list"
 "$BIN/fisga" list
 echo; echo "E2E OK"

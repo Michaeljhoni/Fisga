@@ -21,6 +21,8 @@ pub mod probe;
 
 use std::time::Duration;
 
+use fisga_i18n::{tr, trf};
+
 pub use control::SegmentState;
 pub use engine::{download, DownloadOptions, EngineEvent, Outcome, Progress, Target};
 pub use limit::RateLimiter;
@@ -87,26 +89,36 @@ fn error_chain(error: &dyn std::error::Error) -> String {
     text
 }
 
+/// Its `Display` is written by hand below, in the current language.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("erro HTTP: {}", error_chain(.0))]
     Http(#[from] reqwest::Error),
-    #[error("erro de E/S: {0}")]
     Io(#[from] std::io::Error),
-    #[error("o servidor respondeu com status {0}")]
     Status(reqwest::StatusCode),
-    #[error("URL inválida: {0}")]
     Url(#[from] url::ParseError),
     /// 503 or 429: too many connections, or the server is overloaded.
-    #[error("o servidor está ocupado (status {status})")]
     Throttled { status: reqwest::StatusCode, retry_after: Option<Duration> },
     /// A 200 to a Range request: with `If-Range`, the file changed on the server.
-    #[error("o servidor ignorou o Range: o arquivo mudou no servidor ou ele não aceita mais retomar")]
     RangeIgnored,
-    #[error("download cancelado")]
     Cancelled,
-    #[error("{0}")]
     Other(String),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Http(e) => f.write_str(&trf!("erro HTTP: {}", error_chain(e))),
+            Error::Io(e) => f.write_str(&trf!("erro de E/S: {}", e)),
+            Error::Status(status) => f.write_str(&trf!("o servidor respondeu com status {}", status)),
+            Error::Url(e) => f.write_str(&trf!("URL inválida: {}", e)),
+            Error::Throttled { status, .. } => f.write_str(&trf!("o servidor está ocupado (status {})", status)),
+            Error::RangeIgnored => f.write_str(tr!(
+                "o servidor ignorou o Range: o arquivo mudou no servidor ou ele não aceita mais retomar"
+            )),
+            Error::Cancelled => f.write_str(tr!("download cancelado")),
+            Error::Other(text) => f.write_str(text),
+        }
+    }
 }
 
 impl Error {

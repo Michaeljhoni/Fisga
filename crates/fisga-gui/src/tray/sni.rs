@@ -4,6 +4,7 @@
 //! The tray service runs on the tokio runtime of `ipc`; clicks come back to
 //! the GTK main loop as `Action`s through a channel.
 
+use fisga_i18n::tr;
 use ksni::menu::StandardItem;
 use ksni::{MenuItem, TrayMethods};
 use tokio::sync::mpsc;
@@ -57,13 +58,13 @@ impl ksni::Tray for Tray {
             // Not every tray shows tooltips (waybar does only on hover): the summary is here too.
             StandardItem { label: self.summary.clone(), enabled: false, ..Default::default() }.into(),
             MenuItem::Separator,
-            item("Abrir o Fisga", "folder-download", Action::Open),
-            item("Adicionar URL…", "list-add", Action::Add),
+            item(tr!("Abrir o Fisga"), "folder-download", Action::Open),
+            item(tr!("Adicionar URL…"), "list-add", Action::Add),
             MenuItem::Separator,
-            item("Retomar todos", "media-playback-start", Action::ResumeAll),
-            item("Pausar todos", "media-playback-pause", Action::PauseAll),
+            item(tr!("Retomar todos"), "media-playback-start", Action::ResumeAll),
+            item(tr!("Pausar todos"), "media-playback-pause", Action::PauseAll),
             MenuItem::Separator,
-            item("Sair", "application-exit", Action::Quit),
+            item(tr!("Sair"), "application-exit", Action::Quit),
         ]
     }
 

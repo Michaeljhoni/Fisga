@@ -397,9 +397,11 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
     {
         let tx = lines_tx.clone();
         tokio::spawn(async move {
-            let mut reader = BufReader::new(stream).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                if tx.send(line).is_err() {
+            // Not `lines()`: it stops for good at the first line that is not UTF-8.
+            let mut reader = BufReader::new(stream).split(b'\n');
+            while let Ok(Some(line)) = reader.next_segment().await {
+                let line = String::from_utf8_lossy(&line);
+                if tx.send(line.trim_end_matches('\r').to_string()).is_err() {
                     break;
                 }
             }

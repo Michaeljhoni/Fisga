@@ -140,7 +140,9 @@ fn folder() -> PathBuf {
 }
 
 /// yt-dlp: Fisga's copy, if there is one, or the system's. Either finds the
-/// tools' folder first on the PATH, for ffmpeg and Deno.
+/// tools' folder first on the PATH, for ffmpeg and Deno, and writes UTF-8:
+/// on Windows it would use the system's code page, and a path with an accent
+/// (Downloads\Vídeos) came out unreadable.
 pub fn yt_dlp() -> Command {
     let dir = folder();
     let own = dir.join(program("yt-dlp"));
@@ -148,6 +150,7 @@ pub fn yt_dlp() -> Command {
         true => crate::shell::program(own),
         false => crate::shell::program("yt-dlp"),
     };
+    command.args(["--encoding", "utf-8"]);
     if dir.exists() {
         let path = std::env::var_os("PATH").unwrap_or_default();
         if let Ok(path) = std::env::join_paths(std::iter::once(dir).chain(std::env::split_paths(&path))) {
@@ -423,6 +426,13 @@ mod tests {
         assert!(error.contains("soma"), "{error}");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn yt_dlp_writes_utf_8() {
+        let command = yt_dlp();
+        let args: Vec<_> = command.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args, ["--encoding", "utf-8"]);
     }
 
     #[test]

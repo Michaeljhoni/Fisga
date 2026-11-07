@@ -360,6 +360,19 @@ if "$BIN/fisga" add "$SMALL" --checksum "md5:098f6bcd4621d373cade4e832627b4f6" 2
 fi
 echo "invalid checksum refused"
 
+step "a repeated address is pointed out"
+"$BIN/fisga" add "$SMALL" -o "$SANDBOX/repetido" 2> "$SANDBOX/repetido.err" >/dev/null
+grep "já está na lista" "$SANDBOX/repetido.err"
+
+step "excluded sites reach the extension"
+"$BIN/fisga" settings --excluded-sites "https://Banco.com.br/conta *.exemplo.com" | grep "sites excluídos:         banco.com.br exemplo.com"
+host '{"type":"settings"}' | grep '"excludedSites":\["banco.com.br","exemplo.com"\]'
+"$BIN/fisga" settings --excluded-sites nenhum | grep "sites excluídos:         nenhum"
+
+step "all the links of a page: the files go to the GUI"
+host "{\"type\":\"links\",\"pageUrl\":\"$BASE/site/\",\"links\":[\"$BASE/files/1441792.bin\",\"docs/\",\"apostila.pdf\"]}" | grep '"type":"shown"'
+host "{\"type\":\"links\",\"pageUrl\":\"$BASE/site/\",\"links\":[\"docs/\"]}" | grep "nenhum link para arquivo"
+
 step "a new version of Fisga: told, installed by the system's packages"
 "$BIN/fisga" update | tee "$SANDBOX/update.out"
 grep "Fisga 99.0.0 disponível" "$SANDBOX/update.out"

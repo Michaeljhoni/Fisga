@@ -147,6 +147,7 @@ struct Actions {
     verify: gio::SimpleAction,
     /// Opens the progress window, where the download's own limit is set.
     limit_speed: gio::SimpleAction,
+    properties: gio::SimpleAction,
 }
 
 /// Opens the row menu for a list item, at a point of one of its cells.
@@ -194,6 +195,9 @@ fn row_menu_model(queues: &[Queue]) -> gio::Menu {
     let section = gio::Menu::new();
     section.append(Some("Copiar endereço"), Some("win.copy-url"));
     section.append(Some("Remover…"), Some("win.remove"));
+    menu.append_section(None, &section);
+    let section = gio::Menu::new();
+    section.append(Some("Propriedades"), Some("win.properties"));
     menu.append_section(None, &section);
     menu
 }
@@ -618,6 +622,7 @@ impl MainWindow {
         layers.add_overlay(&content);
         layers.set_measure_overlay(&content, true);
         window.set_child(Some(&layers));
+        accept_dropped_links(&window, app);
         // It stands still while another app is in use: back in this one, it
         // moves again at once.
         let e = Rc::downgrade(&effects);
@@ -639,6 +644,7 @@ impl MainWindow {
             refresh_url: gio::SimpleAction::new("refresh-url", None),
             verify: gio::SimpleAction::new("verify", None),
             limit_speed: gio::SimpleAction::new("limit-speed", None),
+            properties: gio::SimpleAction::new("properties", None),
         };
         for action in [
             &actions.resume,
@@ -652,6 +658,7 @@ impl MainWindow {
             &actions.refresh_url,
             &actions.verify,
             &actions.limit_speed,
+            &actions.properties,
         ] {
             window.add_action(action);
         }
@@ -888,7 +895,7 @@ impl MainWindow {
             "grab",
             Box::new(move || {
                 if let Some(app) = a.upgrade() {
-                    crate::grabber::show(&parent, app.settings().all_queues());
+                    crate::grabber::show(&parent, app.settings().all_queues(), None);
                 }
             }),
         );
@@ -975,6 +982,12 @@ impl MainWindow {
         self.actions.verify.connect_activate(move |_, _| {
             if let Some(item) = s.selected_item().and_downcast::<DownloadItem>() {
                 crate::verify::show(w.upcast_ref(), &item);
+            }
+        });
+        let (s, w, a) = (selection.clone(), window.clone(), app.clone());
+        self.actions.properties.connect_activate(move |_, _| {
+            if let (Some(item), Some(app)) = (s.selected_item().and_downcast::<DownloadItem>(), a.upgrade()) {
+                crate::properties::show(w.upcast_ref(), &item, app.settings().all_queues());
             }
         });
         let (s, a) = (selection.clone(), app.clone());
@@ -1123,6 +1136,7 @@ fn update_actions(actions: &Actions, selected: Option<DownloadInfo>) {
     // A pending download takes its checksum in the "Novo download" window.
     actions.verify.set_enabled(state.is_some_and(|s| s != State::Pending));
     actions.limit_speed.set_enabled(matches!(state, Some(State::Queued | State::Running | State::Paused | State::Failed)));
+    actions.properties.set_enabled(selected.is_some());
 }
 
 fn about(parent: &gtk::ApplicationWindow) {
@@ -1228,6 +1242,46 @@ pub fn looks_like_url(text: &str) -> bool {
     ["http://", "https://", "ftp://"].iter().any(|scheme| text.starts_with(scheme)) && !text.contains(char::is_whitespace)
 }
 
+/// The addresses in dragged text (a link, a list of them, a `text/uri-list`),
+/// each once and in order.
+pub fn dropped_urls(text: &str) -> Vec<String> {
+    let mut urls: Vec<String> = Vec::new();
+    for word in text.split_whitespace().filter(|word| looks_like_url(word)) {
+        if !urls.iter().any(|url| url == word) {
+            urls.push(word.to_string());
+        }
+    }
+    urls
+}
+
+/// Links dropped on the main window (from the browser, a text): one goes
+/// to the "Novo download" window, like "Adicionar URL"; several open
+/// "Adicionar em lote" with them.
+fn accept_dropped_links(window: &gtk::ApplicationWindow, app: &Rc<App>) {
+    let target = gtk::DropTarget::new(glib::Type::INVALID, gdk::DragAction::COPY | gdk::DragAction::LINK);
+    target.set_types(&[glib::Type::STRING, gdk::FileList::static_type()]);
+    let (w, a) = (window.clone(), Rc::downgrade(app));
+    target.connect_drop(move |_, value, _, _| {
+        let text = match (value.get::<String>(), value.get::<gdk::FileList>()) {
+            (Ok(text), _) => text,
+            (_, Ok(files)) => files.files().iter().map(|file| file.uri().to_string()).collect::<Vec<_>>().join("\n"),
+            _ => return false,
+        };
+        let urls = dropped_urls(&text);
+        match urls.as_slice() {
+            [] => return false,
+            [url] => send(Request::Add(AddRequest { url: url.clone(), confirm: true, ..Default::default() }), Some(w.clone().upcast())),
+            _ => {
+                if let Some(app) = a.upgrade() {
+                    crate::batch::show(&w, app.settings().all_queues(), Some(urls.join("\n")));
+                }
+            }
+        }
+        true
+    });
+    window.add_controller(target);
+}
+
 /// "Adicionar URL": the address goes to the daemon as a pending download, so the
 /// usual "Novo download" window opens to confirm it.
 fn add_url_dialog(parent: &gtk::ApplicationWindow) {
@@ -1296,6 +1350,17 @@ mod tests {
         assert!(looks_like_url("  ftp://example.com/a  "));
         assert!(!looks_like_url("example.com"));
         assert!(!looks_like_url("https://a b"));
+    }
+
+    #[test]
+    fn links_dropped_on_the_window() {
+        assert_eq!(dropped_urls("https://site/a.iso"), ["https://site/a.iso"]);
+        // A text/uri-list, with its comment, and a link twice.
+        let list = "# from the browser\r\nhttps://site/a.iso\r\nhttps://site/b.zip\r\nhttps://site/a.iso\r\n";
+        assert_eq!(dropped_urls(list), ["https://site/a.iso", "https://site/b.zip"]);
+        assert_eq!(dropped_urls("veja https://site/a.iso e ftp://x/y"), ["https://site/a.iso", "ftp://x/y"]);
+        assert!(dropped_urls("só texto").is_empty());
+        assert!(dropped_urls("file:///home/ana/a.iso").is_empty());
     }
 
     #[test]

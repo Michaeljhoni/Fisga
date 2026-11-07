@@ -69,6 +69,15 @@ Dados no Linux:
   monta o comando com essa pasta na frente do PATH. Fica fora dos instaladores porque somariam mais de
   100 MB, o yt-dlp envelheceria até a próxima versão e o Fisga teria de publicar o fonte do ffmpeg (GPL).
   O CI baixa e roda tudo de verdade (`cargo test -p fisga-daemon -- --ignored`).
+- **Pequenos do IDM**: aviso de endereço repetido na *Novo download* (`App::duplicate_of`, só na
+  GUI; `fisga add` avisa no stderr), arrastar e soltar links na janela principal
+  (`window::accept_dropped_links`, `dropped_urls`), *Propriedades* (`properties.rs`, segue o
+  `DownloadItem`), sites excluídos da captura (`BrowserSettings.excluded_sites`, `parse_sites`,
+  `excludes`; a extensão recebe a lista com os tipos e o `clipboard.rs` também respeita) e "Baixar
+  todos os links" (menu de contexto da extensão → `content.js` junta os links do frame →
+  `{"type":"links"}` no host nativo → `Request::ShowLinks` → `Manager::page_files` filtra os
+  arquivos → `Response::Links` para a GUI, que abre o grabber com eles; sem GUI conectada, o
+  `Gui::deliver` guarda numa caixa e abre o `fisga-gui`, que recebe ao se inscrever).
 - **Versões novas do Fisga** (`fisga-daemon/src/update.rs`, `fisga-gui/src/update.rs`): `update::run`
   olha `releases/latest` na API do GitHub uma vez por dia (`Settings.check_updates`; a marca é o
   arquivo `checked` em `dirs::data_local_dir()/fisga/update`) e manda `Response::NewVersion` aos

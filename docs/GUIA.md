@@ -108,7 +108,13 @@ troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O b
   todos*, *Pausar todos*, *Copiar endereço* (Ctrl+C), *Remover concluídos da lista*,
   *Preferências* (Ctrl+,) e *Sobre*. Clique duplo: confirma um download
   pendente, abre um concluído ou mostra o progresso dos demais. **Clique direito** num download:
-  menu com *Abrir*, *Abrir pasta*, *Retomar*, *Pausar*, *Copiar endereço* e *Remover…*.
+  menu com *Abrir*, *Abrir pasta*, *Retomar*, *Pausar*, *Copiar endereço*, *Remover…* e
+  *Propriedades* (Alt+Enter): nome, situação, endereço, página de origem, arquivo, tamanho, tipo,
+  categoria, fila, data, conexões, limite e somas, para ler e copiar; acompanha o download enquanto
+  estiver aberta.
+- **Arrastar e soltar**: arraste um link do navegador (ou um texto com links) para a janela
+  principal. Um link abre a janela *Novo download*, como *Adicionar URL*; vários abrem *Adicionar em
+  lote* com eles.
 - **Busca e colunas**: a caixa de busca no topo (Ctrl+F) filtra a lista pelo nome ou pelo
   endereço (sem diferenciar maiúsculas nem acentos; várias palavras = todas precisam aparecer),
   junto com a categoria ou fila escolhida à esquerda. Em ☰ → *Colunas*, mostre ou esconda
@@ -124,6 +130,8 @@ troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O b
   - **Qualidade** (vídeos de sites): lista as resoluções que o vídeo tem (1080p, 720p, 480p...) e
     *Somente áudio*, cada uma com o tamanho estimado. A primeira é a melhor; *Somente áudio* baixa
     um `.m4a` e vai para a pasta Músicas.
+  - **Repetido**: se o mesmo endereço já está na lista, a janela avisa (com o nome e se ele já foi
+    baixado, e onde). Dá para baixar de novo ou cancelar. `fisga add` avisa no terminal.
   - **Já existe**: se a pasta já tem um arquivo com esse nome, a janela pergunta o que fazer:
     salvar com outro nome (`arquivo (1).iso`, o padrão) ou substituir o existente. Se lá estiver um
     download incompleto, a opção padrão é **continuar de onde parou**; dá também para recomeçar do zero.
@@ -169,6 +177,11 @@ troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O b
   abaixo dela no mesmo site (não sobe para a pasta de cima) e lista os arquivos que elas apontam.
   Filtre por tipo (Vídeos, Documentos...) e por nome (`*.pdf aula_??.mp4`), marque o que quiser e
   mande para uma fila. Usa o proxy e os logins por site. Lê até 100 páginas por busca.
+- **Baixar todos os links** (o *Download all links* do IDM): no navegador, clique direito na página
+  → *Baixar todos os links com o Fisga*, ou selecione um trecho e use *Baixar os links selecionados
+  com o Fisga*. A extensão manda os links da página aberta (a que você vê, com login e tudo) e o
+  Fisga abre a janela *Baixar de um site* com os que apontam para arquivos, para filtrar e marcar.
+  Os downloads levam a página como `Referer`.
 - **Atualizar endereço** (o *Refresh download address* do IDM): no clique direito de um download
   cujo link expirou (comum em sites de arquivos e links assinados), *Atualizar endereço…*. Cole um
   novo link do mesmo arquivo, ou clique em *Capturar do navegador*: a página abre, você clica no
@@ -210,6 +223,12 @@ troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O b
   - **Tecla para baixar com o Fisga** (padrão: Alt): segurada ao clicar num link, manda o link ao
     Fisga, seja qual for o tipo; o navegador não abre nem baixa. Também Ctrl+Alt, Shift+Alt,
     Ctrl+Shift ou nenhuma.
+  - **Sites excluídos** (as exceções do IDM): os downloads destes sites ficam com o navegador, e os
+    links deles copiados não abrem o Fisga. Vale o site do arquivo ou o da página de onde ele veio,
+    e os subdomínios (`banco.com.br` vale para `www.banco.com.br`). Aceita endereços colados
+    (`https://banco.com.br/conta` vira `banco.com.br`). A tecla acima continua funcionando nesses
+    sites. No terminal: `fisga settings --excluded-sites "banco.com.br intranet.empresa.com"`
+    (`nenhum` limpa a lista).
   - A extensão pede essas opções ao app pelo `fisga-native-host` (ao iniciar, ao trocar de aba e a
     cada download, no máximo a cada 5 s) e guarda as últimas; com o `fisgad` parado, valem as
     guardadas. No terminal: `fisga settings --file-types "zip safetensors gguf"` (`padrao` volta à

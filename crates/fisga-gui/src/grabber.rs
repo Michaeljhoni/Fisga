@@ -1,6 +1,7 @@
 //! "Baixar de um site" (IDM's Site Grabber): the daemon reads a page (and,
 //! up to a depth, the pages below it), this window lists the files found,
-//! filtered by type and name, to tick and send to a queue.
+//! filtered by type and name, to tick and send to a queue. It also lists the
+//! links of a page open in the browser ("Baixar todos os links com o Fisga").
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -45,7 +46,24 @@ fn found_row(link: &GrabbedLink) -> (gtk::ListBoxRow, gtk::CheckButton) {
     (row, check)
 }
 
-pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>) {
+/// Shows `links` in the list, replacing what was there.
+fn fill(list: &gtk::ListBox, found: &Rc<RefCell<Vec<Found>>>, refresh: &Rc<dyn Fn()>, links: Vec<GrabbedLink>) {
+    while let Some(row) = list.row_at_index(0) {
+        list.remove(&row);
+    }
+    found.borrow_mut().clear();
+    for link in links {
+        let (row, check) = found_row(&link);
+        let r = refresh.clone();
+        check.connect_toggled(move |_| r());
+        list.append(&row);
+        found.borrow_mut().push(Found { link, check, row });
+    }
+    refresh();
+}
+
+/// `page`: the links a page open in the browser sent, already listed.
+pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, page: Option<(String, Vec<GrabbedLink>)>) {
     let window = gtk::Window::builder()
         .title("Baixar de um site")
         .transient_for(parent)
@@ -172,8 +190,10 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>) {
     close_on_escape(&window);
 
     let found: Rc<RefCell<Vec<Found>>> = Rc::default();
+    // The page the links are from: their `Referer`.
+    let referrer: Rc<RefCell<Option<String>>> = Rc::default();
     // Shows the rows the filters let through, and counts the ticked ones.
-    let refresh = {
+    let refresh: Rc<dyn Fn()> = {
         let (found, type_buttons, pattern, count, add) = (found.clone(), type_buttons.clone(), pattern.clone(), count.clone(), add.clone());
         Rc::new(move || {
             let wanted: Vec<Category> =
@@ -214,36 +234,28 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>) {
         });
     }
 
-    let (u, list_, found_, r, error_, spinner_, w) =
-        (url.clone(), list.clone(), found.clone(), refresh.clone(), error.clone(), spinner.clone(), window.clone());
+    let (u, list_, found_, r, error_, spinner_, w, referrer_) =
+        (url.clone(), list.clone(), found.clone(), refresh.clone(), error.clone(), spinner.clone(), window.clone(), referrer.clone());
     search.connect_clicked(move |button| {
         let address = u.text().trim().to_string();
         if address.is_empty() {
             return;
         }
-        let request = Request::Grab { url: address, depth: depth.value() as u8 };
+        let request = Request::Grab { url: address.clone(), depth: depth.value() as u8 };
         button.set_sensitive(false);
         spinner_.start();
         error_.set_visible(false);
-        let (button, list, found, r, error, spinner, w) =
-            (button.clone(), list_.clone(), found_.clone(), r.clone(), error_.clone(), spinner_.clone(), w.clone());
+        let (button, list, found, r, error, spinner, w, referrer) =
+            (button.clone(), list_.clone(), found_.clone(), r.clone(), error_.clone(), spinner_.clone(), w.clone(), referrer_.clone());
         glib::spawn_future_local(async move {
             let result = ipc::call(request).await;
             spinner.stop();
             button.set_sensitive(true);
-            while let Some(row) = list.row_at_index(0) {
-                list.remove(&row);
-            }
-            found.borrow_mut().clear();
+            fill(&list, &found, &r, Vec::new());
             match result {
                 Ok(Response::Grabbed { links, pages }) => {
-                    for link in links {
-                        let (row, check) = found_row(&link);
-                        let r = r.clone();
-                        check.connect_toggled(move |_| r());
-                        list.append(&row);
-                        found.borrow_mut().push(Found { link, check, row });
-                    }
+                    referrer.replace(Some(address));
+                    fill(&list, &found, &r, links);
                     if found.borrow().is_empty() {
                         error.set_label(&format!("Nenhum arquivo nas {pages} página(s) lida(s)."));
                         error.set_visible(true);
@@ -260,6 +272,16 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>) {
         });
     });
 
+    if let Some((page, links)) = page {
+        window.set_title(Some("Links da página"));
+        hint.set_label(
+            "Os links para arquivos da página aberta no navegador. Marque os que quiser baixar; \u{201c}Procurar\u{201d} lê a página de novo, seguindo os níveis.",
+        );
+        url.set_text(&page);
+        referrer.replace(Some(page));
+        fill(&list, &found, &refresh, links);
+        window.set_default_widget(Some(&add));
+    }
     let w = window.clone();
     cancel.connect_clicked(move |_| w.close());
     let (w, d, l) = (window.clone(), dir.clone(), dir_label.clone());
@@ -293,6 +315,7 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>) {
             output_dir: dir.borrow().clone(),
             queue: queue_ids.get(queue.selected() as usize).copied().filter(|_| queue.is_visible()),
             start: start.is_active(),
+            referrer: referrer.borrow().clone(),
         };
         button.set_sensitive(false);
         let (w, button, error) = (w.clone(), button.clone(), error.clone());

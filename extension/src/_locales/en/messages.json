@@ -13,6 +13,8 @@
   "noCandidates": { "message": "No media detected yet. Play the video for a few seconds and try again." },
   "menuLink": { "message": "Download link with Fisga" },
   "menuMedia": { "message": "Download this media with Fisga" },
+  "menuAllLinks": { "message": "Download all links with Fisga" },
+  "menuSelectedLinks": { "message": "Download selected links with Fisga" },
   "hostMissing": { "message": "Fisga app not found. Install it and run: fisga install-hosts" },
   "popupConnected": { "message": "Connected to Fisga" },
   "popupDisconnected": { "message": "Fisga app not found" },

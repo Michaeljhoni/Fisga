@@ -21,6 +21,8 @@ const DEFAULT_SETTINGS = {
     "mov mp3 mp4 mpeg mpg msi ogg ogv onnx opus pkg pt pth rar rpm run safetensors tar tgz wav webm wma wmv xz zip zst"
   ).split(" "),
   forceKey: "alt",
+  // Sites whose downloads stay with the browser (the app's "Sites excluídos").
+  excludedSites: [],
 };
 
 // Sites where the media is best extracted from the page by yt-dlp (signed or
@@ -102,7 +104,11 @@ function syncWithApp() {
     try {
       const reply = await api.runtime.sendNativeMessage(HOST, { type: "settings" });
       if (reply?.type === "settings" && Array.isArray(reply.fileTypes)) {
-        await api.storage.local.set({ fileTypes: reply.fileTypes, forceKey: reply.forceKey ?? "none" });
+        await api.storage.local.set({
+          fileTypes: reply.fileTypes,
+          forceKey: reply.forceKey ?? "none",
+          excludedSites: Array.isArray(reply.excludedSites) ? reply.excludedSites : [],
+        });
       }
     } catch {}
   })().finally(() => (syncing = null));
@@ -407,6 +413,12 @@ function extensionOf(name) {
   return dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
 }
 
+/** On one of the sites the user keeps out of Fisga (or a subdomain of one). */
+function isExcluded(url, prefs) {
+  const u = parseUrl(url || "");
+  return Boolean(u && hostMatches(u.hostname.toLowerCase(), prefs.excludedSites ?? []));
+}
+
 function shouldIntercept(item, prefs) {
   const allowed = new Set((prefs.fileTypes ?? []).map((type) => String(type).toLowerCase()));
   const url = item.finalUrl || item.url;
@@ -427,6 +439,8 @@ async function takeOver(item) {
   await syncWithApp();
   const prefs = await settings();
   if (!prefs.intercept || item.state !== "in_progress") return;
+  // The site of the file, or of the page it came from.
+  if (isExcluded(url, prefs) || isExcluded(item.referrer, prefs)) return;
   if (!shouldIntercept(item, prefs)) {
     // Chrome names the file (Content-Disposition) after creating the item: the
     // name may have come while waiting, or gets its own look in onChanged.
@@ -492,7 +506,22 @@ api.runtime.onInstalled.addListener(async () => {
   await Promise.resolve(api.contextMenus.removeAll()).catch(() => {});
   api.contextMenus.create({ id: "fisga-link", title: message("menuLink", "Baixar link com o Fisga"), contexts: ["link"] });
   api.contextMenus.create({ id: "fisga-media", title: message("menuMedia", "Baixar esta mídia com o Fisga"), contexts: ["video", "audio"] });
+  api.contextMenus.create({ id: "fisga-all-links", title: message("menuAllLinks", "Baixar todos os links com o Fisga"), contexts: ["page"] });
+  api.contextMenus.create({
+    id: "fisga-selected-links",
+    title: message("menuSelectedLinks", "Baixar os links selecionados com o Fisga"),
+    contexts: ["selection"],
+  });
 });
+
+/** The links of the clicked frame (or the selected ones) go to the app, which lists them to pick from. */
+async function sendLinks(info, tab, onlySelected) {
+  const reply = await api.tabs.sendMessage(tab.id, { type: "collect-links", selection: onlySelected }, { frameId: info.frameId ?? 0 });
+  const links = reply?.links ?? [];
+  if (!links.length) throw new Error("nenhum link na página");
+  const answer = await api.runtime.sendNativeMessage(HOST, { type: "links", pageUrl: info.frameUrl || info.pageUrl || tab.url, links });
+  if (answer?.type !== "shown") throw new Error(answer?.message || "resposta inválida do app");
+}
 
 api.contextMenus.onClicked.addListener(async (info, tab) => {
   try {
@@ -505,6 +534,8 @@ api.contextMenus.onClicked.addListener(async (info, tab) => {
         userAgent: navigator.userAgent,
         cookies: await cookiesFor(info.linkUrl),
       });
+    } else if (info.menuItemId === "fisga-all-links" || info.menuItemId === "fisga-selected-links") {
+      await sendLinks(info, tab, info.menuItemId === "fisga-selected-links");
     } else if (info.menuItemId === "fisga-media") {
       const sender = { tab, url: info.frameUrl || info.pageUrl, frameId: info.frameId ?? 0 };
       await downloadMedia({ src: info.srcUrl, pageUrl: info.pageUrl, title: tab?.title }, sender);

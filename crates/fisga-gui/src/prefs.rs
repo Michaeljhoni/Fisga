@@ -230,6 +230,23 @@ fn browser_page(browser: &BrowserSettings) -> (gtk::Box, Box<dyn Fn() -> Browser
         Some("Segure ao clicar num link: ele vai para o Fisga, seja qual for o tipo de arquivo. Para os casos que escapam da lista acima."),
     );
 
+    let sites = gtk::Entry::builder()
+        .text(browser.excluded_sites.join(" "))
+        .placeholder_text("meubanco.com.br intranet.empresa.com")
+        .hexpand(true)
+        .build();
+    let sites_title = gtk::Label::builder().label("Sites excluídos").xalign(0.0).build();
+    sites_title.add_css_class("heading");
+    let sites_hint = gtk::Label::builder()
+        .label("Os downloads destes sites ficam com o navegador, e os links deles copiados não abrem o Fisga. Vale também para os subdomínios. Separe com espaços. A tecla acima continua mandando um link ao Fisga.")
+        .xalign(0.0)
+        .wrap(true)
+        .width_chars(34)
+        .max_width_chars(60)
+        .build();
+    sites_hint.add_css_class("dim-label");
+    sites_hint.add_css_class("caption");
+
     let page = gtk::Box::new(gtk::Orientation::Vertical, 10);
     page.append(&types_title);
     page.append(&types_hint);
@@ -237,6 +254,10 @@ fn browser_page(browser: &BrowserSettings) -> (gtk::Box, Box<dyn Fn() -> Browser
     page.append(&reset);
     page.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     page.append(&grid);
+    page.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    page.append(&sites_title);
+    page.append(&sites_hint);
+    page.append(&sites);
     let note = gtk::Label::builder()
         .label("Vale para a extensão do Fisga no navegador; ela recebe as mudanças em alguns segundos.")
         .xalign(0.0)
@@ -254,6 +275,7 @@ fn browser_page(browser: &BrowserSettings) -> (gtk::Box, Box<dyn Fn() -> Browser
         BrowserSettings {
             file_types: BrowserSettings::parse_file_types(&text),
             force_key: ForceKey::ALL.get(key.selected() as usize).copied().unwrap_or_default(),
+            excluded_sites: BrowserSettings::parse_sites(&sites.text()),
         }
     };
     (page, Box::new(read))

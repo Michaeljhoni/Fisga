@@ -6,7 +6,7 @@ use std::future::Future;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use fisga_ipc::{Connection, DownloadInfo, NewVersion, PowerPlan, Request, Response, Settings};
+use fisga_ipc::{Connection, DownloadInfo, GrabbedLink, NewVersion, PowerPlan, Request, Response, Settings};
 use tokio::sync::mpsc;
 
 pub enum Event {
@@ -19,6 +19,8 @@ pub enum Event {
     Power(Option<PowerPlan>),
     /// A newer Fisga, or how its install goes (`None`: none).
     NewVersion(Option<NewVersion>),
+    /// The links of a page open in the browser, to pick from.
+    Links(String, Vec<GrabbedLink>),
     Disconnected(String),
 }
 
@@ -76,6 +78,7 @@ async fn session(tx: &mpsc::UnboundedSender<Event>) -> anyhow::Result<()> {
             Response::Settings { settings } => Event::Settings(settings),
             Response::Power { plan } => Event::Power(plan),
             Response::NewVersion { release } => Event::NewVersion(release),
+            Response::Links { page, links } => Event::Links(page, links),
             _ => continue,
         };
         if tx.send(event).is_err() {

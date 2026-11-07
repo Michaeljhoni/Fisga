@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use fisga_ipc::State;
+use fisga_ipc::{Response, State};
 
 use crate::manager::{Answer, Manager};
 use crate::notify;
@@ -21,6 +21,8 @@ use crate::notify;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// A GUI launched this recently is assumed to be starting up: do not launch another.
 const RELAUNCH_AFTER: Duration = Duration::from_secs(10);
+/// Something kept for a GUI that did not connect by then is dropped.
+const INBOX_FOR: Duration = Duration::from_secs(60);
 
 /// What happens to a pending download when no window can ask the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +39,8 @@ pub struct Gui {
     /// `$FISGA_GUI`, else `fisga-gui` next to `fisgad`. Empty = never launch.
     program: Option<PathBuf>,
     connect_timeout: Duration,
+    /// For the GUI being launched (links from the browser), with when it came.
+    inbox: Mutex<Vec<(Instant, Response)>>,
 }
 
 /// Keeps a confirmer counted while its subscription is open.
@@ -59,7 +63,13 @@ impl Gui {
     }
 
     pub fn new(program: Option<PathBuf>, connect_timeout: Duration) -> Arc<Self> {
-        Arc::new(Self { confirmers: AtomicUsize::new(0), last_launch: Mutex::new(None), program, connect_timeout })
+        Arc::new(Self {
+            confirmers: AtomicUsize::new(0),
+            last_launch: Mutex::new(None),
+            program,
+            connect_timeout,
+            inbox: Mutex::default(),
+        })
     }
 
     pub fn attach(self: &Arc<Self>) -> ConfirmerGuard {
@@ -99,6 +109,23 @@ impl Gui {
         if let Err(e) = self.launch() {
             tracing::warn!(error = %e, "não foi possível abrir o fisga-gui");
         }
+    }
+
+    /// Something for the GUI to show: to the one connected, else kept for the
+    /// one launched now, which gets it when it subscribes.
+    pub fn deliver(&self, manager: &Manager, response: Response) {
+        if self.has_confirmer() {
+            manager.announce(response);
+            return;
+        }
+        self.inbox.lock().unwrap().push((Instant::now(), response));
+        self.show_window();
+    }
+
+    /// What waits for a GUI, unless it waited too long.
+    pub fn take_inbox(&self) -> Vec<Response> {
+        let waiting = std::mem::take(&mut *self.inbox.lock().unwrap());
+        waiting.into_iter().filter(|(at, _)| at.elapsed() < INBOX_FOR).map(|(_, response)| response).collect()
     }
 
     fn launch(&self) -> anyhow::Result<()> {

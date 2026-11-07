@@ -92,6 +92,7 @@ impl ConfirmDialog {
         app: &gtk::Application,
         parent: Option<&gtk::ApplicationWindow>,
         info: &DownloadInfo,
+        duplicate: Option<&DownloadInfo>,
         category_folders: bool,
         queues: Vec<Queue>,
     ) -> Rc<Self> {
@@ -137,6 +138,18 @@ impl ConfirmDialog {
         let exists_caption = caption("Já existe");
         exists_caption.set_visible(false);
         exists_caption.set_valign(gtk::Align::Start);
+        // IDM's "duplicate download link": the same address is in the list.
+        let repeated = gtk::Label::builder().xalign(0.0).wrap(true).max_width_chars(60).build();
+        repeated.add_css_class("warning");
+        let repeated_caption = caption("Repetido");
+        repeated_caption.set_valign(gtk::Align::Start);
+        match duplicate {
+            Some(other) => repeated.set_label(&format::duplicate(other)),
+            None => {
+                repeated.set_visible(false);
+                repeated_caption.set_visible(false);
+            }
+        }
         let queue_choice = gtk::DropDown::builder().halign(gtk::Align::Start).build();
         let queue_caption = caption("Fila");
         let checksum = gtk::Entry::builder()
@@ -149,6 +162,7 @@ impl ConfirmDialog {
         let grid = gtk::Grid::builder().column_spacing(12).row_spacing(10).build();
         for (row, (label, widget)) in [
             (caption("Endereço"), url.upcast_ref::<gtk::Widget>()),
+            (repeated_caption, repeated.upcast_ref()),
             (caption("Salvar como"), name.upcast_ref()),
             (caption("Pasta"), dir_row.upcast_ref()),
             (queue_caption.clone(), queue_choice.upcast_ref()),

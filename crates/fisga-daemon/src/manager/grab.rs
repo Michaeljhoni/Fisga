@@ -121,7 +121,30 @@ fn inside(start: &Url, url: &Url) -> bool {
     url.host_str() == start.host_str() && url.port_or_known_default() == start.port_or_known_default() && url.path().starts_with(folder)
 }
 
+/// The most links listed from one page sent by the browser.
+const MAX_PAGE_LINKS: usize = 5000;
+
 impl Manager {
+    /// The files among the links of `page` (sent by the browser), once each
+    /// and in order: what "Baixar todos os links" lists.
+    pub fn page_files(page: &str, links: &[String]) -> anyhow::Result<Vec<GrabbedLink>> {
+        let page = Url::parse(page).context("URL inválida")?;
+        let mut seen = HashSet::new();
+        let files: Vec<GrabbedLink> = links
+            .iter()
+            .filter_map(|link| match classify(&page, link)? {
+                Found::File(file) => Some(file),
+                Found::Page(_) => None,
+            })
+            .filter(|file| seen.insert(file.url.clone()))
+            .take(MAX_PAGE_LINKS)
+            .collect();
+        if files.is_empty() {
+            bail!("nenhum link para arquivo nesta página");
+        }
+        Ok(files)
+    }
+
     /// Reads `start` and, up to `depth` levels, its pages: every file linked,
     /// once, in the order found; and how many pages were read.
     pub async fn grab(&self, start: &str, depth: u8) -> anyhow::Result<(Vec<GrabbedLink>, usize)> {
@@ -212,6 +235,18 @@ impl Manager {
 mod tests {
     use super::super::tests::manager;
     use super::*;
+
+    #[test]
+    fn files_among_a_pages_links() {
+        let links: Vec<String> = ["../aulas/a.mp4", "https://e.com/sobre.html", "b.zip", "/aulas/a.mp4", "https://e.com/", "mailto:x@e.com"]
+            .map(String::from)
+            .to_vec();
+        let files = Manager::page_files("https://e.com/aulas/index.html", &links).unwrap();
+        let urls: Vec<&str> = files.iter().map(|file| file.url.as_str()).collect();
+        assert_eq!(urls, ["https://e.com/aulas/a.mp4", "https://e.com/aulas/b.zip"]);
+        assert_eq!(files[0].category, Category::Video);
+        assert!(Manager::page_files("https://e.com/", &["sobre.html".to_string()]).is_err());
+    }
 
     #[test]
     fn links_in_html() {

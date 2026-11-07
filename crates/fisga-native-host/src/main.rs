@@ -19,6 +19,9 @@ enum Incoming {
     /// The file types and the force key of the "Navegador" preferences.
     Settings,
     Download(AddRequest),
+    /// "Baixar todos os links com o Fisga": a page's links, to pick from in the app.
+    #[serde(rename_all = "camelCase")]
+    Links { page_url: String, links: Vec<String> },
 }
 
 fn read_message(input: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
@@ -53,11 +56,28 @@ async fn handle(message: Incoming) -> Value {
         // Not worth starting fisgad: the extension keeps what it read last.
         Incoming::Settings => match fisga_ipc::call(&Request::GetSettings).await {
             Ok(Response::Settings { settings }) => {
-                json!({ "type": "settings", "fileTypes": settings.browser.file_types, "forceKey": settings.browser.force_key })
+                let browser = settings.browser;
+                json!({
+                    "type": "settings",
+                    "fileTypes": browser.file_types,
+                    "forceKey": browser.force_key,
+                    "excludedSites": browser.excluded_sites,
+                })
             }
             Ok(other) => json!({ "type": "error", "message": format!("resposta inesperada: {other:?}") }),
             Err(e) => json!({ "type": "error", "message": e.to_string() }),
         },
+        Incoming::Links { page_url, links } => {
+            let result = async {
+                fisga_ipc::ensure_daemon().await?;
+                fisga_ipc::call(&Request::ShowLinks { page: page_url, links }).await
+            }
+            .await;
+            match result {
+                Ok(_) => json!({ "type": "shown" }),
+                Err(e) => json!({ "type": "error", "message": e.to_string() }),
+            }
+        }
         Incoming::Download(request) => {
             let pending = request.confirm;
             let result = async {
@@ -131,6 +151,8 @@ mod tests {
     fn ping_and_invalid_messages() {
         assert!(matches!(parse(br#"{"type":"ping"}"#).unwrap(), Incoming::Ping));
         assert!(matches!(parse(br#"{"type":"settings"}"#).unwrap(), Incoming::Settings));
+        let links = parse(br#"{"type":"links","pageUrl":"https://e.com/","links":["https://e.com/a.zip"]}"#).unwrap();
+        assert!(matches!(links, Incoming::Links { page_url, links } if page_url == "https://e.com/" && links.len() == 1));
         assert!(parse(br#"{"type":"nope"}"#).is_err());
         assert!(parse(b"[1,2]").is_err());
     }

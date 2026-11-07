@@ -207,7 +207,7 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, updater: Arc<Updater
                 Ok((links, pages)) => Response::Grabbed { links, pages },
                 Err(e) => Response::Error { message: format!("{e:#}") },
             },
-            Request::AddBatch { urls, output_dir, queue, start } => match manager.add_batch(urls, output_dir, queue, start) {
+            Request::AddBatch { urls, output_dir, queue, start, referrer } => match manager.add_batch(urls, output_dir, queue, start, referrer) {
                 Ok(ids) => Response::AddedBatch { ids },
                 Err(e) => Response::Error { message: format!("{e:#}") },
             },
@@ -223,6 +223,14 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, updater: Arc<Updater
             Request::CancelPower => result(manager.cancel_power()),
             Request::GetLogins => Response::Logins { logins: manager.logins() },
             Request::SetLogins { logins } => result(manager.set_logins(logins)),
+            Request::ShowLinks { page, links } => match Manager::page_files(&page, &links) {
+                Ok(links) => {
+                    tracing::info!(count = links.len(), "links da página enviados pelo navegador");
+                    gui.deliver(&manager, Response::Links { page, links });
+                    Response::Ok
+                }
+                Err(e) => Response::Error { message: format!("{e:#}") },
+            },
             Request::CheckUpdate => match updater.check(&manager).await {
                 Ok(release) => Response::NewVersion { release },
                 Err(e) => Response::Error { message: format!("não foi possível procurar uma versão nova: {e}") },
@@ -254,6 +262,12 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, updater: Arc<Updater
                 }
                 if let Some(release) = updater.current() {
                     if write(&mut writer, &Response::NewVersion { release: Some(release) }).await.is_err() {
+                        return;
+                    }
+                }
+                // What was waiting for a GUI (it may have been launched for it).
+                for waiting in confirmer.then(|| gui.take_inbox()).unwrap_or_default() {
+                    if write(&mut writer, &waiting).await.is_err() {
                         return;
                     }
                 }

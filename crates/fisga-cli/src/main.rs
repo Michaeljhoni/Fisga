@@ -101,6 +101,9 @@ struct SettingsArgs {
     /// Tecla que, segurada ao clicar num link, manda o link ao Fisga: nenhuma, alt, ctrl+alt, shift+alt ou ctrl+shift
     #[arg(long, value_parser = parse_force_key)]
     force_key: Option<ForceKey>,
+    /// Sites cujos downloads ficam com o navegador, separados por espaço ("nenhum" = limpa a lista)
+    #[arg(long)]
+    excluded_sites: Option<String>,
     /// Tema das janelas: escuro ou claro
     #[arg(long, value_parser = parse_theme)]
     theme: Option<Theme>,
@@ -401,7 +404,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Grab { url, depth, types, pattern, add, dir, queue_id, paused } => {
             fisga_ipc::ensure_daemon().await?;
             eprintln!("procurando em {url} (profundidade {depth})…");
-            let Response::Grabbed { links, pages } = fisga_ipc::call(&Request::Grab { url, depth }).await? else {
+            let Response::Grabbed { links, pages } = fisga_ipc::call(&Request::Grab { url: url.clone(), depth }).await? else {
                 bail!("resposta inesperada do daemon");
             };
             let types = types.map(|Categories(types)| types).unwrap_or_default();
@@ -417,7 +420,7 @@ async fn main() -> anyhow::Result<()> {
             let urls = found.iter().map(|link| link.url.clone()).collect();
             let output_dir = dir.map(|d| std::path::absolute(&d).unwrap_or(d));
             let Response::AddedBatch { ids } =
-                fisga_ipc::call(&Request::AddBatch { urls, output_dir, queue: queue_id, start: !paused }).await?
+                fisga_ipc::call(&Request::AddBatch { urls, output_dir, queue: queue_id, start: !paused, referrer: Some(url) }).await?
             else {
                 bail!("resposta inesperada do daemon");
             };
@@ -448,7 +451,7 @@ async fn main() -> anyhow::Result<()> {
             }
             fisga_ipc::ensure_daemon().await?;
             let output_dir = dir.map(|d| std::path::absolute(&d).unwrap_or(d));
-            let request = Request::AddBatch { urls, output_dir, queue: queue_id, start: !paused };
+            let request = Request::AddBatch { urls, output_dir, queue: queue_id, start: !paused, referrer: None };
             let Response::AddedBatch { ids } = fisga_ipc::call(&request).await? else {
                 bail!("resposta inesperada do daemon");
             };
@@ -605,6 +608,11 @@ async fn add(
     checksum: Option<Checksum>,
 ) -> anyhow::Result<()> {
     fisga_ipc::ensure_daemon().await?;
+    if let Ok(Response::Downloads { items }) = fisga_ipc::call(&Request::List).await {
+        if let Some(other) = items.iter().filter(|item| item.url == source.url).max_by_key(|item| item.id) {
+            eprintln!("aviso: este endereço já está na lista (#{}, {})", other.id, other.name);
+        }
+    }
     let request = AddRequest {
         queue,
         url: source.url.clone(),
@@ -722,6 +730,7 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         on_complete,
         file_types,
         force_key,
+        excluded_sites,
         theme,
         festive,
         check_updates,
@@ -752,6 +761,7 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         || on_complete.is_some()
         || file_types.is_some()
         || force_key.is_some()
+        || excluded_sites.is_some()
         || theme.is_some()
         || festive.is_some()
         || check_updates.is_some();
@@ -762,6 +772,12 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         };
     }
     current.browser.force_key = force_key.unwrap_or(current.browser.force_key);
+    if let Some(sites) = excluded_sites {
+        current.browser.excluded_sites = match sites.trim() {
+            "nenhum" | "none" | "" => Vec::new(),
+            sites => BrowserSettings::parse_sites(sites),
+        };
+    }
     current.on_complete.sound = sound.unwrap_or(current.on_complete.sound);
     current.on_complete.antivirus = antivirus.unwrap_or(current.on_complete.antivirus);
     if let Some(command) = on_complete {
@@ -806,6 +822,10 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
     }
     println!("tipos do navegador:      {}", current.browser.file_types.join(" "));
     println!("tecla do navegador:      {}", current.browser.force_key.label());
+    match current.browser.excluded_sites.as_slice() {
+        [] => println!("sites excluídos:         nenhum"),
+        sites => println!("sites excluídos:         {}", sites.join(" ")),
+    }
     println!("tema:                    {}", if current.theme == Theme::Light { "claro" } else { "escuro" });
     println!("efeitos de datas:        {}", if current.festive { "sim" } else { "não" });
     println!("procurar versão nova:    {}", if current.check_updates { "sim" } else { "não" });

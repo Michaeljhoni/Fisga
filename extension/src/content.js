@@ -498,4 +498,23 @@
     menuOpen = false;
     if (ui) ui.menu.hidden = true;
   }
+
+  // "Baixar todos os links com o Fisga": the addresses this frame links to
+  // (only the selected ones, when the menu came from a selection).
+  function collectLinks(onlySelected) {
+    const selection = getSelection();
+    const ranges = onlySelected && selection ? [...Array(selection.rangeCount).keys()].map((i) => selection.getRangeAt(i)) : [];
+    const urls = new Set();
+    for (const el of document.querySelectorAll("a[href], area[href], video[src], audio[src], source[src]")) {
+      if (onlySelected && !ranges.some((range) => range.intersectsNode(el))) continue;
+      const url = el.href || el.src;
+      if (/^(https?|ftp):/i.test(url)) urls.add(url);
+      if (urls.size >= 5000) break;
+    }
+    return [...urls];
+  }
+  api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg?.type !== "collect-links") return;
+    sendResponse({ links: collectLinks(Boolean(msg.selection)) });
+  });
 })();

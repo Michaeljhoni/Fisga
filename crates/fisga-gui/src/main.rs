@@ -27,6 +27,7 @@ mod item;
 mod power;
 mod prefs;
 mod progress;
+mod properties;
 mod refresh;
 mod speed;
 mod theme;

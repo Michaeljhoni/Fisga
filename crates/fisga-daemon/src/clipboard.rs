@@ -119,7 +119,8 @@ async fn watch(manager: &Arc<Manager>, gui: &Arc<Gui>, reader: BufReader<tokio::
             continue;
         }
         last = Some(url.clone());
-        if started.elapsed() < SETTLE || !manager.settings().watch_clipboard {
+        let settings = manager.settings();
+        if started.elapsed() < SETTLE || !settings.watch_clipboard || settings.browser.excludes(&url) {
             continue;
         }
         tracing::info!(url, "link copiado");

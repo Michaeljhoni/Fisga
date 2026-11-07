@@ -192,6 +192,17 @@ pub fn state_label(state: State) -> &'static str {
     }
 }
 
+/// The same address, already in the list: what became of it.
+pub fn duplicate(other: &DownloadInfo) -> String {
+    let state = state_label(other.state).to_lowercase();
+    match (&other.path, other.state) {
+        (Some(path), State::Completed) => {
+            format!("Este endereço já foi baixado: \u{201c}{}\u{201d}, em {}.", other.name, path.display())
+        }
+        _ => format!("Este endereço já está na lista: \u{201c}{}\u{201d} ({state}).", other.name),
+    }
+}
+
 /// The checksum check of a finished download, as its status.
 pub fn check_status(info: &DownloadInfo) -> Option<String> {
     match (&info.hash, info.checksum_matches()) {

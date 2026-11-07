@@ -230,6 +230,7 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, initial: Option
             output_dir: dir.borrow().clone(),
             queue: queue_ids.get(queue.selected() as usize).copied().filter(|_| queue.is_visible()),
             start: start.is_active(),
+            referrer: None,
         };
         button.set_sensitive(false);
         error.set_visible(false);

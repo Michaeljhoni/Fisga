@@ -321,6 +321,9 @@ pub struct BrowserSettings {
     /// Extensions, lowercase and without the dot.
     pub file_types: Vec<String>,
     pub force_key: ForceKey,
+    /// Sites whose downloads stay with the browser, and whose copied links
+    /// are left alone (IDM's exceptions): hosts, each with its subdomains.
+    pub excluded_sites: Vec<String>,
 }
 
 /// The extension's own copy of this list (`extension/src/background.js`)
@@ -331,7 +334,7 @@ pub const DEFAULT_FILE_TYPES: &str = "3gp 7z aac apk appimage avi bin bz2 ckpt d
 
 impl Default for BrowserSettings {
     fn default() -> Self {
-        Self { file_types: Self::parse_file_types(DEFAULT_FILE_TYPES), force_key: ForceKey::default() }
+        Self { file_types: Self::parse_file_types(DEFAULT_FILE_TYPES), force_key: ForceKey::default(), excluded_sites: Vec::new() }
     }
 }
 
@@ -348,6 +351,32 @@ impl BrowserSettings {
             }
         }
         types
+    }
+
+    /// `"https://Banco.com.br/conta, *.exemplo.com"` → `["banco.com.br",
+    /// "exemplo.com"]`: the hosts, lowercase, each once.
+    pub fn parse_sites(text: &str) -> Vec<String> {
+        let mut sites: Vec<String> = Vec::new();
+        for word in text.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
+            let host = word.split_once("://").map_or(word, |(_, rest)| rest);
+            let host = host.split(['/', '?', '#']).next().unwrap_or_default();
+            let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+            let host = host.split(':').next().unwrap_or_default();
+            let host = host.trim_start_matches("*.").trim_matches('.').to_ascii_lowercase();
+            let valid = host.contains('.') || host == "localhost";
+            let valid = valid && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
+            if valid && !sites.contains(&host) {
+                sites.push(host);
+            }
+        }
+        sites
+    }
+
+    /// `url` is on one of the excluded sites (or a subdomain of one).
+    pub fn excludes(&self, url: &str) -> bool {
+        let Ok(url) = url::Url::parse(url) else { return false };
+        let host = url.host_str().unwrap_or_default().trim_end_matches('.').to_ascii_lowercase();
+        self.excluded_sites.iter().any(|site| host == *site || host.strip_suffix(site.as_str()).is_some_and(|rest| rest.ends_with('.')))
     }
 }
 
@@ -1352,7 +1381,14 @@ pub enum Request {
         /// Into the queue (true) or paused (false).
         #[serde(default = "yes")]
         start: bool,
+        /// The page they were found on, sent as each one's `Referer`.
+        #[serde(default)]
+        referrer: Option<String>,
     },
+    /// IDM's "Download all links": the links of a page open in the browser.
+    /// The ones to files go to the GUI as `Response::Links`, where the user
+    /// picks what to download; answered with `Response::Ok`.
+    ShowLinks { page: String, links: Vec<String> },
     Shutdown,
     GetSettings,
     /// Replaces the settings; subscribers receive `Response::Settings`.
@@ -1390,6 +1426,10 @@ pub enum Response {
     /// Sent to subscribers when one is found or its install moves, and right
     /// after subscribing while there is one.
     NewVersion { release: Option<NewVersion> },
+    /// Links to files from a page open in the browser (`Request::ShowLinks`),
+    /// for the GUI to list. Sent to the GUI connected, or to the one launched
+    /// for them when it subscribes.
+    Links { page: String, links: Vec<GrabbedLink> },
     Ok,
     Error { message: String },
 }
@@ -1700,6 +1740,22 @@ mod tests {
         assert_eq!(Category::detect("podcast.m4a", SourceKind::Page), Category::Music);
         assert_eq!(Category::Other.folder(), None);
         assert_eq!(Category::Program.folder(), Some("Programas"));
+    }
+
+    #[test]
+    fn excluded_sites() {
+        let sites = BrowserSettings::parse_sites("https://Banco.com.br/conta, *.exemplo.com;intranet.local:8080 banco.com.br lixo localhost");
+        assert_eq!(sites, ["banco.com.br", "exemplo.com", "intranet.local", "localhost"]);
+        let browser = BrowserSettings { excluded_sites: sites, ..Default::default() };
+        assert!(browser.excludes("https://banco.com.br/extrato.pdf"));
+        assert!(browser.excludes("https://www.banco.com.br/a.zip"));
+        assert!(browser.excludes("http://arquivos.exemplo.com/a.iso"));
+        assert!(!browser.excludes("https://outrobanco.com.br/a.zip"), "a site is matched whole");
+        assert!(!browser.excludes("https://exemplo.com.br/a.zip"));
+        assert!(!browser.excludes("não é endereço"));
+        // Settings from before the list.
+        let settings: Settings = serde_json::from_str(r#"{"browser":{"fileTypes":["iso"]}}"#).unwrap();
+        assert!(settings.browser.excluded_sites.is_empty());
     }
 
     #[test]

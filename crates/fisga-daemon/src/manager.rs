@@ -448,6 +448,7 @@ impl Manager {
         output_dir: Option<PathBuf>,
         queue: Option<u64>,
         start: bool,
+        referrer: Option<String>,
     ) -> anyhow::Result<Vec<u64>> {
         if urls.is_empty() {
             bail!("nenhum endereço no lote");
@@ -463,7 +464,10 @@ impl Manager {
         }
         let ids = urls
             .into_iter()
-            .map(|url| self.insert(AddRequest { url, output_dir: output_dir.clone(), queue, start, ..Default::default() }))
+            .map(|url| {
+                let referrer = referrer.clone();
+                self.insert(AddRequest { url, output_dir: output_dir.clone(), queue, start, referrer, ..Default::default() })
+            })
             .collect::<anyhow::Result<Vec<u64>>>()?;
         tracing::info!(count = ids.len(), "lote adicionado");
         self.save();
@@ -1339,16 +1343,18 @@ mod tests {
         let urls = fisga_ipc::expand_batch("http://127.0.0.1:9/aula_*.mp4", "01", "04", 0).unwrap();
         let mut bad = urls.clone();
         bad.push("mailto:ana@exemplo.com".into());
-        assert!(manager.add_batch(bad, None, None, false).is_err());
+        assert!(manager.add_batch(bad, None, None, false, None).is_err());
         assert!(manager.list().is_empty(), "nothing added when one address is wrong");
-        assert!(manager.add_batch(urls.clone(), None, Some(9), false).is_err(), "unknown queue");
-        assert!(manager.add_batch(Vec::new(), None, None, false).is_err());
+        assert!(manager.add_batch(urls.clone(), None, Some(9), false, None).is_err(), "unknown queue");
+        assert!(manager.add_batch(Vec::new(), None, None, false, None).is_err());
 
-        let ids = manager.add_batch(urls, Some("/tmp/aulas".into()), None, false).unwrap();
+        let ids = manager.add_batch(urls, Some("/tmp/aulas".into()), None, false, Some("https://e.com/aulas/".into())).unwrap();
         assert_eq!(ids.len(), 4);
         let list = manager.list();
         assert!(list.iter().all(|i| i.state == State::Paused && i.dir.as_deref() == Some(Path::new("/tmp/aulas"))));
         assert_eq!(list[0].name, "aula_01.mp4");
+        let referrer = manager.inner.lock().unwrap().jobs[&ids[0]].request.referrer.clone();
+        assert_eq!(referrer.as_deref(), Some("https://e.com/aulas/"), "the page they came from");
         assert_eq!(order_of(&manager, MAIN_QUEUE), ids, "in the batch's order");
     }
 

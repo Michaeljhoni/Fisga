@@ -13,6 +13,8 @@
   "noCandidates": { "message": "Nenhuma mídia detectada ainda. Dê play no vídeo por alguns segundos e tente de novo." },
   "menuLink": { "message": "Baixar link com o Fisga" },
   "menuMedia": { "message": "Baixar esta mídia com o Fisga" },
+  "menuAllLinks": { "message": "Baixar todos os links com o Fisga" },
+  "menuSelectedLinks": { "message": "Baixar os links selecionados com o Fisga" },
   "hostMissing": { "message": "App Fisga não encontrado. Instale-o e rode: fisga install-hosts" },
   "popupConnected": { "message": "Conectado ao Fisga" },
   "popupDisconnected": { "message": "App Fisga não encontrado" },

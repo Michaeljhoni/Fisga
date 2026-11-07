@@ -106,6 +106,7 @@ impl App {
         self.app.set_accels_for_action("win.remove", &["Delete"]);
         self.app.set_accels_for_action("win.preferences", &["<Control>comma"]);
         self.app.set_accels_for_action("win.copy-url", &["<Control>c"]);
+        self.app.set_accels_for_action("win.properties", &["<Alt>Return"]);
         self.app.set_accels_for_action("window.close", &["<Control>w"]);
         self.startup_hold.replace(Some(self.app.hold()));
 
@@ -289,6 +290,13 @@ impl App {
                 self.new_version.replace(release);
                 self.sync_update();
             }
+            Event::Links(page, links) => {
+                // Over the main window, as when opened from its menu.
+                self.show_main_window();
+                if let Some(window) = self.main_window() {
+                    crate::grabber::show(&window, self.settings().all_queues(), Some((page, links)));
+                }
+            }
             Event::Disconnected(reason) => {
                 *self.connection.borrow_mut() = Err(reason);
                 self.startup_hold.replace(None);
@@ -391,8 +399,15 @@ impl App {
             return;
         }
         let settings = self.settings();
-        let dialog =
-            ConfirmDialog::new(&self.app, self.main_window().as_ref(), info, settings.category_folders, settings.all_queues());
+        let duplicate = self.duplicate_of(info);
+        let dialog = ConfirmDialog::new(
+            &self.app,
+            self.main_window().as_ref(),
+            info,
+            duplicate.as_ref(),
+            settings.category_folders,
+            settings.all_queues(),
+        );
         let this = Rc::downgrade(self);
         let id = info.id;
         dialog.connect_closed(move || {
@@ -409,6 +424,13 @@ impl App {
         });
         self.dialogs.borrow_mut().insert(id, dialog.clone());
         dialog.present();
+    }
+
+    /// The newest other download of the same address, if any.
+    fn duplicate_of(&self, info: &DownloadInfo) -> Option<DownloadInfo> {
+        let items = self.items.borrow();
+        let others = items.values().map(|item| item.info());
+        others.filter(|other| other.id != info.id && other.url == info.url && other.state != State::Pending).max_by_key(|other| other.id)
     }
 
     /// The progress window of a download (IDM's download status dialog).

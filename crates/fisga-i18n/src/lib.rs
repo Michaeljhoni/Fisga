@@ -266,14 +266,17 @@ fn literal(source: &str) -> Option<(String, &str)> {
 pub fn texts_in(source: &str) -> Vec<String> {
     let mut texts = Vec::new();
     let mut rest = source;
-    while let Some(at) = rest.find("tr!(").or_else(|| rest.find("trf!(")) {
-        let (tr, trf) = (rest.find("tr!("), rest.find("trf!("));
-        let (at, len) = match (tr, trf) {
-            (Some(a), Some(b)) if b < a => (b, 5),
-            (Some(a), _) => (a, 4),
-            (None, Some(b)) => (b, 5),
-            (None, None) => (at, 4),
-        };
+    loop {
+        // The first `tr!(` or `trf!(` that is a name of its own (not `include_str!(`).
+        let found = ["tr!(", "trf!("]
+            .iter()
+            .flat_map(|name| rest.match_indices(name).map(move |(at, _)| (at, name.len())))
+            .filter(|(at, _)| {
+                let before = rest[..*at].chars().next_back();
+                !before.is_some_and(|c| c.is_alphanumeric() || c == '_')
+            })
+            .min();
+        let Some((at, len)) = found else { break };
         let after = rest[at + len..].trim_start();
         match after.strip_prefix('"').and_then(literal) {
             Some((text, next)) => {
@@ -391,6 +394,7 @@ mod tests {
         ); let c = tr!("longo \
                         assim");"#;
         assert_eq!(texts_in(code), ["Um \"texto\"", "Fisga {} disponível “x”", "longo assim"]);
+        assert!(texts_in(r#"include_str!("../i18n/en.txt"); my_tr!("x"); fisga_i18n::tr!("sim")"#) == ["sim"]);
         assert_eq!(placeholders("{} e {}"), 2);
         assert_eq!(placeholders("{1} e {0}"), 2);
         assert_eq!(placeholders("{{nada}}"), 0);

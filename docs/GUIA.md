@@ -233,6 +233,11 @@ troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O b
     cada download, no máximo a cada 5 s) e guarda as últimas; com o `fisgad` parado, valem as
     guardadas. No terminal: `fisga settings --file-types "zip safetensors gguf"` (`padrao` volta à
     lista padrão) e `fisga settings --force-key ctrl+alt`.
+- **Idioma** (Preferências → Geral → *Idioma*): *Automático* segue o do sistema (o idioma do Windows,
+  o `LANG` no Linux, os idiomas do macOS): português nele, inglês nos outros. Ou escolha português ou
+  inglês. Vale para a interface, as mensagens do daemon e a linha de comando, a partir da próxima vez
+  que o Fisga abrir. As pastas por tipo seguem o idioma (Vídeos/Videos, Músicas/Music...). No
+  terminal: `fisga settings --language en` (`pt`, `auto`); para um comando só, `FISGA_LANG=en fisga ...`.
 - **Aparência** (aba *Aparência* das Preferências):
   - **Tema** escuro (o padrão) ou claro; aparece na hora ao escolher e vale para todas as janelas
     depois de salvar. No terminal: `fisga settings --theme claro`.

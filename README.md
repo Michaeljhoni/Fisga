@@ -31,6 +31,7 @@
 - **Organizado:** categorias por tipo (Vídeos, Músicas, Programas...), cada uma na sua pasta.
 - **E mais:** limite de velocidade, proxy, login por site, soma SHA-256, antivírus e comando ao
   concluir, ícone na bandeja, captura de links copiados.
+- **Em português ou inglês:** segue o idioma do sistema (ou escolha em Preferências → Geral).
 - **Sempre na versão nova:** o Fisga avisa quando sai uma e, no Windows, se atualiza com um clique.
 
 ![Janela Novo download](docs/screenshots/novo-download.png)
@@ -139,7 +140,8 @@ file into up to 32 connections, resumes interrupted downloads, has queues and a 
 with a Chrome and Firefox extension that catches the browser's downloads and adds a **Download** button
 over videos on any site (YouTube and others through yt-dlp). Get the Windows installer, the macOS
 `.dmg` or the Linux packages from the [latest release](https://github.com/Michaeljhoni/Fisga/releases/latest).
-The interface is in Brazilian Portuguese for now.
+The interface follows the system's language, Brazilian Portuguese or English (or pick one in
+Preferences → General → Language).
 
 ## Licença
 

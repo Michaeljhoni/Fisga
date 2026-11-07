@@ -202,20 +202,26 @@ pub fn fill(template: &str, args: &[&dyn Display]) -> String {
     out
 }
 
-/// A text in the current language.
+/// A text in the current language. `crate::I18N` is the calling crate's
+/// table, on purpose.
 #[macro_export]
+#[allow(clippy::crate_in_macro_def)]
 macro_rules! tr {
     ($portuguese:literal) => {
         crate::I18N.translate($portuguese)
     };
 }
 
-/// A text in the current language, with its `{}` filled.
+/// A text in the current language, with its `{}` filled. Through a `let`,
+/// so the arguments' references (not `Send`) end here and not at the end of
+/// the caller's statement, which may hold an `.await`.
 #[macro_export]
+#[allow(clippy::crate_in_macro_def)]
 macro_rules! trf {
-    ($portuguese:literal $(, $arg:expr)* $(,)?) => {
-        $crate::fill(crate::I18N.translate($portuguese), &[$(&$arg as &dyn ::std::fmt::Display),*])
-    };
+    ($portuguese:literal $(, $arg:expr)* $(,)?) => {{
+        let text = $crate::fill(crate::I18N.translate($portuguese), &[$(&$arg as &dyn ::std::fmt::Display),*]);
+        text
+    }};
 }
 
 /// The value of a Rust string literal starting at `source` (after its
@@ -243,8 +249,7 @@ fn literal(source: &str) -> Option<(String, &str)> {
                 }
                 // A line continuation: the line break and the next line's indentation go.
                 '\n' | '\r' => {
-                    let mut ahead = chars.clone();
-                    while let Some((_, c)) = ahead.next() {
+                    for (_, c) in chars.clone() {
                         if !c.is_whitespace() {
                             break;
                         }

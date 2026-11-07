@@ -69,6 +69,13 @@ Dados no Linux:
   monta o comando com essa pasta na frente do PATH. Fica fora dos instaladores porque somariam mais de
   100 MB, o yt-dlp envelheceria até a próxima versão e o Fisga teria de publicar o fonte do ffmpeg (GPL).
   O CI baixa e roda tudo de verdade (`cargo test -p fisga-daemon -- --ignored`).
+- **Português e inglês** (`crates/fisga-i18n`): os textos ficam em português no código, dentro de
+  `tr!("…")`/`trf!("… {}", x)`, e cada crate guarda o inglês em `i18n/en.txt` (o português numa linha,
+  `= inglês` na seguinte). O teste `every_text_has_its_english` de cada crate falha com texto sem
+  inglês, inglês sobrando ou `{}` diferentes. Só `{}`/`{N}` (sem nomes nem `{:.1}`). O idioma vem de
+  `Settings.language` (lido do `settings.json` ao iniciar, `fisga_ipc::init_language`) ou do sistema;
+  `FISGA_LANG` manda. O CI, o `e2e.sh` e o `check()` do PKGBUILD rodam com `FISGA_LANG=pt`, porque os
+  testes conferem os textos em português. Texto novo na interface: sempre por `tr!`, com o inglês.
 - **Pequenos do IDM**: aviso de endereço repetido na *Novo download* (`App::duplicate_of`, só na
   GUI; `fisga add` avisa no stderr), arrastar e soltar links na janela principal
   (`window::accept_dropped_links`, `dropped_urls`), *Propriedades* (`properties.rs`, segue o

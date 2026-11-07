@@ -5,11 +5,13 @@
 //!   offsets in a preallocated `*.fisga-part` file, and a connection that finishes
 //!   early splits the largest remaining segment in half (dynamic segmentation).
 //!   Progress is persisted in `*.fisga-part.json` so the download can be resumed.
+//! - `ftp://` addresses go through [`ftp`] instead: one connection, resumed with `REST`.
 
 pub mod control;
 pub mod engine;
 pub mod filename;
 mod fileio;
+mod ftp;
 pub mod limit;
 pub mod probe;
 

@@ -35,6 +35,9 @@ fn is_transient(error: &Error) -> bool {
 
 /// Probes the URL, retrying temporary failures (up to 4 attempts).
 pub async fn probe(client: &Client, spec: &RequestSpec) -> Result<ProbeResult> {
+    if crate::ftp::is_ftp(&spec.url) {
+        return crate::ftp::probe(spec).await;
+    }
     let mut attempt = 0;
     loop {
         match probe_once(client, spec).await {

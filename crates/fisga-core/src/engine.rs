@@ -121,6 +121,9 @@ pub async fn download(
     events: mpsc::UnboundedSender<EngineEvent>,
     cancel: CancellationToken,
 ) -> Result<Outcome> {
+    if crate::ftp::is_ftp(&spec.url) {
+        return crate::ftp::download(spec, target, opts, events, cancel).await;
+    }
     let probe = tokio::select! {
         _ = cancel.cancelled() => return Err(Error::Cancelled),
         p = probe(client, spec) => p?,
@@ -129,22 +132,7 @@ pub async fn download(
     let followed = spec.for_final_url(&probe.final_url);
     let spec = &followed;
 
-    let final_path = match target {
-        Target::File(path) => path,
-        Target::Dir { dir, file_name } => {
-            let name = file_name
-                .as_deref()
-                .map(filename::sanitize)
-                .unwrap_or_else(|| probe.file_name.clone());
-            let candidate = dir.join(&name);
-            control::adopt_legacy(&candidate);
-            if control::part_path(&candidate).exists() {
-                candidate
-            } else {
-                filename::unique_path(&dir, &name)
-            }
-        }
-    };
+    let final_path = resolve_target(target, &probe.file_name);
     if let Some(parent) = final_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -167,9 +155,28 @@ pub async fn download(
     }
 }
 
+/// The file's final path: the one given, or in the folder with the name
+/// given (else the server's), keeping an unfinished `.fisga-part` of it to
+/// resume, else a name not taken yet.
+pub(crate) fn resolve_target(target: Target, detected_name: &str) -> PathBuf {
+    match target {
+        Target::File(path) => path,
+        Target::Dir { dir, file_name } => {
+            let name = file_name.as_deref().map(filename::sanitize).unwrap_or_else(|| detected_name.to_string());
+            let candidate = dir.join(&name);
+            control::adopt_legacy(&candidate);
+            if control::part_path(&candidate).exists() {
+                candidate
+            } else {
+                filename::unique_path(&dir, &name)
+            }
+        }
+    }
+}
+
 /// Moves the finished `.fisga-part` to its final name, picking a new name if a file
 /// appeared there in the meantime.
-async fn finalize(part: &Path, final_path: PathBuf) -> Result<PathBuf> {
+pub(crate) async fn finalize(part: &Path, final_path: PathBuf) -> Result<PathBuf> {
     let destination = if tokio::fs::try_exists(&final_path).await.unwrap_or(false) {
         let dir = final_path.parent().unwrap_or(Path::new("."));
         let name = final_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -182,18 +189,18 @@ async fn finalize(part: &Path, final_path: PathBuf) -> Result<PathBuf> {
     Ok(destination)
 }
 
-struct SpeedMeter {
+pub(crate) struct SpeedMeter {
     last_bytes: u64,
     last_at: Instant,
     speed: f64,
 }
 
 impl SpeedMeter {
-    fn new(bytes: u64) -> Self {
+    pub(crate) fn new(bytes: u64) -> Self {
         Self { last_bytes: bytes, last_at: Instant::now(), speed: 0.0 }
     }
 
-    fn update(&mut self, bytes: u64) -> f64 {
+    pub(crate) fn update(&mut self, bytes: u64) -> f64 {
         let elapsed = self.last_at.elapsed().as_secs_f64();
         if elapsed > 0.0 {
             let instant = bytes.saturating_sub(self.last_bytes) as f64 / elapsed;

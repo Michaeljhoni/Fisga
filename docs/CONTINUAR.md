@@ -297,7 +297,11 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
   esquerda ou letras, no máximo `MAX_BATCH`) e `parse_url_list`; `Request::AddBatch` confere
   todos os endereços antes e cria tudo com um salvamento só (`Manager::insert` sem salvar,
   usado por `add` e `add_batch`); sem a janela Novo download. GUI em `batch.rs`.
-- HLS/DASH sem yt-dlp, e FTP.
+- ~~FTP~~ (feito, `fisga-core/src/ftp.rs`): `probe` e `download` mandam os `ftp://` para lá;
+  uma conexão, EPSV ou PASV (o IP do PASV é ignorado: usa o do servidor, por causa de NAT), `SIZE`,
+  `REST` para retomar o `.fisga-part`, login do endereço ou anônimo. Sem FTPS e sem proxy. Os testes
+  sobem um servidor FTP falso em processo.
+- HLS/DASH sem yt-dlp.
 
 ### Pacote 4: acabamento
 - ~~Busca na lista, colunas configuráveis, exportar e importar a lista~~ (feito):

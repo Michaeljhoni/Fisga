@@ -290,6 +290,15 @@ As conexões usam o proxy das Preferências e não levam nada além do que qualq
 desligar: **Preferências → Geral → Procurar versões novas do Fisga** (ou `fisga settings
 --check-updates false`). **Procurar atualizações** continua funcionando com a opção desligada.
 
+### FTP
+
+Endereços `ftp://` baixam como os outros: pela janela *Novo download* (com o tamanho), em lote, ou
+copiados. O login vai no endereço, `ftp://usuário:senha@servidor/pasta/arquivo.iso`; sem ele, o
+Fisga entra como anônimo. É uma conexão por arquivo, em modo passivo, e pausar e retomar continua
+de onde parou. Não há FTPS (FTP com TLS), e o FTP não passa pelo proxy das Preferências, que é de
+HTTP. Um caminho que começa com `%2F` é a partir da raiz do servidor; sem isso, a partir da pasta
+do login.
+
 ### Categorias e pastas
 
 Cada download recebe uma categoria pela extensão do arquivo (vídeos de sites via yt-dlp são
@@ -440,6 +449,7 @@ Hyprland, `windowrulev2 = float, class:^(io.fisga.Fisga)$, title:negative:^Fisga
 - [x] Limite de velocidade global (muda na hora)
 - [x] Ícone na bandeja, iniciar com a sessão, agendador (suspender/desligar ao terminar)
 - [x] Várias filas, cada uma com limite e agendador, e ordem dentro da fila
-- [ ] HLS/DASH nativo (hoje via yt-dlp), FTP
+- [x] FTP (uma conexão, retomada com `REST`, login no endereço; sem FTPS)
+- [ ] HLS/DASH nativo (hoje via yt-dlp)
 - [x] Pacote para o Arch (`packaging/arch/PKGBUILD`, pronto para o AUR quando o repositório for público)
 - [ ] Flatpak, .deb/.rpm

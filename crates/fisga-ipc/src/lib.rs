@@ -623,7 +623,10 @@ impl SiteLogin {
 
 /// The main queue: always there, it cannot be removed or renamed.
 pub const MAIN_QUEUE: u64 = 0;
-pub const MAIN_QUEUE_NAME: &str = "Fila principal";
+/// The main queue's name, in the current language (it is never stored).
+pub fn main_queue_name() -> &'static str {
+    fisga_i18n::tr!("Fila principal")
+}
 
 /// A download queue, as in IDM: its own number of downloads at the same time
 /// and its own schedule. Every download belongs to one.
@@ -639,7 +642,7 @@ pub struct Queue {
 
 impl Default for Queue {
     fn default() -> Self {
-        Self { id: MAIN_QUEUE, name: MAIN_QUEUE_NAME.into(), max_parallel: 3, schedule: Schedule::default() }
+        Self { id: MAIN_QUEUE, name: main_queue_name().into(), max_parallel: 3, schedule: Schedule::default() }
     }
 }
 
@@ -716,7 +719,7 @@ impl Settings {
     pub fn all_queues(&self) -> Vec<Queue> {
         let main = Queue {
             id: MAIN_QUEUE,
-            name: MAIN_QUEUE_NAME.into(),
+            name: main_queue_name().into(),
             max_parallel: self.max_parallel,
             schedule: self.schedule.clone(),
         };
@@ -1908,7 +1911,7 @@ mod tests {
     fn queues() {
         let mut settings = Settings::default();
         assert_eq!(settings.all_queues().len(), 1);
-        assert_eq!(settings.queue_name(MAIN_QUEUE), MAIN_QUEUE_NAME);
+        assert_eq!(settings.queue_name(MAIN_QUEUE), main_queue_name());
         let id = settings.new_queue_id();
         assert_eq!(id, 1);
         settings.set_queue(Queue { id, name: " Noite ".into(), max_parallel: 99, ..Queue::default() });
@@ -1920,7 +1923,7 @@ mod tests {
         let settings = settings.sanitized();
         assert_eq!(settings.max_parallel, 5, "the main queue's limit is the old setting");
         let names: Vec<String> = settings.all_queues().into_iter().map(|q| q.name).collect();
-        assert_eq!(names, [MAIN_QUEUE_NAME, "Noite", "Fila 7"]);
+        assert_eq!(names, [main_queue_name(), "Noite", "Fila 7"]);
         assert_eq!(settings.queue(id).unwrap().max_parallel, 20);
         assert_eq!(settings.new_queue_id(), 8);
         let mut settings = settings;

@@ -1382,7 +1382,7 @@ mod tests {
         assert_eq!(views[4], View::Category(Category::Video));
         assert_eq!(views.len(), 4 + Category::ALL.len() + 1);
         assert_eq!(views.last(), Some(&View::Queue(fisga_ipc::MAIN_QUEUE)));
-        assert_eq!(View::Queue(0).label(&queues), fisga_ipc::MAIN_QUEUE_NAME);
+        assert_eq!(View::Queue(0).label(&queues), fisga_ipc::main_queue_name());
         assert_eq!(View::Queue(0).group(), Some("Filas"));
         assert!(View::Queue(0).matches(&info) && !View::Queue(1).matches(&info));
     }

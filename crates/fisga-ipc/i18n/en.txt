@@ -120,3 +120,6 @@ o fisgad não respondeu após ser iniciado
 
 o fisgad está ocupado
 = fisgad is busy
+
+Fila principal
+= Main queue

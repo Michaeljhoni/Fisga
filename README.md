@@ -51,7 +51,7 @@ Deixe marcada a opção **Iniciar o Fisga com o Windows**: ele fica no ícone da
 relógio, às vezes escondido na setinha **^**) esperando os downloads do navegador. Para remover, use
 **Configurações → Aplicativos → Fisga → Desinstalar**.
 
-### macOS 12 ou mais novo (Apple silicon: M1, M2, M3...)
+### macOS 15 ou mais novo (Apple silicon: M1, M2, M3...)
 
 1. Baixe `Fisga-<versão>.dmg` e abra.
 2. Arraste o **Fisga** para a pasta **Aplicativos**.

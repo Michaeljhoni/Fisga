@@ -1136,7 +1136,7 @@ fn update_actions(actions: &Actions, selected: Option<DownloadInfo>) {
     // A pending download takes its checksum in the "Novo download" window.
     actions.verify.set_enabled(state.is_some_and(|s| s != State::Pending));
     actions.limit_speed.set_enabled(matches!(state, Some(State::Queued | State::Running | State::Paused | State::Failed)));
-    actions.properties.set_enabled(selected.is_some());
+    actions.properties.set_enabled(state.is_some());
 }
 
 fn about(parent: &gtk::ApplicationWindow) {

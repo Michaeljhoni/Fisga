@@ -7,6 +7,8 @@ set -euo pipefail
 
 BIN="$(cd "${1:-target/debug}" && pwd)"
 SANDBOX="$(mktemp -d)"
+# The checks below read the Portuguese texts, whatever the machine's language.
+export FISGA_LANG=pt
 export HOME="$SANDBOX/home" XDG_RUNTIME_DIR="$SANDBOX/run" XDG_DATA_HOME="$SANDBOX/data" XDG_CONFIG_HOME="$SANDBOX/home/.config"
 # Stand-in for fisga-gui: starts fine but never connects, like a GUI without a display.
 export FISGA_GUI=true

@@ -11,6 +11,7 @@ name = "fisgad"
 path = "src/main.rs"
 
 [dependencies]
+fisga-i18n.workspace = true
 anyhow.workspace = true
 dirs.workspace = true
 fisga-core.workspace = true

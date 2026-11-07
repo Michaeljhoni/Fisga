@@ -2,6 +2,10 @@
 //! a 32-bit native-endian length followed by UTF-8 JSON on stdin/stdout.
 //! stdout carries only framed messages; diagnostics go to stderr (browser log).
 
+
+/// The English of this crate's texts (see fisga-i18n).
+static I18N: fisga_i18n::Table = fisga_i18n::Table::new(include_str!("../i18n/en.txt"));
+
 use std::io::{self, Read, Write};
 
 use fisga_ipc::{AddRequest, Request, Response};
@@ -108,6 +112,7 @@ fn parse(body: &[u8]) -> serde_json::Result<Incoming> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
+    fisga_ipc::init_language();
     let mut stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
     while let Some(body) = read_message(&mut stdin)? {
@@ -164,5 +169,15 @@ mod tests {
         let body = read_message(&mut buffer.as_slice()).unwrap().unwrap();
         assert_eq!(body, br#"{"type":"pong"}"#);
         assert!(read_message(&mut &b""[..]).unwrap().is_none());
+    }
+}
+
+#[cfg(test)]
+mod i18n_tests {
+    /// Every text shown has its English, and every English its text.
+    #[test]
+    fn every_text_has_its_english() {
+        let problems = fisga_i18n::check_crate(env!("CARGO_MANIFEST_DIR"), include_str!("../i18n/en.txt"));
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
     }
 }

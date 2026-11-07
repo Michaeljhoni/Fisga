@@ -58,7 +58,8 @@ build() {
 check() {
   cd fisga
   export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
-  cargo test --frozen --release --workspace
+  # The tests check the Portuguese texts, whatever the machine's language.
+  FISGA_LANG=pt cargo test --frozen --release --workspace
 }
 
 package() {

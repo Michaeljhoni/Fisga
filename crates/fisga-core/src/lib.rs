@@ -7,6 +7,10 @@
 //!   Progress is persisted in `*.fisga-part.json` so the download can be resumed.
 //! - `ftp://` addresses go through [`ftp`] instead: one connection, resumed with `REST`.
 
+
+/// The English of this crate's texts (see fisga-i18n).
+static I18N: fisga_i18n::Table = fisga_i18n::Table::new(include_str!("../i18n/en.txt"));
+
 pub mod control;
 pub mod engine;
 pub mod filename;
@@ -183,5 +187,15 @@ mod tests {
         let secure = RequestSpec { url: "https://arquivos.exemplo.com/a.iso".into(), ..spec.clone() };
         let down = secure.for_final_url(&url::Url::parse("http://arquivos.exemplo.com/a.iso").unwrap());
         assert_eq!(names(down), ["Referer"], "never down to http");
+    }
+}
+
+#[cfg(test)]
+mod i18n_tests {
+    /// Every text shown has its English, and every English its text.
+    #[test]
+    fn every_text_has_its_english() {
+        let problems = fisga_i18n::check_crate(env!("CARGO_MANIFEST_DIR"), include_str!("../i18n/en.txt"));
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
     }
 }

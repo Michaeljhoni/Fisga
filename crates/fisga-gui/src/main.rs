@@ -11,8 +11,12 @@
 //! The app id is fixed (`io.fisga.Fisga`), so a second launch is forwarded to the
 //! running instance through D-Bus, and compositors can match its windows.
 
+
 // A window program on Windows: no console window behind it.
 #![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+
+/// The English of this crate's texts (see fisga-i18n).
+static I18N: fisga_i18n::Table = fisga_i18n::Table::new(include_str!("../i18n/en.txt"));
 
 mod app;
 mod autostart;
@@ -135,6 +139,8 @@ fn main() -> glib::ExitCode {
     #[cfg(target_os = "macos")]
     use_bundle_resources();
     fisga_ipc::migrate_legacy_dirs();
+    // Before any window: the texts' language does not change while the app runs.
+    fisga_ipc::init_language();
     redirect_stderr_to_log();
     autostart::migrate_legacy();
     let application = gtk::Application::builder()
@@ -160,4 +166,14 @@ fn main() -> glib::ExitCode {
         glib::ExitCode::SUCCESS
     });
     application.run()
+}
+
+#[cfg(test)]
+mod i18n_tests {
+    /// Every text shown has its English, and every English its text.
+    #[test]
+    fn every_text_has_its_english() {
+        let problems = fisga_i18n::check_crate(env!("CARGO_MANIFEST_DIR"), include_str!("../i18n/en.txt"));
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
 }

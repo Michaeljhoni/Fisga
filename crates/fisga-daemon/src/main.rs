@@ -1,6 +1,10 @@
 //! `fisgad`: owns the download list and runs the downloads. Clients (CLI, GUI,
 //! browser host) talk to it over a local connection; see `fisga_ipc::transport`.
 
+
+/// The English of this crate's texts (see fisga-i18n).
+static I18N: fisga_i18n::Table = fisga_i18n::Table::new(include_str!("../i18n/en.txt"));
+
 mod clipboard;
 mod gui;
 mod manager;
@@ -42,6 +46,7 @@ fn init_logging() {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     fisga_ipc::migrate_legacy_dirs();
+    fisga_ipc::init_language();
     init_logging();
 
     let Some(mut listener) = Listener::bind().await? else {
@@ -50,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let store = dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("fisga").join("downloads.json");
-    let settings = dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("fisga").join("settings.json");
+    let settings = fisga_ipc::settings_path();
     let manager = Manager::load(store, settings)?;
     let gui = Gui::from_env();
     let shutdown = CancellationToken::new();
@@ -297,5 +302,15 @@ fn result(r: anyhow::Result<()>) -> Response {
     match r {
         Ok(()) => Response::Ok,
         Err(e) => Response::Error { message: e.to_string() },
+    }
+}
+
+#[cfg(test)]
+mod i18n_tests {
+    /// Every text shown has its English, and every English its text.
+    #[test]
+    fn every_text_has_its_english() {
+        let problems = fisga_i18n::check_crate(env!("CARGO_MANIFEST_DIR"), include_str!("../i18n/en.txt"));
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
     }
 }

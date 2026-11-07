@@ -5,6 +5,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The tests check the Portuguese texts; the runners' locale (C) reads as English.
+env:
+  FISGA_LANG: pt
+
 jobs:
   test:
     runs-on: ubuntu-24.04

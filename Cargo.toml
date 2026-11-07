@@ -10,6 +10,7 @@ license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
 fisga-core = { path = "crates/fisga-core" }
+fisga-i18n = { path = "crates/fisga-i18n" }
 fisga-ipc = { path = "crates/fisga-ipc" }
 
 anyhow = "1"

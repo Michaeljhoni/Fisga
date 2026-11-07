@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+# The tests check the Portuguese texts; the runners read as English.
+env:
+  FISGA_LANG: pt
+
 jobs:
   # GTK 4 and the Rust toolchain from MSYS2 (UCRT64), Inno Setup for the installer.
   windows:

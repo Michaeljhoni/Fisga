@@ -1,0 +1,9 @@
+[package]
+name = "fisga-i18n"
+description = "Fisga's texts in English or Portuguese: tr!() and its tables"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]

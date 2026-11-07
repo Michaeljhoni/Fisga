@@ -13,7 +13,8 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{gio, glib, pango};
 use fisga_ipc::{
-    BrowserSettings, Category, ForceKey, ProxyMode, ProxySettings, Queue, Request, Schedule, Settings, SiteLogin, Theme,
+    BrowserSettings, Category, ForceKey, Language, ProxyMode, ProxySettings, Queue, Request, Schedule, Settings, SiteLogin,
+    Theme,
     TimeOfDay, WhenDone, MAIN_QUEUE, WEEKDAYS,
 };
 
@@ -579,6 +580,9 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
     let autostart_was = autostart::is_enabled();
     let session = gtk::Switch::builder().active(autostart_was).build();
     let updates = gtk::Switch::builder().active(settings.check_updates).build();
+    let languages: Vec<&str> = Language::ALL.iter().map(|language| language.label()).collect();
+    let language = gtk::DropDown::from_strings(&languages);
+    language.set_selected(Language::ALL.iter().position(|l| *l == settings.language).unwrap_or(0) as u32);
 
     let subfolders: Vec<&str> = Category::ALL.iter().filter_map(|c| c.folder()).collect();
     let subfolders_hint = format!("Subpastas: {}. Os demais ficam na pasta de downloads.", subfolders.join(", "));
@@ -617,6 +621,7 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
         false => "Uma vez por dia, no GitHub, onde o Fisga é publicado. Uma versão nova aparece na janela principal; quem a instala é o gerenciador de pacotes.",
     };
     row(&grid, 8, "Procurar versões novas do Fisga", &updates, Some(updates_hint));
+    row(&grid, 9, "Idioma", &language, Some("Vale a partir da próxima vez que o Fisga abrir."));
 
     let (queues_box, read_queues) = queues_page(window.upcast_ref(), settings.all_queues(), settings.new_queue_id());
     let (network_box, read_proxy, read_logins) = network_page(&settings.proxy);
@@ -779,6 +784,7 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
             theme,
             festive,
             check_updates: updates.is_active(),
+            language: Language::ALL.get(language.selected() as usize).copied().unwrap_or_default(),
         };
         for queue in queues {
             new.set_queue(queue);

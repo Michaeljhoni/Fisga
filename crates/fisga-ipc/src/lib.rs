@@ -1,6 +1,10 @@
 //! Protocol between `fisgad` (daemon) and its clients: one JSON object per line over
 //! a local connection (see [`transport`]).
 
+
+/// The English of this crate's texts (see fisga-i18n).
+static I18N: fisga_i18n::Table = fisga_i18n::Table::new(include_str!("../i18n/en.txt"));
+
 pub mod transport;
 
 use std::path::{Path, PathBuf};
@@ -302,6 +306,54 @@ pub struct Settings {
     /// Look for a new version of Fisga once a day (on GitHub, where it is
     /// published) and offer it.
     pub check_updates: bool,
+    /// The language of the texts, in every Fisga program.
+    pub language: Language,
+}
+
+/// The language of the texts: the system's, or one chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Language {
+    #[default]
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "pt")]
+    Portuguese,
+    #[serde(rename = "en")]
+    English,
+}
+
+impl Language {
+    pub const ALL: [Language; 3] = [Language::Auto, Language::Portuguese, Language::English];
+
+    /// Each language by its own name.
+    pub fn label(self) -> &'static str {
+        match self {
+            Language::Auto => fisga_i18n::tr!("Automático (o do sistema)"),
+            Language::Portuguese => "Português",
+            Language::English => "English",
+        }
+    }
+
+    /// The texts are shown in this language from now on.
+    pub fn apply(self) {
+        fisga_i18n::set(match self {
+            Language::Auto => fisga_i18n::system(),
+            Language::Portuguese => fisga_i18n::Lang::Portuguese,
+            Language::English => fisga_i18n::Lang::English,
+        });
+    }
+}
+
+/// `settings.json`, in the user's configuration folder.
+pub fn settings_path() -> PathBuf {
+    dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("fisga").join("settings.json")
+}
+
+/// A Fisga program starting: the texts in the language of the settings
+/// (read from their file, before the daemon answers), or the system's.
+pub fn init_language() {
+    let settings = std::fs::read(settings_path()).ok().and_then(|data| serde_json::from_slice::<Settings>(&data).ok());
+    settings.map(|settings| settings.language).unwrap_or_default().apply();
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -622,6 +674,7 @@ impl Default for Settings {
             theme: Theme::Dark,
             festive: true,
             check_updates: true,
+            language: Language::Auto,
         }
     }
 }
@@ -1988,5 +2041,15 @@ mod tests {
             serde_json::from_str(r#"{"type":"refresh_url","id":2,"url":"https://e.com/novo"}"#).unwrap();
         assert!(matches!(request, Request::RefreshUrl { id: 2, .. }));
         assert!(!serde_json::to_string(&info).unwrap().contains("formats"), "empty list not written");
+    }
+}
+
+#[cfg(test)]
+mod i18n_tests {
+    /// Every text shown has its English, and every English its text.
+    #[test]
+    fn every_text_has_its_english() {
+        let problems = fisga_i18n::check_crate(env!("CARGO_MANIFEST_DIR"), include_str!("../i18n/en.txt"));
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
     }
 }

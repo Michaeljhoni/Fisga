@@ -11,6 +11,7 @@ name = "fisga-native-host"
 path = "src/main.rs"
 
 [dependencies]
+fisga-i18n.workspace = true
 anyhow.workspace = true
 fisga-ipc.workspace = true
 serde.workspace = true

@@ -315,6 +315,9 @@ impl Manager {
             .map(|queue| queue.id)
             .collect();
         *self.settings.lock().unwrap() = settings.clone();
+        if settings.language != old.language {
+            settings.language.apply();
+        }
         self.limiter.set_rate(settings.speed_limit);
         tracing::info!(?settings, "configurações alteradas");
         let _ = self.updates.send(Response::Settings { settings: settings.clone() });

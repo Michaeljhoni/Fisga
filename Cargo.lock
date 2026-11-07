@@ -569,6 +569,7 @@ dependencies = [
  "clap",
  "dirs 5.0.1",
  "fisga-core",
+ "fisga-i18n",
  "fisga-ipc",
  "indicatif",
  "serde_json",
@@ -580,6 +581,7 @@ dependencies = [
 name = "fisga-core"
 version = "1.2.0"
 dependencies = [
+ "fisga-i18n",
  "futures-util",
  "percent-encoding",
  "reqwest",
@@ -599,6 +601,7 @@ dependencies = [
  "anyhow",
  "dirs 5.0.1",
  "fisga-core",
+ "fisga-i18n",
  "fisga-ipc",
  "reqwest",
  "ring",
@@ -616,6 +619,7 @@ name = "fisga-gui"
 version = "1.2.0"
 dependencies = [
  "anyhow",
+ "fisga-i18n",
  "fisga-ipc",
  "gtk4",
  "ksni",
@@ -625,10 +629,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fisga-i18n"
+version = "1.2.0"
+
+[[package]]
 name = "fisga-ipc"
 version = "1.2.0"
 dependencies = [
  "anyhow",
+ "dirs 5.0.1",
+ "fisga-i18n",
  "libc",
  "serde",
  "serde_json",
@@ -641,6 +651,7 @@ name = "fisga-native-host"
 version = "1.2.0"
 dependencies = [
  "anyhow",
+ "fisga-i18n",
  "fisga-ipc",
  "serde",
  "serde_json",

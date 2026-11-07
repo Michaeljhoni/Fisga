@@ -1,3 +1,7 @@
+
+/// The English of this crate's texts (see fisga-i18n).
+static I18N: fisga_i18n::Table = fisga_i18n::Table::new(include_str!("../i18n/en.txt"));
+
 mod hosts;
 
 use std::path::PathBuf;
@@ -384,6 +388,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    fisga_ipc::init_language();
     match Cli::parse().command {
         Command::Add { source, wait, confirm, queue_id, checksum } => add(source, wait, confirm, queue_id, checksum).await,
         Command::Verify { id, checksum } => verify(id, checksum).await,
@@ -1293,5 +1298,15 @@ mod tests {
         assert_eq!(parse_categories("Vídeos, documento").unwrap(), [Category::Video, Category::Document]);
         assert_eq!(parse_categories("musicas,imagens").unwrap(), [Category::Music, Category::Image]);
         assert!(parse_categories("planilha").is_err());
+    }
+}
+
+#[cfg(test)]
+mod i18n_tests {
+    /// Every text shown has its English, and every English its text.
+    #[test]
+    fn every_text_has_its_english() {
+        let problems = fisga_i18n::check_crate(env!("CARGO_MANIFEST_DIR"), include_str!("../i18n/en.txt"));
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
     }
 }

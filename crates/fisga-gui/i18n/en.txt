@@ -1,0 +1,3 @@
+# The English of fisga-gui's texts: each Portuguese text as it is in the code,
+# then its English after "= ", then a blank line. See crates/fisga-i18n.
+

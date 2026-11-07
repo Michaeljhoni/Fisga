@@ -9,8 +9,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use fisga_core::{DownloadOptions, EngineEvent, Outcome, RequestSpec, Target};
 use fisga_ipc::{
     AddRequest, BrowserSettings, Category, Checksum, Conflict, Connection, Direction, DownloadInfo, ForceKey, Hashing,
-    ProxyMode, ProxySettings, Queue, Request, Response, Settings, SiteLogin, State, Theme, TimeOfDay, WhenDone,
-    MAIN_QUEUE, WEEKDAYS,
+    ProxyMode, ProxySettings, Queue, Request, Response, Settings, SiteLogin, State, Theme, TimeOfDay, UpdateStage,
+    WhenDone, MAIN_QUEUE, WEEKDAYS,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -107,6 +107,9 @@ struct SettingsArgs {
     /// Temas de datas comemorativas na janela principal (confete no Carnaval, neve no Natal...)
     #[arg(long)]
     festive: Option<bool>,
+    /// Procurar uma versão nova do Fisga uma vez por dia
+    #[arg(long)]
+    check_updates: Option<bool>,
 }
 
 #[derive(Subcommand)]
@@ -368,6 +371,12 @@ enum Command {
     Schedule(ScheduleArgs),
     /// Encerra o daemon (pausa os downloads em andamento)
     Stop,
+    /// Procura uma versão nova do Fisga
+    Update {
+        /// Baixa e instala a versão nova (Windows e macOS); o Fisga fecha e abre de novo
+        #[arg(long)]
+        install: bool,
+    },
 }
 
 #[tokio::main]
@@ -509,6 +518,7 @@ async fn main() -> anyhow::Result<()> {
         },
         Command::Settings(args) => settings(args).await,
         Command::Schedule(args) => schedule(args).await,
+        Command::Update { install } => update(install).await,
         Command::Stop => match fisga_ipc::call(&Request::Shutdown).await {
             Ok(_) => Ok(()),
             Err(_) => {
@@ -714,6 +724,7 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         force_key,
         theme,
         festive,
+        check_updates,
     } = args;
     let mut current = get_settings().await?;
     if let Some(proxy) = &proxy {
@@ -742,7 +753,8 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         || file_types.is_some()
         || force_key.is_some()
         || theme.is_some()
-        || festive.is_some();
+        || festive.is_some()
+        || check_updates.is_some();
     if let Some(types) = file_types {
         current.browser.file_types = match types.trim() {
             "padrao" | "padrão" | "default" => BrowserSettings::default().file_types,
@@ -767,6 +779,7 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
     current.tray = tray.unwrap_or(current.tray);
     current.theme = theme.unwrap_or(current.theme);
     current.festive = festive.unwrap_or(current.festive);
+    current.check_updates = check_updates.unwrap_or(current.check_updates);
     if changed {
         fisga_ipc::call(&Request::SetSettings { settings: current.clone() }).await?;
     }
@@ -795,6 +808,65 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
     println!("tecla do navegador:      {}", current.browser.force_key.label());
     println!("tema:                    {}", if current.theme == Theme::Light { "claro" } else { "escuro" });
     println!("efeitos de datas:        {}", if current.festive { "sim" } else { "não" });
+    println!("procurar versão nova:    {}", if current.check_updates { "sim" } else { "não" });
+    Ok(())
+}
+
+/// `fisga update`: is there a newer Fisga, and installs it with `--install`.
+async fn update(install: bool) -> anyhow::Result<()> {
+    fisga_ipc::ensure_daemon().await?;
+    let release = match fisga_ipc::call(&Request::CheckUpdate).await? {
+        Response::NewVersion { release } => release,
+        other => anyhow::bail!("resposta inesperada: {other:?}"),
+    };
+    let Some(release) = release else {
+        println!("O Fisga {} é a versão mais nova.", fisga_ipc::VERSION);
+        return Ok(());
+    };
+    println!("Fisga {} disponível (esta é a {}): {}", release.version, fisga_ipc::VERSION, release.page);
+    if !install {
+        if release.installable {
+            println!("Para instalar: fisga update --install");
+        } else {
+            println!("Atualize pelo gerenciador de pacotes do sistema.");
+        }
+        return Ok(());
+    }
+    anyhow::ensure!(release.installable, "aqui quem instala a versão nova é o gerenciador de pacotes do sistema");
+    // How it goes arrives to subscribers: follow it until the daemon closes for the install.
+    let mut connection = Connection::open().await?;
+    connection.send(&Request::Subscribe { confirmer: false }).await?;
+    fisga_ipc::call(&Request::InstallUpdate).await?;
+    // What was there before this install (an earlier failure) is skipped.
+    let (mut started, mut said) = (false, None);
+    loop {
+        let message = match connection.recv().await {
+            Ok(Some(message)) => message,
+            // The installer stops the daemon: the connection ends, cleanly or not.
+            Ok(None) => break,
+            Err(_) if started => break,
+            Err(e) => return Err(e),
+        };
+        let Response::NewVersion { release: Some(release) } = message else { continue };
+        let Some(stage) = release.stage else { continue };
+        started |= stage.busy();
+        if !started {
+            continue;
+        }
+        let text = stage.describe();
+        match stage {
+            UpdateStage::Failed { .. } => anyhow::bail!(text),
+            UpdateStage::Opened => {
+                println!("{text}");
+                return Ok(());
+            }
+            _ if said.as_ref() != Some(&text) => {
+                println!("{text}");
+                said = Some(text);
+            }
+            _ => {}
+        }
+    }
     Ok(())
 }
 

@@ -244,12 +244,32 @@ troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O b
 
 Vídeos de sites usam o yt-dlp, o ffmpeg e o Deno. No Linux eles vêm dos pacotes da distro; no Windows
 e no macOS, o Fisga os baixa no primeiro vídeo (cerca de 150 MB, uma vez só; ocupam uns 300 MB no disco), com o andamento na
-janela *Novo download* e no download, e guarda em `%LOCALAPPDATA%isga	ools` ou
+janela *Novo download* e no download, e guarda em `%LOCALAPPDATA%\fisga\tools` ou
 `~/Library/Application Support/fisga/tools`. Vêm das releases de cada projeto no GitHub (o ffmpeg do
 Windows, das compilações do projeto yt-dlp; o do macOS, do ffmpeg-static), conferidos com as somas
 SHA-256, usando o proxy das Preferências. Um programa que já esteja no PATH não é baixado. O yt-dlp
 precisa acompanhar os sites: ao pedir um vídeo, o Fisga procura uma versão nova, no máximo uma vez por
 dia. Sem pedir vídeos, nada disso acontece. Desinstalar o Fisga no Windows apaga essa pasta.
+
+### Versões novas do Fisga
+
+Uma vez por dia, o Fisga olha no GitHub qual é a última versão publicada (a primeira olhada é dois
+minutos depois de ele abrir). Se houver uma mais nova, aparece uma faixa no alto da janela
+principal, com **Novidades** (a página da versão) e, no Windows e no macOS, **Atualizar agora**. Quem
+usa o Fisga só pela bandeja recebe uma notificação, uma vez por versão. O **×** esconde a faixa até a
+próxima versão. No menu, **Procurar atualizações** olha na hora.
+
+- **Windows:** o Fisga baixa o `Fisga-<versão>-setup.exe` da versão, confere a SHA-256 com o
+  `SHA256SUMS` dela e roda o instalador sem perguntas. O instalador fecha o Fisga (os downloads
+  em andamento pausam e continuam depois), instala e abre o Fisga de novo. As opções da primeira
+  instalação, como iniciar com o Windows, continuam valendo.
+- **macOS:** o Fisga baixa e confere o `.dmg` e o abre; arraste o Fisga para **Aplicativos**, como na
+  primeira vez.
+- **Linux:** só o aviso. Quem atualiza é o gerenciador de pacotes (`yay -Syu`, por exemplo).
+
+As conexões usam o proxy das Preferências e não levam nada além do que qualquer download leva. Para
+desligar: **Preferências → Geral → Procurar versões novas do Fisga** (ou `fisga settings
+--check-updates false`). **Procurar atualizações** continua funcionando com a opção desligada.
 
 ### Categorias e pastas
 
@@ -317,6 +337,9 @@ fisga settings --antivirus true --sound false      # ao concluir: ClamAV sim, so
 fisga settings --on-complete 'mv "$FISGA_FILE" ~/Concluídos/'   # comando ao concluir ("" = nenhum)
 fisga settings --watch-clipboard false             # não abrir a janela para links copiados
 fisga settings --tray false                        # sem ícone na bandeja
+fisga update                                       # há uma versão nova do Fisga?
+fisga update --install                             # baixa, confere e instala (Windows e macOS)
+fisga settings --check-updates false               # não procurar versões novas sozinho
 fisga schedule --on --start 02:00 --stop 08:00     # a fila só roda de madrugada
 fisga schedule --days seg,ter,qua,qui,sex --when-done desligar
 fisga schedule --stop nenhum                       # vai até terminar a fila

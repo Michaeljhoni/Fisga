@@ -69,6 +69,14 @@ Dados no Linux:
   monta o comando com essa pasta na frente do PATH. Fica fora dos instaladores porque somariam mais de
   100 MB, o yt-dlp envelheceria até a próxima versão e o Fisga teria de publicar o fonte do ffmpeg (GPL).
   O CI baixa e roda tudo de verdade (`cargo test -p fisga-daemon -- --ignored`).
+- **Versões novas do Fisga** (`fisga-daemon/src/update.rs`, `fisga-gui/src/update.rs`): `update::run`
+  olha `releases/latest` na API do GitHub uma vez por dia (`Settings.check_updates`; a marca é o
+  arquivo `checked` em `dirs::data_local_dir()/fisga/update`) e manda `Response::NewVersion` aos
+  inscritos; a GUI mostra a faixa no alto da janela. `Request::InstallUpdate`: no Windows baixa o
+  `-setup.exe`, confere com o `SHA256SUMS` da release e o roda com `/SILENT /relaunch=yes`, desligado
+  do daemon; o `PrepareToInstall` do `fisga.iss` para o daemon e a GUI, e a entrada `Check: Relaunch`
+  abre a GUI no fim. No macOS abre o `.dmg`; no Linux só avisa. Testes: `FISGA_RELEASES_URL` troca o
+  endereço da API (o JSON de uma release, servido localmente, com os `browser_download_url`).
 - **Vídeos de sites via yt-dlp**:
   - Antes de confirmar, o daemon sonda com `yt-dlp -J`.
   - Um endereço que é uma lista (feed, busca, canal, playlist) é bloqueado.

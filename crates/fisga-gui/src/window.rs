@@ -129,6 +129,8 @@ pub struct MainWindow {
     /// The holiday's scene, behind everything: held here, as `festive`
     /// only keeps a weak reference to it.
     _effects: Rc<crate::festive::Effects>,
+    /// A new version of Fisga, over the downloads.
+    pub banner: crate::update::Banner,
 }
 
 #[derive(Clone)]
@@ -306,6 +308,7 @@ fn main_menu() -> gio::Menu {
     let section = gio::Menu::new();
     section.append(Some("Filas e agendador"), Some("win.queues"));
     section.append(Some("Preferências"), Some("win.preferences"));
+    section.append(Some("Procurar atualizações"), Some("win.check-update"));
     section.append(Some("Sobre o Fisga"), Some("win.about"));
     menu.append_section(None, &section);
     menu
@@ -603,7 +606,10 @@ impl MainWindow {
         status_bar.add_css_class("fisga-statusbar");
         status.set_hexpand(true);
         status_bar.append(&status);
+        let a = Rc::downgrade(app);
+        let banner = crate::update::Banner::new(&window, move || a.upgrade().iter().for_each(|app| app.dismiss_update()));
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        content.append(&banner.root);
         content.append(&paned);
         content.append(&status_bar);
         // A holiday's scene (see `festive`) is drawn under everything.
@@ -693,6 +699,7 @@ impl MainWindow {
             speed_limit: Cell::new(app.settings().speed_limit),
             queues: RefCell::default(),
             _effects: effects,
+            banner,
         };
         this.connect(app, &view);
         this.set_queues(queues);
@@ -898,6 +905,14 @@ impl MainWindow {
         }
         let parent = window.clone();
         simple("about", Box::new(move || about(&parent)));
+        let (parent, a) = (window.clone(), app.clone());
+        simple(
+            "check-update",
+            Box::new(move || {
+                let a = a.clone();
+                crate::update::check(&parent, move || a.upgrade().iter().for_each(|app| app.undismiss_update()));
+            }),
+        );
         let a = app.clone();
         simple("pause-all", Box::new(move || a.upgrade().iter().for_each(|app| app.pause_all())));
         let a = app.clone();

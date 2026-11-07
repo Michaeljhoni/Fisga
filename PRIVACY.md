@@ -30,6 +30,13 @@ o Deno das páginas de cada projeto no GitHub, e procura uma versão nova do yt-
 por dia em que você baixar vídeos. Essas conexões não levam nenhum dado seu além do que qualquer
 download leva (o endereço IP, por exemplo).
 
+## Versões novas
+
+Uma vez por dia, o aplicativo pergunta à API do GitHub qual é a última versão publicada do Fisga
+(`api.github.com/repos/Michaeljhoni/Fisga/releases/latest`). O pedido leva só o que qualquer pedido
+leva: o endereço IP e a versão do Fisga, no User-Agent. Ao atualizar, o instalador vem da página da
+versão no GitHub. Isso pode ser desligado em Preferências → Geral → "Procurar versões novas do Fisga".
+
 ## Permissões
 
 - **nativeMessaging**: falar com o aplicativo Fisga instalado no computador.
@@ -62,5 +69,11 @@ On Windows and macOS, the first video you ask for makes the application fetch yt
 from each project's GitHub pages, and it looks for a new yt-dlp at most once a day when you download
 videos. These connections carry nothing about you beyond what any download does (your IP address,
 for example).
+
+Once a day the application asks GitHub's API which is Fisga's latest published version
+(`api.github.com/repos/Michaeljhoni/Fisga/releases/latest`). The request carries only what any request
+does: your IP address and Fisga's version, in the User-Agent. When updating, the installer comes from
+the version's GitHub page. This can be turned off in Preferências → Geral → "Procurar versões novas do
+Fisga".
 
 Questions: open an issue at <https://github.com/Michaeljhoni/Fisga/issues>.

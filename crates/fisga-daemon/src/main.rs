@@ -7,6 +7,7 @@ mod manager;
 mod notify;
 mod shell;
 mod tools;
+mod update;
 mod ytdlp;
 
 use std::io::IsTerminal;
@@ -19,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::gui::{Gui, Unanswered};
 use crate::manager::{Answer, Manager};
+use crate::update::Updater;
 
 fn init_logging() {
     let filter = tracing_subscriber::EnvFilter::try_from_env("FISGA_LOG")
@@ -57,6 +59,8 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(manager.clone().autosave(shutdown.clone()));
     tokio::spawn(scheduler(manager.clone(), gui.clone(), shutdown.clone()));
     clipboard::spawn(manager.clone(), gui.clone());
+    let updater = Updater::new();
+    tokio::spawn(update::run(updater.clone(), manager.clone(), shutdown.clone()));
     manager.schedule();
 
     let stop = stop_requested()?;
@@ -67,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok(stream) => {
-                    tokio::spawn(serve_client(manager.clone(), gui.clone(), stream, shutdown.clone()));
+                    tokio::spawn(serve_client(manager.clone(), gui.clone(), updater.clone(), stream, shutdown.clone()));
                 }
                 Err(e) => tracing::warn!(error = %e, "accept falhou"),
             },
@@ -165,7 +169,7 @@ async fn write(writer: &mut WriteHalf, response: &Response) -> std::io::Result<(
     writer.write_all(&line).await
 }
 
-async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: BoxStream, shutdown: CancellationToken) {
+async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, updater: Arc<Updater>, stream: BoxStream, shutdown: CancellationToken) {
     let (reader, mut writer) = tokio::io::split(stream);
     let mut lines = BufReader::new(reader).lines();
     while let Ok(Some(line)) = lines.next_line().await {
@@ -219,6 +223,14 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: BoxStream, s
             Request::CancelPower => result(manager.cancel_power()),
             Request::GetLogins => Response::Logins { logins: manager.logins() },
             Request::SetLogins { logins } => result(manager.set_logins(logins)),
+            Request::CheckUpdate => match updater.check(&manager).await {
+                Ok(release) => Response::NewVersion { release },
+                Err(e) => Response::Error { message: format!("não foi possível procurar uma versão nova: {e}") },
+            },
+            Request::InstallUpdate => match updater.install(&manager) {
+                Ok(()) => Response::Ok,
+                Err(message) => Response::Error { message },
+            },
             Request::Shutdown => {
                 shutdown.cancel();
                 Response::Ok
@@ -239,6 +251,11 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, stream: BoxStream, s
                 }
                 if write(&mut writer, &Response::Settings { settings: manager.settings() }).await.is_err() {
                     return;
+                }
+                if let Some(release) = updater.current() {
+                    if write(&mut writer, &Response::NewVersion { release: Some(release) }).await.is_err() {
+                        return;
+                    }
                 }
                 loop {
                     tokio::select! {

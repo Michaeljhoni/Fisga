@@ -420,6 +420,11 @@ impl Manager {
         self.updates.subscribe()
     }
 
+    /// Tells every subscriber (news that are not about a download).
+    pub fn announce(&self, response: Response) {
+        let _ = self.updates.send(response);
+    }
+
     pub fn list(&self) -> Vec<DownloadInfo> {
         self.inner.lock().unwrap().jobs.values().map(|j| j.info.clone()).collect()
     }

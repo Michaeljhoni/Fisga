@@ -31,6 +31,7 @@
 - **Organizado:** categorias por tipo (Vídeos, Músicas, Programas...), cada uma na sua pasta.
 - **E mais:** limite de velocidade, proxy, login por site, soma SHA-256, antivírus e comando ao
   concluir, ícone na bandeja, captura de links copiados.
+- **Sempre na versão nova:** o Fisga avisa quando sai uma e, no Windows, se atualiza com um clique.
 
 ![Janela Novo download](docs/screenshots/novo-download.png)
 

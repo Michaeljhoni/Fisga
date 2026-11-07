@@ -6,6 +6,7 @@
 //! `/private/files/<bytes>.bin` is the same, behind HTTP Basic authentication (user `teste`,
 //! password `senha`). It also answers as an HTTP proxy (`GET http://any-host/files/...`), so
 //! tests can check that a download went through the proxy: the host need not exist.
+//! `/release/latest` is a release of Fisga 99.0.0 as GitHub's API describes it.
 
 /// `teste:senha` in base64.
 const CREDENTIALS: &str = "Basic dGVzdGU6c2VuaGE=";
@@ -73,6 +74,22 @@ async fn handle(mut socket: TcpStream, delay: Duration) -> std::io::Result<()> {
         if private && header("authorization").as_deref() != Some(CREDENTIALS) {
             let refusal = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"fisga\"\r\nContent-Length: 0\r\n\r\n";
             socket.write_all(refusal.as_bytes()).await?;
+            continue;
+        }
+        if path == "/release/latest" {
+            let base = format!("http://{}", header("host").unwrap_or_default());
+            let release = format!(
+                r#"{{"tag_name":"v99.0.0","html_url":"{base}/release/","body":"- Teste","assets":[
+                   {{"name":"Fisga-99.0.0-setup.exe","browser_download_url":"{base}/files/5.bin"}},
+                   {{"name":"SHA256SUMS","browser_download_url":"{base}/files/6.bin"}}]}}"#
+            );
+            let head = format!("HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: {}
+
+", release.len());
+            socket.write_all(head.as_bytes()).await?;
+            socket.write_all(release.as_bytes()).await?;
             continue;
         }
         if let Some(page) = site_page(path) {

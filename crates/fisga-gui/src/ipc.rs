@@ -6,7 +6,7 @@ use std::future::Future;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use fisga_ipc::{Connection, DownloadInfo, PowerPlan, Request, Response, Settings};
+use fisga_ipc::{Connection, DownloadInfo, NewVersion, PowerPlan, Request, Response, Settings};
 use tokio::sync::mpsc;
 
 pub enum Event {
@@ -17,6 +17,8 @@ pub enum Event {
     Settings(Settings),
     /// A suspend/power off was planned (or called off: `None`).
     Power(Option<PowerPlan>),
+    /// A newer Fisga, or how its install goes (`None`: none).
+    NewVersion(Option<NewVersion>),
     Disconnected(String),
 }
 
@@ -73,6 +75,7 @@ async fn session(tx: &mpsc::UnboundedSender<Event>) -> anyhow::Result<()> {
             Response::Removed { id } => Event::Removed(id),
             Response::Settings { settings } => Event::Settings(settings),
             Response::Power { plan } => Event::Power(plan),
+            Response::NewVersion { release } => Event::NewVersion(release),
             _ => continue,
         };
         if tx.send(event).is_err() {

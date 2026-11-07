@@ -30,6 +30,8 @@ for _ in $(seq 1 50); do [ -s "$SANDBOX/server.url" ] && break; sleep 0.1; done
 BASE="$(cat "$SANDBOX/server.url")"
 SMALL="$BASE/files/10485760.bin"
 LARGE="$BASE/files/104857600.bin"
+# Fisga's latest release, as GitHub's API would describe it.
+export FISGA_RELEASES_URL="$BASE/release/latest"
 
 cleanup() { "$BIN/fisga" stop >/dev/null 2>&1 || true; kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$SANDBOX"; }
 trap cleanup EXIT
@@ -357,6 +359,16 @@ if "$BIN/fisga" add "$SMALL" --checksum "md5:098f6bcd4621d373cade4e832627b4f6" 2
   echo "an MD5 was accepted"; exit 1
 fi
 echo "invalid checksum refused"
+
+step "a new version of Fisga: told, installed by the system's packages"
+"$BIN/fisga" update | tee "$SANDBOX/update.out"
+grep "Fisga 99.0.0 disponível" "$SANDBOX/update.out"
+grep "gerenciador de pacotes" "$SANDBOX/update.out"
+if "$BIN/fisga" update --install 2> "$SANDBOX/update.err"; then
+  echo "Linux installed an update itself"; exit 1
+fi
+grep "gerenciador de pacotes" "$SANDBOX/update.err"
+"$BIN/fisga" settings --check-updates false | grep "procurar versão nova:    não"
 
 step "list"
 "$BIN/fisga" list

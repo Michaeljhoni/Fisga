@@ -31,6 +31,7 @@ mod refresh;
 mod speed;
 mod theme;
 mod tray;
+mod update;
 mod verify;
 mod window;
 

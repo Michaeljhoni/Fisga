@@ -69,10 +69,13 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Filename: "{app}\bin\fisga.exe"; Parameters: "install-hosts"; Flags: runhidden; StatusMsg: "{cm:Hosts}"
 Filename: "https://addons.mozilla.org/firefox/addon/fisga@fisga.local/"; Description: "{cm:Firefox}"; Flags: postinstall shellexec skipifsilent; Check: FirefoxInstalled
 Filename: "{app}\bin\fisga-gui.exe"; Description: "{cm:LaunchProgram,Fisga}"; Flags: postinstall nowait skipifsilent
+; An update Fisga installed itself (fisgad's update.rs): silent, and Fisga opens again.
+Filename: "{app}\bin\fisga-gui.exe"; Flags: nowait; Check: Relaunch
 
 [UninstallDelete]
-; The video programs Fisga fetched (see tools.rs in the daemon).
+; The video programs Fisga fetched (see tools.rs in the daemon), and its updates.
 Type: filesandordirs; Name: "{localappdata}\fisga\tools"
+Type: filesandordirs; Name: "{localappdata}\fisga\update"
 
 [UninstallRun]
 Filename: "{app}\bin\fisga.exe"; Parameters: "install-hosts --uninstall"; Flags: runhidden; RunOnceId: "Hosts"
@@ -83,6 +86,12 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM fisga-gui.exe"; Flags: runhi
 function FirefoxInstalled: Boolean;
 begin
   Result := RegKeyExists(HKLM, 'SOFTWARE\Mozilla\Mozilla Firefox') or RegKeyExists(HKCU, 'SOFTWARE\Mozilla\Mozilla Firefox');
+end;
+
+{ /relaunch=yes: started by Fisga to update itself, which it closed. }
+function Relaunch: Boolean;
+begin
+  Result := WizardSilent and (CompareText(ExpandConstant('{param:relaunch|no}'), 'yes') = 0);
 end;
 
 { An update replaces the programs: the daemon pauses its downloads and quits

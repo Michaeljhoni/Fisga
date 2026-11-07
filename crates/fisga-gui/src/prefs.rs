@@ -556,6 +556,7 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
     let tray = gtk::Switch::builder().active(settings.tray).build();
     let autostart_was = autostart::is_enabled();
     let session = gtk::Switch::builder().active(autostart_was).build();
+    let updates = gtk::Switch::builder().active(settings.check_updates).build();
 
     let subfolders: Vec<&str> = Category::ALL.iter().filter_map(|c| c.folder()).collect();
     let subfolders_hint = format!("Subpastas: {}. Os demais ficam na pasta de downloads.", subfolders.join(", "));
@@ -589,6 +590,11 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
         Some("Fechar a janela deixa o Fisga na bandeja, pronto para os downloads do navegador. Precisa de uma bandeja (waybar, noctalia, KDE...)."),
     );
     row(&grid, 7, "Iniciar com a sessão", &session, Some("Abre o Fisga na bandeja, sem janela, ao entrar no sistema."));
+    let updates_hint = match cfg!(any(windows, target_os = "macos")) {
+        true => "Uma vez por dia, no GitHub, onde o Fisga é publicado. Uma versão nova aparece na janela principal, para instalar com um clique.",
+        false => "Uma vez por dia, no GitHub, onde o Fisga é publicado. Uma versão nova aparece na janela principal; quem a instala é o gerenciador de pacotes.",
+    };
+    row(&grid, 8, "Procurar versões novas do Fisga", &updates, Some(updates_hint));
 
     let (queues_box, read_queues) = queues_page(window.upcast_ref(), settings.all_queues(), settings.new_queue_id());
     let (network_box, read_proxy, read_logins) = network_page(&settings.proxy);
@@ -750,6 +756,7 @@ pub fn show(parent: &gtk::Window, settings: Settings, page: Page) {
             browser: read_browser(),
             theme,
             festive,
+            check_updates: updates.is_active(),
         };
         for queue in queues {
             new.set_queue(queue);

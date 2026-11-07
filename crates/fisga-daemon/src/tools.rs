@@ -242,7 +242,7 @@ impl Sum {
 
 /// The SHA-256 of `name` in a list of sums: the usual `sum  name` lines, or a
 /// file with one sum and no such line (Deno's on Windows).
-fn find_sum(list: &str, name: &str) -> Option<String> {
+pub(crate) fn find_sum(list: &str, name: &str) -> Option<String> {
     let is_sum = |word: &&str| word.len() == 64 && word.bytes().all(|b| b.is_ascii_hexdigit());
     let listed = list.lines().find_map(|line| {
         let named = line.split_whitespace().any(|word| word.trim_start_matches('*') == name);
@@ -273,7 +273,7 @@ async fn install(client: &reqwest::Client, dir: &Path, tool: &Tool, say: &(impl 
 }
 
 /// Downloads `url` to `file`; returns its SHA-256.
-async fn fetch(client: &reqwest::Client, url: &str, file: &Path, say: &(impl Fn(u64, Option<u64>) + Send + Sync)) -> Result<String, String> {
+pub(crate) async fn fetch(client: &reqwest::Client, url: &str, file: &Path, say: &(impl Fn(u64, Option<u64>) + Send + Sync)) -> Result<String, String> {
     let mut response = client.get(url).send().await.and_then(|r| r.error_for_status()).map_err(|e| e.to_string())?;
     let total = response.content_length();
     let mut out = tokio::fs::File::create(file).await.map_err(|e| e.to_string())?;

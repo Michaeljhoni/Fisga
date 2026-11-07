@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use gtk::prelude::*;
 use gtk::{gio, glib};
-use fisga_ipc::{DownloadInfo, Request, Settings, State, Theme};
+use fisga_ipc::{DownloadInfo, NewVersion, Request, Settings, State, Theme};
 use tokio::sync::mpsc;
 
 use crate::confirm::ConfirmDialog;
@@ -62,6 +62,10 @@ pub struct App {
     tray_summary: RefCell<String>,
     /// Held while the app lives in the tray or in the background.
     keep_alive: RefCell<Option<gio::ApplicationHoldGuard>>,
+    /// A newer Fisga, from the daemon.
+    new_version: RefCell<Option<NewVersion>>,
+    /// The version whose banner was closed ("Agora não").
+    dismissed: RefCell<Option<String>>,
 }
 
 impl App {
@@ -86,6 +90,8 @@ impl App {
             tray_receiver: RefCell::new(Some(tray_receiver)),
             tray_summary: RefCell::default(),
             keep_alive: RefCell::default(),
+            new_version: RefCell::default(),
+            dismissed: RefCell::default(),
         })
     }
 
@@ -186,6 +192,29 @@ impl App {
         window.window.present();
         self.window.replace(Some(window));
         self.sync_look();
+        self.sync_update();
+    }
+
+    /// The new version's banner, unless it was closed for that version.
+    fn sync_update(&self) {
+        let release = self.new_version.borrow().clone();
+        let release = release.filter(|release| self.dismissed.borrow().as_ref() != Some(&release.version));
+        if let Some(window) = self.window.borrow().as_ref() {
+            window.banner.show(release.as_ref());
+        }
+    }
+
+    /// "Agora não": hidden until another version comes (or it is looked for).
+    pub fn dismiss_update(&self) {
+        let version = self.new_version.borrow().as_ref().map(|release| release.version.clone());
+        self.dismissed.replace(version);
+        self.sync_update();
+    }
+
+    /// "Procurar atualizações" found one: shown even if it had been closed.
+    pub fn undismiss_update(&self) {
+        self.dismissed.replace(None);
+        self.sync_update();
     }
 
     pub fn main_window(&self) -> Option<gtk::ApplicationWindow> {
@@ -256,6 +285,10 @@ impl App {
                 self.sync_tray();
             }
             Event::Power(plan) => self.sync_power(plan),
+            Event::NewVersion(release) => {
+                self.new_version.replace(release);
+                self.sync_update();
+            }
             Event::Disconnected(reason) => {
                 *self.connection.borrow_mut() = Err(reason);
                 self.startup_hold.replace(None);

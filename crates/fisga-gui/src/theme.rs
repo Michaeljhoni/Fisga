@@ -303,6 +303,14 @@ columnview.fisga-list listview { background: transparent; color: @fisga_text; }
   opacity: 0.8;
 }
 
+.fisga-update {
+  padding: 10px 12px 10px 18px;
+  border-bottom: 1px solid @fisga_border;
+  background: alpha(@fisga_accent, 0.12);
+}
+.fisga-update-title { font-weight: 700; color: @fisga_strong; }
+.fisga-update-detail { color: @fisga_muted; font-size: 0.9em; }
+
 .fisga-statusbar {
   color: @fisga_muted;
   font-size: 0.9em;

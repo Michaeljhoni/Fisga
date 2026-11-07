@@ -299,6 +299,9 @@ pub struct Settings {
     /// holiday's theme: its colors and a scene (confetti, snow, bats...)
     /// moving behind the main window's panels.
     pub festive: bool,
+    /// Look for a new version of Fisga once a day (on GitHub, where it is
+    /// published) and offer it.
+    pub check_updates: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -589,6 +592,7 @@ impl Default for Settings {
             browser: BrowserSettings::default(),
             theme: Theme::Dark,
             festive: true,
+            check_updates: true,
         }
     }
 }
@@ -1219,6 +1223,55 @@ pub fn combined_limit(global: u64, own: u64) -> u64 {
     }
 }
 
+/// A version of Fisga newer than the one running, as published.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewVersion {
+    /// "1.2.0".
+    pub version: String,
+    /// The release's page, with what changed.
+    pub page: String,
+    /// What changed, as written there (Markdown).
+    #[serde(default)]
+    pub notes: String,
+    /// Fisga can install it itself (Windows, macOS); on Linux the system's
+    /// packages bring it.
+    #[serde(default)]
+    pub installable: bool,
+    /// Where its install is, once asked for.
+    #[serde(default)]
+    pub stage: Option<UpdateStage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UpdateStage {
+    Downloading { done: u64, total: Option<u64> },
+    /// The installer took over: Fisga closes and opens again.
+    Installing,
+    /// macOS: the disk image is open, for the app to be dragged to Applications.
+    Opened,
+    Failed { error: String },
+}
+
+impl UpdateStage {
+    /// Still going: no second install meanwhile.
+    pub fn busy(&self) -> bool {
+        matches!(self, UpdateStage::Downloading { .. } | UpdateStage::Installing)
+    }
+
+    pub fn describe(&self) -> String {
+        let mb = |bytes: u64| bytes / 1_000_000;
+        match self {
+            UpdateStage::Downloading { done, total: Some(total) } => format!("Baixando: {} de {} MB", mb(*done), mb(*total)),
+            UpdateStage::Downloading { done, total: None } => format!("Baixando: {} MB", mb(*done)),
+            UpdateStage::Installing => "Instalando: o Fisga fecha e abre de novo na versão nova.".into(),
+            UpdateStage::Opened => "Arraste o Fisga do disco que se abriu para a pasta Aplicativos.".into(),
+            UpdateStage::Failed { error } => format!("Não foi possível atualizar: {error}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
@@ -1310,6 +1363,11 @@ pub enum Request {
     /// never broadcast nor logged.
     GetLogins,
     SetLogins { logins: Vec<SiteLogin> },
+    /// Looks for a new version of Fisga now: `Response::NewVersion`.
+    CheckUpdate,
+    /// Downloads the new version found, checks it and installs it: Fisga
+    /// closes and opens again. How it goes comes in `Response::NewVersion`.
+    InstallUpdate,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1328,6 +1386,10 @@ pub enum Response {
     /// subscribers, and right after subscribing while one is planned.
     Power { plan: Option<PowerPlan> },
     Logins { logins: Vec<SiteLogin> },
+    /// The newest version, when newer than this one (`None`: this is it).
+    /// Sent to subscribers when one is found or its install moves, and right
+    /// after subscribing while there is one.
+    NewVersion { release: Option<NewVersion> },
     Ok,
     Error { message: String },
 }

@@ -145,7 +145,8 @@ troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O b
   baixou, velocidade, tempo restante, se dá para retomar, a pasta, **Pausar/Retomar** e o **limite
   de velocidade deste download** ("No máximo ... KB/s", que vale na hora e se soma ao limite geral:
   o menor vence; também pelo clique direito → *Limitar velocidade…*). Ao terminar
-  vira **Download concluído**, com **Abrir** e **Abrir pasta**. Pode ser desligada nas Preferências.
+  vira **Download concluído**, com **Abrir** e **Abrir pasta**; qualquer um dos dois fecha a
+  janela. Pode ser desligada nas Preferências.
 - **Preferências** (aba *Geral*): pasta de downloads, subpastas por tipo de arquivo,
   conexões por arquivo, a janela de progresso, capturar links copiados e o **limite de velocidade** (KB/s para todos os
   downloads juntos; muda na hora, até nos que estão baixando, e aparece na barra de status). Ficam

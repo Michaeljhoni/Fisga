@@ -11,7 +11,7 @@ use fisga_i18n::{tr, trf};
 use fisga_ipc::{DownloadInfo, Request, State};
 
 use crate::format;
-use crate::window::{open_file_then, open_folder, send};
+use crate::window::{open_file_then, open_folder, open_folder_then, send};
 
 pub struct ProgressWindow {
     window: gtk::Window,
@@ -215,9 +215,15 @@ impl ProgressWindow {
             glib::timeout_add_local_once(std::time::Duration::from_secs(5), move || button.set_sensitive(true));
         });
         let w = Rc::downgrade(&this);
+        // Once finished, opening the folder is the user's choice too: the
+        // window closes, like after "Abrir". While downloading it stays.
         folder_button.connect_clicked(move |_| {
-            if let Some(this) = w.upgrade() {
-                open_folder(&this.window, &this.info.borrow());
+            let Some(this) = w.upgrade() else { return };
+            let info = this.info.borrow().clone();
+            let window = this.window.clone();
+            match info.state {
+                State::Completed => open_folder_then(&this.window, &info, move || window.close()),
+                _ => open_folder(&this.window, &info),
             }
         });
         let win = this.window.clone();

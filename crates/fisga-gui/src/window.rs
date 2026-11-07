@@ -1217,11 +1217,15 @@ pub fn open_file_then(window: &gtk::Window, path: PathBuf, then: impl FnOnce() +
 }
 
 pub fn open_folder(window: &gtk::Window, info: &DownloadInfo) {
+    open_folder_then(window, info, || {});
+}
+
+/// Opens the download's folder, then runs `then` (see open_file_then).
+pub fn open_folder_then(window: &gtk::Window, info: &DownloadInfo, then: impl FnOnce() + 'static) {
     let parent = window.clone();
-    let callback = move |result: Result<(), glib::Error>| {
-        if let Err(e) = result {
-            show_error(Some(&parent), tr!("Não foi possível abrir a pasta"), &e.to_string());
-        }
+    let callback = move |result: Result<(), glib::Error>| match result {
+        Ok(()) => then(),
+        Err(e) => show_error(Some(&parent), tr!("Não foi possível abrir a pasta"), &e.to_string()),
     };
     match &info.path {
         // Opens the file manager with the file selected.

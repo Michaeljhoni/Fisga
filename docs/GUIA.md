@@ -10,7 +10,10 @@ O destaque é a **extensão do navegador**: ao passar o mouse sobre um vídeo ou
 site, aparece um botão **Baixar** no canto do player. Um clique abre a janela **Novo download** do
 Fisga, como no IDM, para confirmar nome, pasta e tamanho; a setinha ▾ mostra tudo o que foi detectado
 na página (stream HLS/DASH, arquivos MP4/MP3, ou "detectar automaticamente", que usa o yt-dlp em
-sites como YouTube).
+sites como YouTube). O **×** esconde o botão naquele vídeo; ele volta sozinho no próximo vídeo
+(mesmo quando o site troca de vídeo sem recarregar, como o YouTube), e o popup da extensão tem
+**Mostrar de novo o botão Baixar nesta página**. O popup também lista as mídias detectadas na aba,
+para baixar sem o botão.
 
 ## Peças
 

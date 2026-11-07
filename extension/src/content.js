@@ -35,6 +35,26 @@
   let hideTimer = 0;
   let pointer = null;
   let framePending = false;
+  let dismissals = []; // { el, key }: videos whose button the user closed
+
+  // ------------------------------------------------------------- dismissal
+  // The × hides the button over one video until it changes: another source
+  // or another address (YouTube opens the next video without reloading).
+  // The popup's "show the button again" brings them all back.
+  const dismissKey = (el) => `${el.currentSrc || el.src}|${location.href}`;
+  function liveDismissals() {
+    dismissals = dismissals.filter((d) => d.el.isConnected && d.key === dismissKey(d.el));
+    return dismissals;
+  }
+  function isDismissed(el) {
+    return dismissals.some((d) => d.el === el && d.key === dismissKey(el));
+  }
+  function dismiss() {
+    if (!active) return;
+    liveDismissals().push({ el: active, key: dismissKey(active) });
+    overUi = false;
+    hide(true);
+  }
 
   // ---------------------------------------------------------------- settings
   api.storage?.local
@@ -122,6 +142,7 @@
 
   function eligible(el) {
     if (!el.isConnected) return false;
+    if (isDismissed(el)) return false;
     if (el.srcObject instanceof MediaStream) return false; // webcam / call, nothing to download
     const r = el.getBoundingClientRect();
     if (el instanceof HTMLVideoElement) {
@@ -191,11 +212,11 @@
       padding: 7px 11px; color: inherit; white-space: nowrap; }
     button:hover { background: rgba(255, 255, 255, .12); }
     button:focus-visible { outline: 2px solid #60a5fa; outline-offset: -2px; }
-    .more { padding: 7px 8px; border-left: 1px solid rgba(255, 255, 255, .14); }
+    .more, .close { padding: 7px 8px; border-left: 1px solid rgba(255, 255, 255, .14); }
     svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2;
       stroke-linecap: round; stroke-linejoin: round; flex: none; }
     .main svg { color: #60a5fa; }
-    .more svg { width: 13px; height: 13px; }
+    .more svg, .close svg { width: 13px; height: 13px; }
     .box.ok .main svg { color: #34d399; }
     .box.err .main svg { color: #f87171; }
     .box.busy .main { cursor: progress; }
@@ -257,7 +278,12 @@
     more.title = t("btnMore", "Escolher o que baixar");
     more.setAttribute("aria-haspopup", "menu");
     more.append(svg(["M6 9l6 6 6-6"]));
-    bar.append(main, more);
+    const close = node("button", "close");
+    close.type = "button";
+    close.title = t("btnClose", "Esconder neste vídeo");
+    close.setAttribute("aria-label", close.title);
+    close.append(svg(["M7 7l10 10", "M17 7L7 17"]));
+    bar.append(main, more, close);
     const menu = node("div", "menu");
     menu.setAttribute("role", "menu");
     menu.hidden = true;
@@ -278,6 +304,10 @@
     more.addEventListener("click", (e) => {
       e.preventDefault();
       menuOpen ? closeMenu() : openMenu();
+    });
+    close.addEventListener("click", (e) => {
+      e.preventDefault();
+      dismiss();
     });
     host.addEventListener("pointerenter", () => {
       overUi = true;
@@ -514,7 +544,14 @@
     return [...urls];
   }
   api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg?.type !== "collect-links") return;
-    sendResponse({ links: collectLinks(Boolean(msg.selection)) });
+    if (msg?.type === "collect-links") {
+      sendResponse({ links: collectLinks(Boolean(msg.selection)) });
+    } else if (msg?.type === "overlay-dismissed") {
+      // Only frames with a closed button answer: the first answer wins.
+      if (liveDismissals().length) sendResponse({ dismissed: true });
+    } else if (msg?.type === "show-overlay") {
+      dismissals = [];
+      sendResponse({ ok: true });
+    }
   });
 })();

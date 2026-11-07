@@ -32,6 +32,17 @@ async function init() {
     $("empty").hidden = false;
     return;
   }
+  // The page's button was closed over a video (its ×): bring it back without reloading.
+  const dismissed = await api.tabs.sendMessage(tab.id, { type: "overlay-dismissed" }).catch(() => null);
+  if (dismissed?.dismissed) {
+    const show = $("show-overlay");
+    show.hidden = false;
+    show.addEventListener("click", () => {
+      api.tabs.sendMessage(tab.id, { type: "show-overlay" }).catch(() => {});
+      show.hidden = true;
+    });
+  }
+
   const res = await api.runtime.sendMessage({ type: "popup-candidates", tabId: tab.id });
   const items = res?.items ?? [];
   $("empty").hidden = items.length > 1;

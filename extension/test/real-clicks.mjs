@@ -7,7 +7,8 @@
 //
 // Usage: node extension/test/real-clicks.mjs <extension-dir> <label> [scenario...]
 //   scenarios: search, menu-search, watch, spa (search -> click a video -> button), home,
-//   takeover (a .safetensors download, named only by Content-Disposition), force (Alt+click on a link)
+//   takeover (a .safetensors download, named only by Content-Disposition), force (Alt+click on a link),
+//   dismiss (the × hides the button; the popup and the next video bring it back)
 //   CHROME=/path/to/chrome overrides the browser; results go to extension/test/out/<label>/.
 import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -141,7 +142,7 @@ async function overlayBox(page, className) {
   let hostNode = null;
   const walk = (n) => {
     if (hostNode) return;
-    if (n.nodeName === "Fisga-DOWNLOAD-BUTTON") hostNode = n;
+    if (n.nodeName === "FISGA-DOWNLOAD-BUTTON") hostNode = n;
     for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? []), ...(n.contentDocument ? [n.contentDocument] : [])]) walk(c);
   };
   walk(root);
@@ -324,6 +325,91 @@ async function spaScenario(sw) {
   return { name: "spa", results: [{ expected: url, sent: msg }] };
 }
 
+const PLAYER = `(() => { const v = [...document.querySelectorAll('video')].find(v => v.getBoundingClientRect().width > 300); if (!v) return null; const r = v.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`;
+
+/** Hovers the main player and returns the button's box, or null when it does not show. */
+async function hoverPlayer(page) {
+  const player = await evaluate(page, PLAYER);
+  if (!player) return null;
+  await moveTo(page, 30, 500, player);
+  await sleep(2500); // past the hide delay: an old button is gone
+  await moveTo(page, player.x, player.y);
+  for (let i = 0; i < 10; i++) {
+    await sleep(300);
+    await mouse(page, "mouseMoved", player.x + (i % 2), player.y);
+    if (await buttonShown(page)) return overlayBox(page, "main");
+  }
+  return null;
+}
+
+/** The box model can outlive display:none; the host's style is what counts. */
+async function buttonShown(page) {
+  return evaluate(page, "[...document.querySelectorAll('fisga-download-button')].some(h => h.style.display === 'block')");
+}
+
+/** Asks the tab's content scripts, as the popup does. */
+async function askTab(sw, message) {
+  return evaluate(
+    sw,
+    `chrome.tabs.query({ active: true }).then(([tab]) => chrome.tabs.sendMessage(tab.id, ${JSON.stringify(message)})).catch(e => ({ error: e.message }))`,
+  );
+}
+
+// The × hides the button over this video: it stays hidden on hover, the popup
+// can bring it back, and it comes back by itself on the next video (pushState).
+async function dismissScenario() {
+  // Long enough not to end (and autoplay the next one) during the test.
+  const url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+  log(`--- dismiss: ${url}`);
+  const page = await openPage(url);
+  const sw = await worker();
+  const steps = {};
+  let box = await hoverPlayer(page);
+  steps.shownAtFirst = Boolean(box);
+  if (!box) return { name: "dismiss", error: "button did not appear", steps };
+  steps.askedBefore = await askTab(sw, { type: "overlay-dismissed" });
+  const close = await overlayBox(page, "close");
+  steps.hasClose = Boolean(close);
+  if (!close) return { name: "dismiss", error: "no ×", steps };
+  await shot(page, "dismiss-hover");
+  await click(page, close.x, close.y);
+  await sleep(500);
+  steps.hiddenAfterClick = !(await buttonShown(page));
+  steps.hiddenOnHover = !(await hoverPlayer(page));
+  steps.askedAfter = await askTab(sw, { type: "overlay-dismissed" });
+  steps.showAgain = await askTab(sw, { type: "show-overlay" });
+  steps.shownAfterPopup = Boolean(await hoverPlayer(page));
+
+  // Closed again, then the next video without reloading the page.
+  box = await overlayBox(page, "close");
+  if (box) await click(page, box.x, box.y);
+  await sleep(500);
+  steps.hiddenAgain = !(await hoverPlayer(page));
+  steps.stillOn = await evaluate(page, "location.href");
+  const loadedAt = await evaluate(page, "performance.timeOrigin");
+  const next = await evaluate(
+    page,
+    `(() => { const here = new URL(location.href).searchParams.get('v');
+      const a = [...document.querySelectorAll('a[href*="/watch?v="]')].find(a => { const r = a.getBoundingClientRect();
+        return !a.href.includes(here) && r.width > 100 && r.height > 50 && r.top > 60 && r.bottom < innerHeight - 10 && a.querySelector('img, yt-image'); });
+      if (!a) return null; const r = a.getBoundingClientRect(); return { href: a.href, x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`,
+  );
+  if (!next) return { name: "dismiss", error: "no next video", steps };
+  await moveTo(page, next.x, next.y);
+  await click(page, next.x, next.y);
+  for (let i = 0; i < 30; i++) {
+    await sleep(500);
+    if ((await evaluate(page, "location.href")) !== steps.stillOn) break;
+  }
+  await sleep(4000);
+  steps.nextVideo = await evaluate(page, "location.href");
+  steps.reloaded = (await evaluate(page, "performance.timeOrigin")) !== loadedAt;
+  steps.shownOnNextVideo = Boolean(await hoverPlayer(page));
+  await shot(page, "dismiss-next");
+  log(JSON.stringify(steps));
+  return { name: "dismiss", steps };
+}
+
 // A local site for the takeover and the force key: a link like Civitai's,
 // whose address has no extension and whose name only comes in the
 // Content-Disposition of the redirect's target, and a link to a plain page.
@@ -415,6 +501,7 @@ try {
     if (s === "search") report.push(await feedScenario(sw, "search", "https://www.youtube.com/results?search_query=palworld+breeding"));
     if (s === "watch") report.push(await watchScenario(sw));
     if (s === "spa") report.push(await spaScenario(sw));
+    if (s === "dismiss") report.push(await dismissScenario());
     if (s === "takeover" || s === "force") {
       const { server, base } = await localSite();
       report.push(await (s === "takeover" ? takeoverScenario : forceScenario)(sw, base));

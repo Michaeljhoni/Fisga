@@ -53,6 +53,16 @@ header {
   padding: 4px 0;
   cursor: pointer;
 }
+.link {
+  all: unset;
+  display: block;
+  padding: 4px 0;
+  color: var(--accent);
+  cursor: pointer;
+}
+.link:hover,
+.link:focus-visible { text-decoration: underline; }
+.link[hidden] { display: none; }
 h2 {
   font-size: 12px;
   text-transform: uppercase;

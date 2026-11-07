@@ -28,8 +28,8 @@ conflicts=('fisga' 'fisga-git')
 options=('!debug')
 source_x86_64=("https://github.com/Michaeljhoni/Fisga/releases/download/v$pkgver/fisga-$pkgver-x86_64.tar.gz")
 source_aarch64=("https://github.com/Michaeljhoni/Fisga/releases/download/v$pkgver/fisga-$pkgver-aarch64.tar.gz")
-sha256sums_x86_64=('SKIP')
-sha256sums_aarch64=('SKIP')
+sha256sums_x86_64=('63b1c349c2a37f651a7291e03dfe43c24bfe2d20ab608577ffedb876fdd38099')
+sha256sums_aarch64=('6067183a3b1f9d5cdcc624afc82cde5641598be13ddd740c5e6d191e3030c515')
 
 package() {
   cp -a --no-preserve=ownership "fisga-$pkgver-$CARCH/." "$pkgdir/"

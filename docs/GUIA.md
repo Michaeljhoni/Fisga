@@ -242,7 +242,7 @@ troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O b
 ### Programas de vídeo (Windows e macOS)
 
 Vídeos de sites usam o yt-dlp, o ffmpeg e o Deno. No Linux eles vêm dos pacotes da distro; no Windows
-e no macOS, o Fisga os baixa no primeiro vídeo (cerca de 150 MB, uma vez só), com o andamento na
+e no macOS, o Fisga os baixa no primeiro vídeo (cerca de 150 MB, uma vez só; ocupam uns 300 MB no disco), com o andamento na
 janela *Novo download* e no download, e guarda em `%LOCALAPPDATA%isga	ools` ou
 `~/Library/Application Support/fisga/tools`. Vêm das releases de cada projeto no GitHub (o ffmpeg do
 Windows, das compilações do projeto yt-dlp; o do macOS, do ffmpeg-static), conferidos com as somas

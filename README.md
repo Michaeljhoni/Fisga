@@ -89,7 +89,7 @@ Opcionais: `yt-dlp`, `ffmpeg` e `deno` (vídeos de sites; o YouTube precisa dos 
 ### Vídeos de sites
 
 No Windows e no macOS não é preciso instalar nada: no primeiro vídeo, o Fisga baixa o yt-dlp, o ffmpeg
-e o Deno (cerca de 150 MB, uma vez só) dos sites de cada projeto e confere as somas. Quem já tem algum
+e o Deno (cerca de 150 MB, uma vez só; ocupam uns 300 MB no disco) dos sites de cada projeto e confere as somas. Quem já tem algum
 deles no PATH fica com o seu.
 
 ### Extensão do navegador

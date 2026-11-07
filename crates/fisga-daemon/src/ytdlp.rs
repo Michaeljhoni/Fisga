@@ -112,6 +112,13 @@ fn page_of(request: &AddRequest) -> Option<String> {
 /// Downloads with yt-dlp. A captured stream whose link was refused (it
 /// expired) is tried once more from its page, where yt-dlp finds a fresh one.
 pub async fn run(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel: CancellationToken) -> JobResult {
+    let prepared = tokio::select! {
+        prepared = manager.prepare_video(id) => prepared,
+        _ = cancel.cancelled() => return JobResult::Paused,
+    };
+    if let Err(error) = prepared {
+        return JobResult::Failed(error);
+    }
     let result = run_once(manager, id, request, cancel.clone()).await;
     let page = page_of(request);
     match (result, page) {
@@ -140,7 +147,7 @@ async fn run_once(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel:
         None => "%(title).150B [%(id)s].%(ext)s".to_string(),
     };
 
-    let mut command = crate::shell::program("yt-dlp");
+    let mut command = crate::tools::yt_dlp();
     command
         .args(["--newline", "--no-colors", "--no-playlist", "--progress"])
         // One media file per download, always: a feed or channel URL that slips
@@ -343,7 +350,7 @@ pub fn parse_probe(json: &serde_json::Value) -> PageProbe {
 
 /// Asks yt-dlp what the URL is before the user confirms it.
 pub async fn probe(id: u64, request: &AddRequest, proxy: &fisga_ipc::ProxySettings) -> Result<PageProbe, String> {
-    let mut command = crate::shell::program("yt-dlp");
+    let mut command = crate::tools::yt_dlp();
     command.args(["-J", "--flat-playlist", "--no-playlist", "--no-warnings", "--no-colors"]);
     apply_proxy(&mut command, proxy);
     let cookies_file = add_request_options(&mut command, &format!("{id}-probe"), request);
@@ -372,8 +379,8 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
         Ok(child) => child,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return JobResult::Failed(
-                "yt-dlp não está instalado. Instale pelo gerenciador de pacotes da sua distro \
-                 (ex.: pacman -S yt-dlp ffmpeg)."
+                "o yt-dlp não está instalado. Instale pelo gerenciador de pacotes da sua distro \
+                 (ex.: pacman -S yt-dlp ffmpeg deno)."
                     .into(),
             )
         }

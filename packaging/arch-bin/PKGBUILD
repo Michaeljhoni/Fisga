@@ -16,6 +16,7 @@ depends=('gtk4' 'gcc-libs' 'glibc')
 optdepends=(
   'yt-dlp: videos from sites (YouTube and others)'
   'ffmpeg: merge audio and video from sites'
+  'deno: YouTube, which needs a JavaScript runtime'
   'libnotify: notifications'
   'wl-clipboard: catch copied links on Wayland'
   'clamav: scan downloads with an antivirus'

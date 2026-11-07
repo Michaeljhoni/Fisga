@@ -910,6 +910,9 @@ pub struct DownloadInfo {
     /// True while the daemon fetches the size and name of a pending download.
     #[serde(default)]
     pub probing: bool,
+    /// What it waits for, while the programs a video needs are fetched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     #[serde(default)]
     pub category: Category,
     /// Qualities of a site video, best first; empty for other downloads.

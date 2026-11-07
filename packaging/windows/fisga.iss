@@ -70,6 +70,10 @@ Filename: "{app}\bin\fisga.exe"; Parameters: "install-hosts"; Flags: runhidden; 
 Filename: "https://addons.mozilla.org/firefox/addon/fisga@fisga.local/"; Description: "{cm:Firefox}"; Flags: postinstall shellexec skipifsilent; Check: FirefoxInstalled
 Filename: "{app}\bin\fisga-gui.exe"; Description: "{cm:LaunchProgram,Fisga}"; Flags: postinstall nowait skipifsilent
 
+[UninstallDelete]
+; The video programs Fisga fetched (see tools.rs in the daemon).
+Type: filesandordirs; Name: "{localappdata}\fisga\tools"
+
 [UninstallRun]
 Filename: "{app}\bin\fisga.exe"; Parameters: "install-hosts --uninstall"; Flags: runhidden; RunOnceId: "Hosts"
 Filename: "{app}\bin\fisga.exe"; Parameters: "stop"; Flags: runhidden; RunOnceId: "StopDaemon"

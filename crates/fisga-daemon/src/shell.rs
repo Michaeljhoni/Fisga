@@ -12,7 +12,7 @@ use tokio::process::Command;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// `program`, without a console window on Windows.
-pub fn program(program: &str) -> Command {
+pub fn program(program: impl AsRef<std::ffi::OsStr>) -> Command {
     #[allow(unused_mut)]
     let mut command = Command::new(program);
     #[cfg(windows)]

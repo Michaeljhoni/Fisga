@@ -76,6 +76,7 @@ fn caption(text: &str) -> gtk::Label {
 fn size_text(info: &DownloadInfo) -> String {
     let size = format::size(info);
     match info.kind {
+        _ if info.note.is_some() => info.note.clone().unwrap_or_default(),
         _ if info.probing => "verificando…".into(),
         SourceKind::Page | SourceKind::Stream if info.total.is_none() => {
             "definido ao baixar (vídeo de site, via yt-dlp)".into()

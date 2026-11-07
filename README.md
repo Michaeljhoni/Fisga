@@ -83,7 +83,14 @@ git clone https://github.com/Michaeljhoni/Fisga.git
 cd Fisga && scripts/install-dev.sh
 ```
 
-Opcionais: `yt-dlp` e `ffmpeg` (vídeos de sites), `libnotify`, `wl-clipboard` e `clamav`.
+Opcionais: `yt-dlp`, `ffmpeg` e `deno` (vídeos de sites; o YouTube precisa dos três), `libnotify`,
+`wl-clipboard` e `clamav`.
+
+### Vídeos de sites
+
+No Windows e no macOS não é preciso instalar nada: no primeiro vídeo, o Fisga baixa o yt-dlp, o ffmpeg
+e o Deno (cerca de 150 MB, uma vez só) dos sites de cada projeto e confere as somas. Quem já tem algum
+deles no PATH fica com o seu.
 
 ### Extensão do navegador
 

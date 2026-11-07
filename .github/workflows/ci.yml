@@ -69,6 +69,9 @@ jobs:
       - name: Unit and integration tests
         run: cargo test --workspace --exclude fisga-gui --locked
 
+      - name: The video tools, from their real releases
+        run: cargo test -p fisga-daemon --locked -- --ignored --nocapture
+
       - name: Clippy
         run: cargo clippy --workspace --exclude fisga-gui --all-targets
 

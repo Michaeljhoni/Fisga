@@ -34,8 +34,8 @@ navegador ──Native Messaging──▶ fisga-native-host ──Unix socket─
 
 Requisitos: Rust e GTK4 ≥ 4.12 com os cabeçalhos (Arch: `sudo pacman -S rust gtk4`; Debian 13/Ubuntu
 24.04: `libgtk-4-dev` + [rustup](https://rustup.rs); Fedora: `gtk4-devel`).
-Opcionais: `yt-dlp` e `ffmpeg` (vídeos de sites), `libnotify` (notificações), `wl-clipboard`
-(capturar links copiados no Wayland).
+Opcionais: `yt-dlp`, `ffmpeg` e `deno` (vídeos de sites; o YouTube precisa de um runtime de
+JavaScript), `libnotify` (notificações), `wl-clipboard` (capturar links copiados no Wayland).
 
 ```bash
 scripts/install-dev.sh
@@ -238,6 +238,17 @@ troca os cartões pela lista com colunas (as duas escolhas ficam guardadas). O b
   uma janela que conta 60 segundos e deixa cancelar (ou `fisga schedule --cancel`). Isso só acontece
   quando a fila começou no horário (ou o agendador foi configurado dentro dele) e pelo menos um
   download terminou; ligar o computador no meio do horário nunca o desliga sozinho.
+
+### Programas de vídeo (Windows e macOS)
+
+Vídeos de sites usam o yt-dlp, o ffmpeg e o Deno. No Linux eles vêm dos pacotes da distro; no Windows
+e no macOS, o Fisga os baixa no primeiro vídeo (cerca de 150 MB, uma vez só), com o andamento na
+janela *Novo download* e no download, e guarda em `%LOCALAPPDATA%isga	ools` ou
+`~/Library/Application Support/fisga/tools`. Vêm das releases de cada projeto no GitHub (o ffmpeg do
+Windows, das compilações do projeto yt-dlp; o do macOS, do ffmpeg-static), conferidos com as somas
+SHA-256, usando o proxy das Preferências. Um programa que já esteja no PATH não é baixado. O yt-dlp
+precisa acompanhar os sites: ao pedir um vídeo, o Fisga procura uma versão nova, no máximo uma vez por
+dia. Sem pedir vídeos, nada disso acontece. Desinstalar o Fisga no Windows apaga essa pasta.
 
 ### Categorias e pastas
 

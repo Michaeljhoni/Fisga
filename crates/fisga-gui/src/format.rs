@@ -212,6 +212,9 @@ pub fn status(info: &DownloadInfo) -> String {
     if info.awaiting_url {
         return "Aguardando novo endereço".into();
     }
+    if let Some(note) = &info.note {
+        return note.clone();
+    }
     if let Some(check) = check_status(info).filter(|_| info.state == State::Completed && info.error.is_none()) {
         return check;
     }
@@ -285,6 +288,7 @@ mod tests {
             created_at: 0,
             dir: None,
             probing: false,
+            note: None,
             category: Category::Other,
             formats: Vec::new(),
             queue: 0,

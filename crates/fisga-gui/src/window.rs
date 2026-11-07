@@ -1321,6 +1321,7 @@ mod tests {
             created_at: 0,
             dir: None,
             probing: false,
+            note: None,
             category,
             formats: Vec::new(),
             queue: fisga_ipc::MAIN_QUEUE,

@@ -193,6 +193,7 @@ impl Manager {
                 }
                 info.speed = 0.0;
                 info.probing = false;
+                info.note = None;
                 // The check stopped with the daemon.
                 if matches!(info.hash, Some(Hashing::Running { .. })) {
                     info.hash = None;
@@ -468,6 +469,7 @@ impl Manager {
                 created_at: now(),
                 dir: Some(dir),
                 probing: probe,
+                note: None,
                 category,
                 formats: Vec::new(),
                 queue,
@@ -525,7 +527,10 @@ impl Manager {
             self.refresh_pending_dirs();
             return;
         }
-        let result = ytdlp::probe(id, &request, &self.settings().proxy).await;
+        let result = match self.prepare_video(id).await {
+            Ok(()) => ytdlp::probe(id, &request, &self.settings().proxy).await,
+            Err(e) => Err(e),
+        };
         self.update(id, |info| {
             info.probing = false;
             match result {
@@ -775,6 +780,21 @@ impl Manager {
         }
     }
 
+    /// Fetches the programs a video needs, if they are not here yet (see
+    /// `tools`); the download `id` shows how it goes.
+    pub async fn prepare_video(&self, id: u64) -> Result<(), String> {
+        let noted = AtomicBool::new(false);
+        let result = crate::tools::ensure(&self.client(), |note| {
+            noted.store(true, Ordering::Relaxed);
+            self.update(id, |info| info.note = Some(note));
+        })
+        .await;
+        if noted.load(Ordering::Relaxed) {
+            self.update(id, |info| info.note = None);
+        }
+        result
+    }
+
     /// Nothing that a restart would cut short: no download running, no
     /// pending one being checked, no checksum being computed.
     pub fn is_idle(&self) -> bool {
@@ -880,6 +900,8 @@ impl Manager {
                 // Before the state changes: a resume right after the job reports
                 // Paused installs a new token that must not be cleared here.
                 job.cancel = None;
+                // Paused while the video's programs were being fetched.
+                job.info.note = None;
                 let from_queue = job.from_queue;
                 // A paused download the queue started still belongs to it (see `queue_busy`).
                 if !matches!(result, JobResult::Paused) {

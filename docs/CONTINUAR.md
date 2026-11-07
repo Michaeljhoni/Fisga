@@ -63,6 +63,12 @@ Dados no Linux:
 - **Categorias**: Vídeos, Músicas, Imagens, Documentos, Compactados, Programas e Outros, cada uma
   numa subpasta de `~/Downloads` (dá para desligar).
 - **Limite de velocidade global**, que muda na hora, inclusive com download em andamento.
+- **Programas de vídeo** (`fisga-daemon/src/tools.rs`): no Windows e no macOS, `tools::ensure` baixa o
+  yt-dlp, o ffmpeg e o Deno no primeiro vídeo (antes do `yt-dlp -J` e do download), confere a SHA-256 e
+  guarda em `dirs::data_local_dir()/fisga/tools`; `DownloadInfo.note` mostra o andamento. `tools::yt_dlp()`
+  monta o comando com essa pasta na frente do PATH. Fica fora dos instaladores porque somariam mais de
+  100 MB, o yt-dlp envelheceria até a próxima versão e o Fisga teria de publicar o fonte do ffmpeg (GPL).
+  O CI baixa e roda tudo de verdade (`cargo test -p fisga-daemon -- --ignored`).
 - **Vídeos de sites via yt-dlp**:
   - Antes de confirmar, o daemon sonda com `yt-dlp -J`.
   - Um endereço que é uma lista (feed, busca, canal, playlist) é bloqueado.

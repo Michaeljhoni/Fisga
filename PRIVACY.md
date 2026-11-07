@@ -23,6 +23,13 @@ download.
 As preferências da extensão (mostrar o botão, capturar downloads, pedir confirmação) ficam no
 armazenamento local do navegador.
 
+## Programas de vídeo
+
+No Windows e no macOS, ao pedir o primeiro vídeo de um site, o aplicativo baixa o yt-dlp, o ffmpeg e
+o Deno das páginas de cada projeto no GitHub, e procura uma versão nova do yt-dlp no máximo uma vez
+por dia em que você baixar vídeos. Essas conexões não levam nenhum dado seu além do que qualquer
+download leva (o endereço IP, por exemplo).
+
 ## Permissões
 
 - **nativeMessaging**: falar com o aplicativo Fisga instalado no computador.
@@ -50,5 +57,10 @@ the page's address, and the cookies and headers the site requires to serve the f
 not send this data off your computer; the application only uses it to request the file from the
 same site, and cookies for videos are kept in a temporary file deleted when the download ends.
 The extension's preferences stay in the browser's local storage.
+
+On Windows and macOS, the first video you ask for makes the application fetch yt-dlp, ffmpeg and Deno
+from each project's GitHub pages, and it looks for a new yt-dlp at most once a day when you download
+videos. These connections carry nothing about you beyond what any download does (your IP address,
+for example).
 
 Questions: open an issue at <https://github.com/Michaeljhoni/Fisga/issues>.

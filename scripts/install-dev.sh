@@ -20,7 +20,7 @@ command -v update-desktop-database >/dev/null && update-desktop-database "$PREFI
 bash extension/build.sh
 
 missing=()
-for tool in yt-dlp ffmpeg notify-send; do
+for tool in yt-dlp ffmpeg deno notify-send; do
   command -v "$tool" >/dev/null || missing+=("$tool")
 done
 
@@ -37,7 +37,7 @@ EOF
 if [ ${#missing[@]} -gt 0 ]; then
   echo
   echo "Opcional, para vídeos de sites (YouTube etc.) e notificações: instale ${missing[*]}"
-  echo "  Arch: sudo pacman -S yt-dlp ffmpeg libnotify"
+  echo "  Arch: sudo pacman -S yt-dlp ffmpeg deno libnotify"
 fi
 case ":$PATH:" in
   *":$PREFIX/bin:"*) ;;

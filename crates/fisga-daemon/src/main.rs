@@ -6,6 +6,7 @@ mod gui;
 mod manager;
 mod notify;
 mod shell;
+mod tools;
 mod ytdlp;
 
 use std::io::IsTerminal;

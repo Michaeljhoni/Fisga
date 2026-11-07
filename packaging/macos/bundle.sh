@@ -122,3 +122,7 @@ ln -s /Applications "$stage/Applications"
 hdiutil create -quiet -volname Fisga -srcfolder "$stage" -ov -format UDZO "$out/Fisga-$version.dmg"
 rm -r "$stage"
 du -sh "$app" "$out/Fisga-$version.dmg"
+# The oldest macOS the app runs on is the newest any library asks for.
+for file in "$contents"/Frameworks/*.dylib; do
+  vtool -show-build "$file" | awk '$1 == "minos" { print $2 }'
+done | sort -V | tail -n 1 | sed 's/^/Needs macOS /'

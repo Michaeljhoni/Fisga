@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use fisga_i18n::{tr, trf};
-use fisga_ipc::{CHROME_EXTENSION_ID, FIREFOX_EXTENSION_ID, NATIVE_HOST_NAME};
+use fisga_ipc::{CHROME_EXTENSION_ID, CHROME_STORE_EXTENSION_ID, FIREFOX_EXTENSION_ID, NATIVE_HOST_NAME};
 use serde_json::json;
 
 /// Config dirs (under `~/.config`) of Chromium-based browsers.
@@ -73,8 +73,13 @@ const CHROMIUM_SYSTEM: &[&str] = &[
 const FIREFOX_SYSTEM: &[&str] = &["usr/lib/mozilla/native-messaging-hosts", "usr/lib/librewolf/native-messaging-hosts"];
 
 fn manifests(host: &Path, extra_chrome_ids: &[String]) -> (serde_json::Value, serde_json::Value) {
-    let mut origins = vec![format!("chrome-extension://{CHROME_EXTENSION_ID}/")];
-    origins.extend(extra_chrome_ids.iter().map(|id| format!("chrome-extension://{id}/")));
+    let mut origins = Vec::new();
+    for id in [CHROME_STORE_EXTENSION_ID, CHROME_EXTENSION_ID].into_iter().chain(extra_chrome_ids.iter().map(String::as_str)) {
+        let origin = format!("chrome-extension://{id}/");
+        if !origins.contains(&origin) {
+            origins.push(origin);
+        }
+    }
     let chrome = json!({
         "name": NATIVE_HOST_NAME,
         "description": "Fisga - integração com o navegador",
@@ -285,7 +290,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(chromium["path"], "/usr/bin/fisga-native-host");
-        assert_eq!(chromium["allowed_origins"][0], format!("chrome-extension://{CHROME_EXTENSION_ID}/"));
+        // The Chrome Web Store's extension and the one loaded unpacked.
+        assert_eq!(
+            chromium["allowed_origins"],
+            json!([format!("chrome-extension://{CHROME_STORE_EXTENSION_ID}/"), format!("chrome-extension://{CHROME_EXTENSION_ID}/")])
+        );
         let firefox: serde_json::Value = serde_json::from_slice(
             &std::fs::read(root.join("usr/lib/mozilla/native-messaging-hosts/io.fisga.native.json")).unwrap(),
         )

@@ -11,7 +11,7 @@ version="${1:?usage: bump-version.sh X.Y.Z}"
 
 sed -i "0,/^version = \".*\"$/s//version = \"$version\"/" Cargo.toml
 # The workspace crates' entries: the version line right after a fisga-* name.
-sed -i "/^name = \"fisga-[a-z-]*\"$/{n;s/^version = \".*\"$/version = \"$version\"/}" Cargo.lock
+sed -i "/^name = \"fisga-[a-z0-9-]*\"$/{n;s/^version = \".*\"$/version = \"$version\"/}" Cargo.lock
 sed -i "s/^  \"version\": \".*\",$/  \"version\": \"$version\",/" extension/manifest.chrome.json extension/manifest.firefox.json
 sed -i "s/^pkgver=.*/pkgver=$version/; s/^pkgrel=.*/pkgrel=1/" packaging/arch-bin/PKGBUILD
 

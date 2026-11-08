@@ -21,8 +21,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const NATIVE_HOST_NAME: &str = "io.fisga.native";
 /// Firefox extension id (`browser_specific_settings.gecko.id`).
 pub const FIREFOX_EXTENSION_ID: &str = "fisga@fisga.local";
-/// Chrome extension id, derived from the public `key` in `manifest.chrome.json`.
+/// Chrome extension id, derived from the public `key` in `manifest.chrome.json`:
+/// the extension loaded unpacked (from the packages or a checkout).
 pub const CHROME_EXTENSION_ID: &str = "ocifdbhjaijkdgcnpigjlemkmahkojcm";
+/// The id the Chrome Web Store gave the extension (it signs with its own key).
+pub const CHROME_STORE_EXTENSION_ID: &str = "jjpcgkejmdnabpjfdfeagdnobpimlhnb";
 
 /// How the daemon should fetch a URL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

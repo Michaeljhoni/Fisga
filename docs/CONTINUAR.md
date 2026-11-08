@@ -356,9 +356,10 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
      `extension/dist-store/`) traz o zip da Chrome Web Store (manifesto sem `key`, que a loja
      recusa) e o do addons.mozilla.org; enviar cada um como versão nova na sua loja. Os textos e
      as imagens das lojas estão em `extension/store/`, a política de privacidade em `PRIVACY.md`.
-- Lojas de extensão: a Chrome Web Store dá à extensão um ID próprio (não temos a chave privada do
-  `ocifdbhjaijkdgcnpigjlemkmahkojcm`, que segue valendo para a extensão carregada sem compactação);
-  quando ele existir, entra nos `allowed_origins` dos manifestos do native host (`hosts.rs`). No
+- Lojas de extensão: a Chrome Web Store deu à extensão o ID `jjpcgkejmdnabpjfdfeagdnobpimlhnb`
+  (`CHROME_STORE_EXTENSION_ID`); o `ocifdbhjaijkdgcnpigjlemkmahkojcm` (`CHROME_EXTENSION_ID`, da chave
+  do manifesto) segue valendo para a extensão carregada sem compactação. Os dois estão nos
+  `allowed_origins` dos manifestos do native host (`hosts.rs`). No
   Firefox o ID continua `fisga@fisga.local`; o manifesto declara `data_collection_permissions:
   none` (exigido do AMO para extensões novas), por isso pede Firefox 140+.
 - Windows e macOS: fase 1 feita (daemon, CLI e native host compilam e passam nos testes; o job

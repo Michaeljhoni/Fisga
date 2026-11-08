@@ -2,6 +2,20 @@
 
 Cada versão tem uma seção `## X.Y.Z`; o texto dela vira a descrição da release no GitHub.
 
+## 1.3.0
+
+- **Interface em inglês:** o Fisga fala português ou inglês, conforme o idioma do sistema. Para
+  escolher: Preferências → Geral → **Idioma** (vale a partir da próxima vez que o Fisga abrir), ou
+  `fisga settings --language en`. As pastas por tipo de arquivo seguem o idioma.
+- **Downloads por FTP:** links `ftp://` funcionam como os outros, com pausa e retomada. Entra como
+  anônimo, ou com o usuário e a senha do endereço (`ftp://usuario:senha@servidor/arquivo`). Não há
+  FTPS nem proxy para FTP.
+- **Extensão na Chrome Web Store:** o Fisga aceita a extensão instalada pela loja do Chrome (e do
+  Edge, Brave e Vivaldi). No Linux, quem rodou `fisga install-hosts` à mão roda de novo.
+- **Fechar o botão Baixar:** o **×** esconde o botão sobre aquele vídeo; ele volta no próximo vídeo,
+  e o popup da extensão tem **Mostrar de novo o botão Baixar nesta página**.
+- **Download concluído:** **Abrir pasta** também fecha a janela, como **Abrir**.
+
 ## 1.2.0
 
 - **Atualização automática:** uma vez por dia o Fisga procura uma versão nova e mostra uma faixa no

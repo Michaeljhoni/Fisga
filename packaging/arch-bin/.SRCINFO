@@ -21,8 +21,8 @@ pkgbase = fisga-bin
 	conflicts = fisga-git
 	options = !debug
 	source_x86_64 = https://github.com/Michaeljhoni/Fisga/releases/download/v1.3.0/fisga-1.3.0-x86_64.tar.gz
-	sha256sums_x86_64 = SKIP
+	sha256sums_x86_64 = d537d44314b4595deb840b4840a717949b70993ee4ed81993ad57133429d2cca
 	source_aarch64 = https://github.com/Michaeljhoni/Fisga/releases/download/v1.3.0/fisga-1.3.0-aarch64.tar.gz
-	sha256sums_aarch64 = SKIP
+	sha256sums_aarch64 = e447cda478e4158267bc975c0d5bdc7d59886169de6a84daeae2141c841c4824
 
 pkgname = fisga-bin

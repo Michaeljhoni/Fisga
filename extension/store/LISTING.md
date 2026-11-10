@@ -24,7 +24,7 @@ O Fisga acelera os downloads abrindo várias conexões para o mesmo arquivo. Ele
 O QUE A EXTENSÃO FAZ
 
 • Botão "Baixar" sobre vídeos e músicas: ao passar o mouse sobre um player, em qualquer site, aparece um botão no canto. Um clique manda a mídia para o Fisga; o × esconde o botão naquele vídeo.
-• Escolha do que baixar: a setinha ao lado do botão lista tudo o que foi detectado na página, como transmissões HLS/DASH e arquivos MP4 e MP3, além da opção de detectar automaticamente a melhor qualidade em sites como o YouTube.
+• Escolha do que baixar: a setinha ao lado do botão lista tudo o que foi detectado na página, como transmissões HLS/DASH e arquivos MP4 e MP3, além da opção de detectar automaticamente a melhor qualidade em sites de vídeo.
 • Captura dos downloads do navegador: ao clicar num link de arquivo (programas, compactados, vídeos, documentos…), o download vai para o Fisga em vez do baixador do navegador. Os tipos de arquivo e os sites que ficam de fora são escolhidos nas preferências do Fisga, e a captura pode ser desligada no popup.
 • Menu do botão direito: "Baixar link com o Fisga", "Baixar esta mídia com o Fisga", "Baixar todos os links com o Fisga" (você escolhe quais na lista) e "Baixar os links selecionados".
 • Tecla de atalho: segure Alt (ou a combinação escolhida no Fisga) ao clicar num link para mandá-lo ao Fisga, seja ele o que for.
@@ -60,7 +60,7 @@ Fisga speeds up downloads by opening several connections to the same file. It ca
 WHAT THE EXTENSION DOES
 
 • "Download" button over videos and music: hover a player on any site and a button appears in its corner. One click sends the media to Fisga; the × hides the button on that video.
-• Choose what to download: the arrow next to the button lists everything detected on the page, such as HLS/DASH streams and MP4 and MP3 files, plus automatic detection of the best quality on sites like YouTube.
+• Choose what to download: the arrow next to the button lists everything detected on the page, such as HLS/DASH streams and MP4 and MP3 files, plus automatic detection of the best quality on video sites.
 • Takes over browser downloads: when you click a link to a file (programs, archives, videos, documents…), the download goes to Fisga instead of the browser's downloader. The file types and the excluded sites are chosen in Fisga's preferences, and the takeover can be turned off in the popup.
 • Right-click menu: "Download link with Fisga", "Download this media with Fisga", "Download all links with Fisga" (you pick which ones from the list) and "Download selected links".
 • Shortcut key: hold Alt (or the combination chosen in Fisga) while clicking a link to send it to Fisga, whatever it is.
@@ -95,6 +95,14 @@ https://github.com/Michaeljhoni/Fisga/issues
 
 - **ID na loja:** `jjpcgkejmdnabpjfdfeagdnobpimlhnb` (está nos `allowed_origins` do native host
   desde a 1.3.0; enviar à análise um pacote só depois de publicada uma versão do Fisga com ele).
+- **O pacote não baixa do YouTube** (a loja recusou a 1.3.0 por isso): o `build.sh` tira o content
+  script do YouTube e recusa os endereços dele. Não citar o YouTube nos textos da loja, salvo o aviso
+  abaixo.
+- **Aviso na descrição** (só na Chrome Web Store, depois da lista "O que a extensão faz"):
+  > Por regra da Chrome Web Store, esta versão não baixa do YouTube.
+
+  Em inglês:
+  > Due to Chrome Web Store policy, this version does not download from YouTube.
 - **Categoria:** Ferramentas (Tools). **Idiomas:** inglês (o padrão) e português (Brasil), cada um
   com a sua descrição.
 - **Imagens:** ícone 128×128 (`extension/src/icons/icon-128.png`), bloco promocional pequeno
@@ -103,7 +111,8 @@ https://github.com/Michaeljhoni/Fisga/issues
 
 ```text
 This extension is the browser side of Fisga, a free download manager: https://github.com/Michaeljhoni/Fisga. It talks only to the Fisga app installed on the same computer, through native messaging (host "io.fisga.native"), and sends nothing to any server.
-To test: install Fisga 1.3.0 or later from https://github.com/Michaeljhoni/Fisga/releases (Windows installer, macOS .dmg, or Linux packages; on Linux run "fisga install-hosts"). Then open a page with a video (for example a YouTube video), hover the player and click "Download", or right-click a link and choose "Download link with Fisga". The "New download" window of the app opens. Without the app, the popup says the app was not found.
+To test: install Fisga 1.3.1 or later from https://github.com/Michaeljhoni/Fisga/releases (Windows installer, macOS .dmg, or Linux packages; on Linux run "fisga install-hosts"). Then open a page with a video, for example https://www.w3schools.com/html/html5_video.asp, hover the player and click "Download", or right-click a link and choose "Download link with Fisga". The "New download" window of the app opens. Without the app, the popup says the app was not found.
+This version does not work on YouTube, per the Chrome Web Store policy: the content script is excluded from YouTube pages, and the extension refuses YouTube addresses.
 ```
 
 **Aba "Práticas de privacidade":**

@@ -6,7 +6,7 @@
 # aur-fisga-bin artifact; commit those here and push them to the AUR.
 
 pkgname=fisga-bin
-pkgver=1.3.0
+pkgver=1.3.1
 pkgrel=1
 pkgdesc='Download manager with multiple connections, queues, a scheduler and a browser extension (prebuilt)'
 arch=('x86_64' 'aarch64')
@@ -28,8 +28,8 @@ conflicts=('fisga' 'fisga-git')
 options=('!debug')
 source_x86_64=("https://github.com/Michaeljhoni/Fisga/releases/download/v$pkgver/fisga-$pkgver-x86_64.tar.gz")
 source_aarch64=("https://github.com/Michaeljhoni/Fisga/releases/download/v$pkgver/fisga-$pkgver-aarch64.tar.gz")
-sha256sums_x86_64=('d537d44314b4595deb840b4840a717949b70993ee4ed81993ad57133429d2cca')
-sha256sums_aarch64=('e447cda478e4158267bc975c0d5bdc7d59886169de6a84daeae2141c841c4824')
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
 
 package() {
   cp -a --no-preserve=ownership "fisga-$pkgver-$CARCH/." "$pkgdir/"

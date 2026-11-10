@@ -354,9 +354,12 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
      para `packaging/arch-bin`, commit, e enviar ao AUR (`fisga-bin`).
   5. extensão: o artefato `extension-stores` da CI (ou `extension/build.sh`, em
      `extension/dist-store/`) traz o zip da Chrome Web Store (manifesto sem `key`, que a loja
-     recusa) e o do addons.mozilla.org; enviar cada um como versão nova na sua loja. Os textos e
+     recusa, e sem YouTube: `exclude_matches` no content script e `BLOCKED_HOSTS` preenchido no
+     background, ambos pelo `build.sh`) e o do addons.mozilla.org; enviar cada um como versão nova na sua loja. Os textos e
      as imagens das lojas estão em `extension/store/`, a política de privacidade em `PRIVACY.md`.
-- Lojas de extensão: a Chrome Web Store deu à extensão o ID `jjpcgkejmdnabpjfdfeagdnobpimlhnb`
+- Lojas de extensão: a Chrome Web Store recusou a 1.3.0 em 10/11/2026 por "facilitar download do
+  YouTube" (política de produtos proibidos) e manteve a recusa na contestação; daí o pacote da loja
+  sem YouTube, desde a 1.3.1 (o cenário `store` do `real-clicks.mjs` confere). A loja deu à extensão o ID `jjpcgkejmdnabpjfdfeagdnobpimlhnb`
   (`CHROME_STORE_EXTENSION_ID`); o `ocifdbhjaijkdgcnpigjlemkmahkojcm` (`CHROME_EXTENSION_ID`, da chave
   do manifesto) segue valendo para a extensão carregada sem compactação. Os dois estão nos
   `allowed_origins` dos manifestos do native host (`hosts.rs`). No

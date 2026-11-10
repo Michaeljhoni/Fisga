@@ -8,7 +8,8 @@
 // Usage: node extension/test/real-clicks.mjs <extension-dir> <label> [scenario...]
 //   scenarios: search, menu-search, watch, spa (search -> click a video -> button), home,
 //   takeover (a .safetensors download, named only by Content-Disposition), force (Alt+click on a link),
-//   dismiss (the × hides the button; the popup and the next video bring it back)
+//   dismiss (the × hides the button; the popup and the next video bring it back),
+//   store (the Chrome Web Store package: nothing on YouTube, the rest still works)
 //   CHROME=/path/to/chrome overrides the browser; results go to extension/test/out/<label>/.
 import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -420,7 +421,8 @@ async function localSite() {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(`<!doctype html><body style="font:20px sans-serif;padding:40px">
         <p><a id="model" href="/api/download/models/1">Baixar modelo</a></p>
-        <p><a id="page" href="/outra-pagina">Uma página qualquer</a></p></body>`);
+        <p><a id="page" href="/outra-pagina">Uma página qualquer</a></p>
+        <p><a id="yt" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ">Um vídeo do YouTube</a></p></body>`);
     } else if (req.url === "/api/download/models/1") {
       res.writeHead(307, { location: "/storage/a1b2c3?X-Amz-Signature=abc" });
       res.end();
@@ -487,6 +489,48 @@ async function forceScenario(sw, base) {
   return { name: "force", results: [{ expected: base + "/outra-pagina", sent: msg, stayedAt: at, plainClick: plain }] };
 }
 
+// The Chrome Web Store package (dist-store): on YouTube no button and no
+// media, and YouTube addresses are refused; a link elsewhere still goes.
+async function storeScenario(sw) {
+  const url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+  log(`--- store: ${url}`);
+  const page = await openPage(url);
+  const steps = {};
+  const player = await evaluate(page, PLAYER);
+  steps.hasPlayer = Boolean(player);
+  if (player) {
+    await moveTo(page, player.x, player.y);
+    await sleep(1500);
+  }
+  steps.buttonOnYoutube = await evaluate(page, "Boolean(document.querySelector('fisga-download-button'))");
+  steps.popup = await evaluate(sw, "chrome.tabs.query({ active: true }).then(([tab]) => handle({ type: 'popup-candidates', tabId: tab.id }, {}))");
+  const before = (await sent(sw)).length;
+  steps.forceYoutube = await evaluate(sw, `forceLink({ url: ${JSON.stringify(url)} }, {}).then(() => "sent", e => e.message)`);
+  steps.menuYoutubeMedia = await evaluate(
+    sw,
+    `chrome.tabs.query({ active: true }).then(([tab]) => downloadMedia({ pageUrl: tab.url }, { tab, url: tab.url, frameId: 0 })).then(() => "sent", e => e.message)`,
+  );
+  await shot(page, "store-youtube");
+
+  const { server, base } = await localSite();
+  const local = await openPage(base + "/");
+  for (const id of ["yt", "page"]) {
+    const box = await linkBox(local, id);
+    await mouse(local, "mouseMoved", box.x, box.y);
+    await mouse(local, "mousePressed", box.x, box.y, { button: "left", clickCount: 1, modifiers: 1 });
+    await mouse(local, "mouseReleased", box.x, box.y, { button: "left", clickCount: 1, modifiers: 1 });
+    await sleep(2000);
+  }
+  server.close();
+  steps.sent = (await sent(sw)).slice(before);
+  steps.pass =
+    !steps.buttonOnYoutube && steps.popup?.blocked === true && steps.popup.items.length === 0 &&
+    steps.forceYoutube !== "sent" && steps.menuYoutubeMedia !== "sent" &&
+    steps.sent.length === 1 && steps.sent[0].url === base + "/outra-pagina";
+  log(JSON.stringify(steps));
+  return { name: "store", steps };
+}
+
 try {
   ({ id: extId } = await cdp.send("Extensions.loadUnpacked", { path: resolve(extDir) }));
   log(`extension loaded: ${extId}`);
@@ -502,6 +546,7 @@ try {
     if (s === "watch") report.push(await watchScenario(sw));
     if (s === "spa") report.push(await spaScenario(sw));
     if (s === "dismiss") report.push(await dismissScenario());
+    if (s === "store") report.push(await storeScenario(sw));
     if (s === "takeover" || s === "force") {
       const { server, base } = await localSite();
       report.push(await (s === "takeover" ? takeoverScenario : forceScenario)(sw, base));

@@ -32,6 +32,9 @@ const PAGE_EXTRACTOR_HOSTS = [
   "instagram.com", "facebook.com", "tiktok.com", "x.com", "twitter.com", "reddit.com",
   "soundcloud.com", "bilibili.com", "bandcamp.com", "rumble.com", "kick.com",
 ];
+// Sites this build never downloads from. Empty here; the Chrome Web Store
+// package lists YouTube in it (build.sh), as that store's rules require.
+const BLOCKED_HOSTS = [];
 // Hosts whose media responses are fragments, never whole files.
 const IGNORED_MEDIA_HOSTS = ["googlevideo.com", "fbcdn.net", "cdninstagram.com"];
 
@@ -53,6 +56,11 @@ function parseUrl(url) {
   } catch {
     return null;
   }
+}
+/** On a site this build does not download from (or a subdomain of one). */
+function isBlocked(url) {
+  const u = parseUrl(url ?? "");
+  return Boolean(u && hostMatches(u.hostname.toLowerCase(), BLOCKED_HOSTS));
 }
 function isExtractorPage(url) {
   const u = parseUrl(url);
@@ -195,6 +203,7 @@ async function record(tabId, frameId, candidate) {
 
 api.webRequest.onHeadersReceived.addListener(
   (details) => {
+    if (isBlocked(details.initiator ?? details.documentUrl)) return;
     const candidate = classify(details);
     if (candidate) record(details.tabId, details.frameId, candidate);
   },
@@ -243,6 +252,7 @@ function describe(candidate) {
 }
 
 async function candidatesFor(tabId, frameUrl, tabUrl, linkUrl) {
+  if (isBlocked(tabUrl) || isBlocked(frameUrl)) return [];
   await restore();
   const items = [];
   let pageUrl = isExtractorPage(frameUrl) ? frameUrl : tabUrl;
@@ -260,7 +270,7 @@ async function candidatesFor(tabId, frameUrl, tabUrl, linkUrl) {
     return a.kind === "stream" ? a.ts - b.ts : (b.size ?? 0) - (a.size ?? 0);
   });
   items.push(...sniffed.map(describe));
-  return items;
+  return items.filter((item) => !isBlocked(item.url));
 }
 
 /**
@@ -317,6 +327,9 @@ async function cookiesFor(url) {
 
 /** Resolves to { id, pending }: pending = the app is asking the user to confirm. */
 async function sendToApp(payload) {
+  if (isBlocked(payload.url)) {
+    throw new Error(message("blockedSite", "Esta versão da extensão, da Chrome Web Store, não baixa do YouTube."));
+  }
   const prefs = await settings();
   let reply;
   try {
@@ -382,7 +395,7 @@ async function handle(msg, sender) {
       return downloadMedia(msg, sender);
     case "popup-candidates": {
       const tab = await api.tabs.get(msg.tabId);
-      return { ok: true, items: await candidatesFor(tab.id, tab.url, tab.url) };
+      return { ok: true, items: await candidatesFor(tab.id, tab.url, tab.url), blocked: isBlocked(tab.url) };
     }
     case "popup-download": {
       const tab = await api.tabs.get(msg.tabId);
@@ -517,7 +530,7 @@ api.runtime.onInstalled.addListener(async () => {
 /** The links of the clicked frame (or the selected ones) go to the app, which lists them to pick from. */
 async function sendLinks(info, tab, onlySelected) {
   const reply = await api.tabs.sendMessage(tab.id, { type: "collect-links", selection: onlySelected }, { frameId: info.frameId ?? 0 });
-  const links = reply?.links ?? [];
+  const links = (reply?.links ?? []).filter((url) => !isBlocked(url));
   if (!links.length) throw new Error("nenhum link na página");
   const answer = await api.runtime.sendNativeMessage(HOST, { type: "links", pageUrl: info.frameUrl || info.pageUrl || tab.url, links });
   if (answer?.type !== "shown") throw new Error(answer?.message || "resposta inválida do app");

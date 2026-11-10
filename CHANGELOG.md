@@ -2,6 +2,13 @@
 
 Cada versão tem uma seção `## X.Y.Z`; o texto dela vira a descrição da release no GitHub.
 
+## 1.3.1
+
+- **Extensão da Chrome Web Store sem YouTube:** as regras da loja do Chrome proíbem baixar do
+  YouTube, então a versão da loja não mostra o botão **Baixar** no YouTube e não manda endereços dele
+  ao Fisga. Continuam baixando do YouTube a extensão que vem com o Fisga (carregada sem compactação),
+  a do Firefox e o próprio Fisga (cole o link em **Adicionar URL**).
+
 ## 1.3.0
 
 - **Interface em inglês:** o Fisga fala português ou inglês, conforme o idioma do sistema. Para

@@ -100,7 +100,8 @@ deles no PATH fica com o seu.
   (em análise pela Mozilla; até sair, use o modo de desenvolvedor abaixo).
 - **Chrome, Edge, Brave, Vivaldi:** a Chrome Web Store vem em breve. Por enquanto, abra
   `chrome://extensions`, ligue o **Modo do desenvolvedor**, clique em **Carregar sem compactação** e
-  escolha a pasta `chrome` da extensão.
+  escolha a pasta `chrome` da extensão. A versão da Chrome Web Store não baixa do YouTube (regra da
+  loja); a da pasta `chrome`, sim.
 - **Firefox, modo de desenvolvedor:** `about:debugging` → **Este Firefox** → **Carregar extensão
   temporária** → o `manifest.json` da pasta `firefox` (sai quando o Firefox fecha).
 

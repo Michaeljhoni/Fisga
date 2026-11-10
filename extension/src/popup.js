@@ -45,7 +45,8 @@ async function init() {
 
   const res = await api.runtime.sendMessage({ type: "popup-candidates", tabId: tab.id });
   const items = res?.items ?? [];
-  $("empty").hidden = items.length > 1;
+  $("blocked").hidden = !res?.blocked;
+  $("empty").hidden = items.length > 1 || Boolean(res?.blocked);
   $("media").replaceChildren(
     ...items.map((item) => {
       const li = document.createElement("li");

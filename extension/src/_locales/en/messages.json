@@ -27,5 +27,6 @@
   "popupMedia": { "message": "Media on this page" },
   "popupNoMedia": { "message": "No media detected on this page." },
   "popupGrant": { "message": "Allow access to all sites" },
-  "popupGrantHint": { "message": "Firefox needs permission to see the videos on the pages." }
+  "popupGrantHint": { "message": "Firefox needs permission to see the videos on the pages." },
+  "blockedSite": { "message": "This version of the extension, from the Chrome Web Store, does not download from YouTube." }
 }

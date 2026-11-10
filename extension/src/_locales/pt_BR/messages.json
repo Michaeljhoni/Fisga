@@ -27,5 +27,6 @@
   "popupMedia": { "message": "Mídias nesta página" },
   "popupNoMedia": { "message": "Nenhuma mídia detectada nesta página." },
   "popupGrant": { "message": "Permitir acesso a todos os sites" },
-  "popupGrantHint": { "message": "O Firefox precisa de permissão para ver os vídeos das páginas." }
+  "popupGrantHint": { "message": "O Firefox precisa de permissão para ver os vídeos das páginas." },
+  "blockedSite": { "message": "Esta versão da extensão, da Chrome Web Store, não baixa do YouTube." }
 }

@@ -13,7 +13,9 @@ na página (stream HLS/DASH, arquivos MP4/MP3, ou "detectar automaticamente", qu
 sites como YouTube). O **×** esconde o botão naquele vídeo; ele volta sozinho no próximo vídeo
 (mesmo quando o site troca de vídeo sem recarregar, como o YouTube), e o popup da extensão tem
 **Mostrar de novo o botão Baixar nesta página**. O popup também lista as mídias detectadas na aba,
-para baixar sem o botão.
+para baixar sem o botão. A extensão da Chrome Web Store é a exceção: pelas regras da loja, ela não
+funciona no YouTube (sem botão, e os endereços do YouTube são recusados); a que vem com o Fisga,
+carregada sem compactação, e a do Firefox funcionam.
 
 ## Peças
 

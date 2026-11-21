@@ -110,6 +110,8 @@ pub struct Manager {
     logins_path: PathBuf,
     store: PathBuf,
     dirty: AtomicBool,
+    /// One save at a time (see `save`).
+    saving: Mutex<()>,
     /// The final path of each unfinished direct download, from the moment it
     /// is chosen: no other download takes that name or its `.fisga-part`.
     paths: Arc<fisga_core::filename::Paths>,
@@ -234,8 +236,7 @@ fn display_name(request: &AddRequest) -> String {
 impl Manager {
     pub fn load(store: PathBuf, settings_path: PathBuf) -> anyhow::Result<Arc<Self>> {
         let mut inner = Inner { next_id: 1, jobs: BTreeMap::new() };
-        if let Ok(data) = std::fs::read(&store) {
-            let stored: Stored = serde_json::from_slice(&data).context(tr!("downloads.json inválido"))?;
+        if let Some(stored) = load_store(&store) {
             inner.next_id = stored.next_id;
             for StoredJob { mut info, request } in stored.jobs {
                 if info.state == State::Running {
@@ -291,6 +292,7 @@ impl Manager {
             logins_path,
             store,
             dirty: AtomicBool::new(false),
+            saving: Mutex::new(()),
             paths,
             limiter: Arc::new(fisga_core::RateLimiter::new(settings.speed_limit)),
             scheduler: Mutex::new(scheduler::Scheduler::new(&settings, LocalTime::now(), saved)),
@@ -1079,6 +1081,11 @@ impl Manager {
     }
 
     pub fn save(&self) {
+        // One at a time, each with the list as it is when its turn comes: an
+        // older list never replaces a newer one.
+        let _saving = self.saving.lock().unwrap();
+        // Before the copy: a change made meanwhile marks the list again.
+        self.dirty.store(false, Ordering::Relaxed);
         let stored = {
             let inner = self.inner.lock().unwrap();
             Stored {
@@ -1094,8 +1101,10 @@ impl Manager {
                     .collect(),
             }
         };
-        self.dirty.store(false, Ordering::Relaxed);
+        keep_backup(&self.store);
         if let Err(e) = write_json(&self.store, &stored, 0o600) {
+            // The autosave tries again.
+            self.dirty.store(true, Ordering::Relaxed);
             tracing::warn!(error = %e, "não foi possível salvar a lista de downloads");
         }
     }
@@ -1127,17 +1136,80 @@ impl Manager {
     }
 }
 
-/// Atomic write (temporary file + rename).
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// The list as the save before the last one left it.
+fn backup_path(store: &Path) -> PathBuf {
+    with_suffix(store, ".bak")
+}
+
+/// Keeps the list being replaced as `downloads.json.bak` (a hard link: no
+/// copy, and the list is never missing meanwhile).
+fn keep_backup(store: &Path) {
+    if !store.exists() {
+        return;
+    }
+    let backup = backup_path(store);
+    let _ = std::fs::remove_file(&backup);
+    if std::fs::hard_link(store, &backup).is_err() {
+        let _ = std::fs::copy(store, &backup);
+    }
+}
+
+/// The saved list. One that cannot be read is set aside, never overwritten,
+/// and the backup of the save before it is used instead (else nothing):
+/// the daemon starts either way.
+fn load_store(store: &Path) -> Option<Stored> {
+    let data = std::fs::read(store).ok()?;
+    let error = match serde_json::from_slice::<Stored>(&data) {
+        Ok(stored) => return Some(stored),
+        Err(error) => error,
+    };
+    let aside = with_suffix(store, &format!(".invalid-{}", now()));
+    if std::fs::rename(store, &aside).is_err() {
+        let _ = std::fs::write(&aside, &data);
+    }
+    let backup = std::fs::read(backup_path(store)).ok().and_then(|data| serde_json::from_slice::<Stored>(&data).ok());
+    tracing::warn!(
+        %error,
+        aside = %aside.display(),
+        backup = backup.is_some(),
+        "downloads.json ilegível; guardado à parte, a lista volta da cópia anterior (se houver)"
+    );
+    backup
+}
+
+/// Atomic and durable write: a temporary file, on disk before it is renamed
+/// over the old one (and on Unix the folder synced), so a crash or a power
+/// cut leaves the old file or the new one, never an empty or torn one.
 fn write_json(path: &Path, value: &impl Serialize, mode: u32) -> anyhow::Result<()> {
-    use std::io::Write;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    // One temporary file per write: two saves at the same time (the autosave
-    // and an action) must not rename each other's.
+    // One temporary file per write: two files saved at the same time must
+    // not rename each other's.
     static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = WRITES.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_extension(format!("json.{}.{n}.tmp", std::process::id()));
+    let data = serde_json::to_vec_pretty(value)?;
+    if let Err(e) = write_synced(&tmp, &data, mode).and_then(|()| std::fs::rename(&tmp, path)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    #[cfg(unix)]
+    if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        let _ = std::fs::File::open(dir).and_then(|dir| dir.sync_all());
+    }
+    Ok(())
+}
+
+/// A new file holding `data`, on disk when this returns.
+fn write_synced(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
+    use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
     options.create(true).write(true).truncate(true);
     // On Windows the file takes the access of its folder, private to the user.
@@ -1145,10 +1217,9 @@ fn write_json(path: &Path, value: &impl Serialize, mode: u32) -> anyhow::Result<
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
     #[cfg(not(unix))]
     let _ = mode;
-    let mut file = options.open(&tmp)?;
-    file.write_all(&serde_json::to_vec_pretty(value)?)?;
-    std::fs::rename(tmp, path)?;
-    Ok(())
+    let mut file = options.open(path)?;
+    file.write_all(data)?;
+    file.sync_all()
 }
 
 /// Referer, User-Agent, Cookie and extra headers captured by the browser.
@@ -1450,6 +1521,34 @@ mod tests {
         manager.save();
         let reloaded = Manager::load(manager.store.clone(), manager.settings_path.clone()).unwrap();
         assert_eq!(reloaded.state(id), Some(State::Pending));
+    }
+
+    #[tokio::test]
+    async fn a_broken_list_is_set_aside_and_the_backup_used() {
+        let manager = manager();
+        let first = add_to(&manager, MAIN_QUEUE, false);
+        // This save keeps the list with `first` alone as the backup.
+        let second = add_to(&manager, MAIN_QUEUE, false);
+        let store = manager.store.clone();
+        let broken = b"{\"next_id\": 3, \"jobs\": [";
+        std::fs::write(&store, broken).unwrap();
+
+        let reloaded = Manager::load(store.clone(), manager.settings_path.clone()).unwrap();
+        assert_eq!(reloaded.state(first), Some(State::Paused));
+        assert_eq!(reloaded.state(second), None, "as the save before the last one left it");
+        let aside: Vec<PathBuf> = std::fs::read_dir(store.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.to_string_lossy().contains("downloads.json.invalid-"))
+            .collect();
+        assert_eq!(aside.len(), 1, "{aside:?}");
+        assert_eq!(std::fs::read(&aside[0]).unwrap(), broken, "kept for whoever wants to look at it");
+
+        // Without a backup the daemon still starts, with an empty list.
+        std::fs::write(&store, b"nada").unwrap();
+        std::fs::remove_file(backup_path(&store)).unwrap();
+        assert!(Manager::load(store, manager.settings_path.clone()).unwrap().list().is_empty());
     }
 
     #[tokio::test]

@@ -112,9 +112,6 @@ URL inválida
 esquema não suportado: {}
 = unsupported scheme: {}
 
-downloads.json inválido
-= invalid downloads.json
-
 a pasta de downloads precisa ser um caminho absoluto
 = the downloads folder must be an absolute path
 

@@ -8,6 +8,10 @@
 // Usage: node extension/test/real-clicks.mjs <extension-dir> <label> [scenario...]
 //   scenarios: search, menu-search, watch, spa (search -> click a video -> button), home,
 //   takeover (a .safetensors download, named only by Content-Disposition), force (Alt+click on a link),
+//   takeover-fallback (app missing, app refusing, a download that finished first: the browser keeps it),
+//   fake-force (a page's synthetic Alt+click sends nothing),
+//   two-players (two blob: players in one frame: each sends its own playlist),
+//   shadow (players inside open and closed shadow roots get the button),
 //   dismiss (the × hides the button; the popup and the next video bring it back),
 //   store (the Chrome Web Store package: nothing on YouTube, the rest still works),
 //   gallery (the media gallery on a local page: what it finds, the originals, what it sends),
@@ -535,8 +539,10 @@ async function galleryScenario(sw) {
   log(`--- gallery: ${base}`);
   await openPage(base + "/");
   const { sessionId: gallery, targetId } = await openGallery(sw);
-  await sleep(2500); // the originals' checks
-  const state = await evaluate(gallery, GALLERY_STATE());
+  await sleep(2500);
+  // A tab's cards are checked (originals, sizes) only once the tab shows:
+  // long enough on each for those checks to finish.
+  const state = await evaluate(gallery, GALLERY_STATE(1000));
   await evaluate(gallery, "document.querySelector('[data-tab=image]').click()");
   await sleep(300);
   await shot(gallery, "gallery-photos");

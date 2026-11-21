@@ -1,5 +1,6 @@
 // The background script's rules (src/background.js), run in a VM with a fake
-// extension API.   node --test extension/test/
+// extension API.
+//   node --test "extension/test/*.test.mjs"   (Node 22+; Node 20: node --test extension/test/)
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

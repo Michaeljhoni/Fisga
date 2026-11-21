@@ -1,5 +1,5 @@
 // The thumbnail → original rules of the media gallery (src/fullsize.js).
-//   node --test extension/test/
+//   node --test "extension/test/*.test.mjs"   (Node 22+; Node 20: node --test extension/test/)
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";

@@ -73,8 +73,12 @@ jobs:
       - name: Unit and integration tests
         run: cargo test --workspace --exclude fisga-gui --locked
 
-      - name: The video tools, from their real releases
+      # gallery-dl's macOS builds are found through GitHub's API, whose limit
+      # for anonymous requests the runners share (tools.rs reads the token).
+      - name: The video tools and gallery-dl, from their real releases
         run: cargo test -p fisga-daemon --locked -- --ignored --nocapture
+        env:
+          FISGA_GITHUB_TOKEN: ${{ github.token }}
 
       - name: Clippy
         run: cargo clippy --workspace --exclude fisga-gui --all-targets

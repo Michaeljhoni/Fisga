@@ -167,7 +167,11 @@ fn apply_proxy(command: &mut Command, proxy: &ProxySettings) {
 
 /// The command that lists the files at the gallery's address.
 fn command(request: &AddRequest, cookies: Option<&Path>, proxy: &ProxySettings) -> Command {
-    let mut command = crate::tools::gallery_dl();
+    listing(crate::tools::gallery_dl(), request, cookies, proxy)
+}
+
+/// `program` (a gallery-dl) asked to list the files at the gallery's address.
+pub(crate) fn listing(mut command: Command, request: &AddRequest, cookies: Option<&Path>, proxy: &ProxySettings) -> Command {
     command
         // One line per file, instead of the file; nothing else on stdout.
         .args(["--print", PRINT])

@@ -351,9 +351,18 @@ impl Source {
     }
 }
 
-/// The body of a page, as text.
+/// The body of a page, as text. GitHub's API answers 60 requests an hour
+/// without a login, per network address: machines that share one (the CI's)
+/// run out. `$FISGA_GITHUB_TOKEN`, when set, goes with the requests to it,
+/// and only to it; nothing else sends one.
 async fn text(client: &reqwest::Client, url: &str) -> Result<String, String> {
-    let response = client.get(url).send().await.and_then(|r| r.error_for_status()).map_err(|e| e.to_string())?;
+    let mut request = client.get(url);
+    if url.starts_with("https://api.github.com/") {
+        if let Some(token) = std::env::var("FISGA_GITHUB_TOKEN").ok().filter(|token| !token.is_empty()) {
+            request = request.bearer_auth(token);
+        }
+    }
+    let response = request.send().await.and_then(|r| r.error_for_status()).map_err(|e| e.to_string())?;
     response.text().await.map_err(|e| e.to_string())
 }
 
@@ -720,6 +729,25 @@ mod tests {
             let text = String::from_utf8_lossy(&output.stdout);
             println!("{}: {}", tool.name, text.lines().next().unwrap_or(""));
             assert!(output.status.success(), "{}: {output:?}", tool.name);
+        }
+        // gallery-dl as the gallery runs it, and the line it prints for each
+        // file (a direct link: nothing is asked of the network).
+        if let Some(tool) = gallery_dl_plan().first() {
+            let request = fisga_ipc::AddRequest {
+                url: "https://example.org/fisga/foto%20de%20teste%C3%A9.JPG?x=1&y=2".into(),
+                user_agent: Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64)".into()),
+                ..Default::default()
+            };
+            let none = fisga_ipc::ProxySettings { mode: fisga_ipc::ProxyMode::None, ..Default::default() };
+            let mut command = crate::gallery::listing(crate::shell::program(dir.join(&tool.program)), &request, None, &none);
+            let output = command.output().await.unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            println!("gallery-dl --print: {stdout}{}", String::from_utf8_lossy(&output.stderr));
+            assert!(output.status.success(), "{output:?}");
+            let found: Vec<_> = stdout.lines().filter_map(crate::gallery::parse_line).collect();
+            assert_eq!(found.len(), 1, "{stdout}");
+            assert_eq!(found[0].url, request.url);
+            assert_eq!(found[0].name.as_deref(), Some("foto de testeé.jpg"));
         }
         if dir.exists() {
             std::fs::remove_dir_all(dir).unwrap();

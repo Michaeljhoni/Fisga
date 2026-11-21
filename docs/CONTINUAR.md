@@ -73,7 +73,9 @@ Dados no Linux:
   `releases/latest` da API (Codeberg no Windows, com o `SHA256SUMS` da release; no macOS as compilações
   diárias de `gdl-org/builds` no GitHub, com o `digest` do asset), e arquivo e soma saem da mesma
   resposta. O primeiro programa de cada kit (yt-dlp, gallery-dl) é atualizado no máximo uma vez por dia
-  (`<programa>.checked`).
+  (`<programa>.checked`). A API do GitHub atende 60 pedidos por hora sem login, por IP, e os runners de
+  macOS do CI dividem IPs: o CI define `FISGA_GITHUB_TOKEN` (o token do workflow), que só vai nos
+  pedidos à `api.github.com`; sem ela, nenhum token é enviado.
 - **Posts e perfis pelo gallery-dl** (`gallery.rs`, `manager/gallery_files.rs`): a galeria da
   extensão manda o post ou perfil como `SourceKind::Gallery` (`media-batch`). Ao rodar, o job chama
   `gallery-dl --print 'prepare:FISGAFILE\t{_url!j}\t{filename!j}\t{extension!j}'` (lista sem baixar;

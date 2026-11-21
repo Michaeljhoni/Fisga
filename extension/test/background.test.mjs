@@ -195,3 +195,96 @@ test("the button sends the stream its own player loaded", async () => {
   assert.equal((await pick(bg, {})).url, a, "no load time: the page's first manifest");
   assert.equal((await pick(bg, { loadedAt: 5000 })).url, b, "nothing loaded since: the latest");
 });
+
+test("single videos and lists, site by site", () => {
+  const bg = load();
+  const single = (url) => bg.run(`isSingleVideoPage(${JSON.stringify(url)})`);
+  for (const url of [
+    "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "https://youtu.be/jNQXAC9IVRw",
+    "https://vimeo.com/123456789",
+    "https://vimeo.com/channels/staffpicks/123456789",
+    "https://player.vimeo.com/video/123456789",
+    "https://www.dailymotion.com/video/x8abcd",
+    "https://www.instagram.com/reel/C1a2b3c4/",
+    "https://www.instagram.com/p/C1a2b3c4/",
+    "https://www.tiktok.com/@someone/video/7234567890123456789",
+    "https://vm.tiktok.com/ZMabc123/",
+    "https://www.facebook.com/watch/?v=123456",
+    "https://www.facebook.com/somepage/videos/123456/",
+    "https://www.twitch.tv/videos/123456",
+    "https://www.twitch.tv/somechannel",
+    "https://x.com/someone/status/1234567890",
+    "https://twitter.com/someone/status/1234567890/video/1",
+    "https://www.reddit.com/r/videos/comments/abc123/a_title/",
+    "https://www.bilibili.com/video/BV1xx411c7mD",
+    "https://rumble.com/v4abc-some-video.html",
+    "https://soundcloud.com/artist/a-track",
+    "https://artist.bandcamp.com/track/a-track",
+    "https://kick.com/somechannel",
+    "https://example.com/any/page",
+  ]) {
+    assert.equal(single(url), true, url);
+  }
+  for (const url of [
+    "https://www.youtube.com/",
+    "https://www.youtube.com/results?search_query=cats",
+    "https://www.youtube.com/@channel",
+    "https://vimeo.com/channels/staffpicks",
+    "https://vimeo.com/someone",
+    "https://vimeo.com/showcase/1234567",
+    "https://www.dailymotion.com/someone",
+    "https://www.instagram.com/",
+    "https://www.instagram.com/someone/",
+    "https://www.tiktok.com/@someone",
+    "https://www.tiktok.com/foryou",
+    "https://www.facebook.com/",
+    "https://www.facebook.com/watch/",
+    "https://www.twitch.tv/",
+    "https://www.twitch.tv/directory",
+    "https://www.twitch.tv/somechannel/videos",
+    "https://x.com/home",
+    "https://x.com/someone",
+    "https://www.reddit.com/",
+    "https://www.reddit.com/r/videos/",
+    "https://www.bilibili.com/",
+    "https://rumble.com/c/somechannel",
+    "https://soundcloud.com/artist",
+    "https://soundcloud.com/artist/sets/an-album",
+    "https://artist.bandcamp.com/album/an-album",
+    "https://kick.com/",
+  ]) {
+    assert.equal(single(url), false, url);
+  }
+});
+
+test("in a feed, the button sends the video the preview links to", async () => {
+  const bg = load();
+  const feed = "https://www.tiktok.com/@someone";
+  const video = "https://www.tiktok.com/@someone/video/7234567890123456789";
+  const sender = { tab: { id: 1, url: feed }, frameId: 0 };
+  assert.equal((await pick(bg, { pageUrl: feed, linkUrl: video }, sender)).url, video);
+  await assert.rejects(pick(bg, { pageUrl: feed, linkUrl: "https://www.tiktok.com/@other" }, sender), "a profile is no video");
+  const reddit = "https://www.reddit.com/";
+  const post = "https://www.reddit.com/r/videos/comments/abc123/a_title/";
+  assert.equal((await pick(bg, { pageUrl: reddit, linkUrl: post }, { tab: { id: 1, url: reddit }, frameId: 0 })).url, post);
+  const own = "https://vimeo.com/123456789";
+  const other = "https://vimeo.com/987654321";
+  assert.equal((await pick(bg, { pageUrl: own, linkUrl: other }, { tab: { id: 1, url: own }, frameId: 0 })).url, own, "a video's own page wins");
+});
+
+test("the link menu sends a video's page to yt-dlp, not its HTML", async () => {
+  const bg = load();
+  const tab = { id: 1, url: "https://blog.example/" };
+  for (const linkUrl of ["https://vimeo.com/123456789", "https://www.tiktok.com/@someone", "https://files.example/a.zip"]) {
+    await bg.chrome.contextMenus.onClicked.fire({ menuItemId: "fisga-link", linkUrl, pageUrl: tab.url }, tab);
+  }
+  assert.deepEqual(
+    bg.sent.filter((m) => m.type === "download").map((m) => [m.url, m.kind]),
+    [
+      ["https://vimeo.com/123456789", "page"],
+      ["https://www.tiktok.com/@someone", "direct"],
+      ["https://files.example/a.zip", "direct"],
+    ],
+  );
+});

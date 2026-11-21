@@ -421,11 +421,12 @@
   }
 
   // Links that point at a single video. Feed previews (YouTube home, search,
-  // channel pages) play inside or next to a card that links to the video;
-  // without it the button would send the feed itself.
+  // channel pages, Reddit) play inside or next to a card that links to the
+  // video; without it the button would send the feed itself.
   const VIDEO_LINK =
     'a[href*="/watch?v="], a[href*="/shorts/"], a[href*="/live/"], a[href*="youtu.be/"], ' +
-    'a[href*="vimeo.com/"], a[href*="/video/"], a[href*="/videos/"], a[href*="/reel/"], a[href*="/clip/"]';
+    'a[href*="vimeo.com/"], a[href*="/video/"], a[href*="/videos/"], a[href*="/reel/"], a[href*="/clip/"], ' +
+    'a[href*="/comments/"]';
   const MAX_LINK_DEPTH = 14;
 
   function parentOf(node) {

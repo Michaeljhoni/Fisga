@@ -67,20 +67,82 @@ function isExtractorPage(url) {
   return Boolean(u && /^https?:$/.test(u.protocol) && hostMatches(u.hostname, PAGE_EXTRACTOR_HOSTS));
 }
 
-// YouTube pages that are lists (home, search, channels, feeds) rather than one
-// video: sending them to yt-dlp would download every video in the list.
+// Pages of one video (or post, clip, track) on the PAGE_EXTRACTOR_HOSTS sites,
+// like content.js's VIDEO_PAGES. Their other pages (home, feeds, profiles,
+// channels, searches) list many: sending them to yt-dlp would download every
+// video in the list.
 const YOUTUBE_HOSTS = ["youtube.com", "youtube-nocookie.com", "youtu.be"];
 function isYoutubeVideo(u) {
   if (u.hostname === "youtu.be" || u.hostname.endsWith(".youtu.be")) return u.pathname.length > 1;
   if (u.pathname === "/watch") return u.searchParams.has("v");
   return /^\/(shorts|live|embed|v)\/[\w-]{6,}/.test(u.pathname);
 }
+const SINGLE_PAGES = [
+  { hosts: YOUTUBE_HOSTS, test: isYoutubeVideo },
+  {
+    hosts: ["vimeo.com"],
+    test: (u) => /^\/(?:\d+(?:\/\w+)?\/?$|channels\/[\w-]+\/\d+|(?:[\w-]+\/)*videos?\/\d+|[\w-]+\/review\/\d+|ondemand\/[\w-]+\/\d+|event\/\d+)/.test(u.pathname),
+  },
+  { hosts: ["dailymotion.com"], test: (u) => /^\/(?:embed\/)?video\/\w+/.test(u.pathname) || u.searchParams.has("video") },
+  { hosts: ["instagram.com"], test: (u) => /^\/(?:(?:[\w.]+\/)?(?:p|reels?|tv)\/[\w-]+|stories\/[\w.]+\/\d+)/.test(u.pathname) },
+  {
+    hosts: ["tiktok.com"],
+    test: (u) => /^v[mt]\./.test(u.hostname) || /^\/(?:@[\w.-]+\/(?:video|photo)\/\d+|@[\w.-]+\/live|embed(?:\/v2)?\/\d+|v\/\d+|t\/\w+|player\/v1\/\d+)/.test(u.pathname),
+  },
+  {
+    hosts: ["facebook.com"],
+    test: (u) =>
+      /^\/(?:[\w.-]+\/videos\/(?:[\w.-]+\/)?\d+|reel\/\d+|share\/[rv]\/\w+|groups\/[\w.-]+\/(?:permalink|posts)\/\d+|[\w.-]+\/posts\/[\w-]+)/.test(u.pathname) ||
+      (/^\/(?:watch(?:\/live)?\/?|video\.php)$/.test(u.pathname) && u.searchParams.has("v")) ||
+      u.searchParams.has("story_fbid"),
+  },
+  {
+    hosts: ["twitch.tv"],
+    test: (u) =>
+      u.hostname.startsWith("clips.") ? u.pathname.length > 1 || u.searchParams.has("clip")
+      : u.hostname.startsWith("player.") ? ["video", "channel", "clip"].some((p) => u.searchParams.has(p))
+      : /^\/(?:videos\/\d+|\w+\/(?:clip|v)\/[\w-]+|(?!(?:directory|search|settings|subscriptions|inventory|wallet|drops|downloads|jobs|p|turbo|prime|store|friends|messages|following|videos)\/?$)\w+\/?$)/.test(u.pathname),
+  },
+  { hosts: ["x.com", "twitter.com"], test: (u) => /^\/(?:(?:\w+|i(?:\/web)?)\/status\/\d+|i\/(?:broadcasts|spaces)\/\w+)/.test(u.pathname) },
+  { hosts: ["reddit.com"], test: (u) => /^\/(?:(?:r|u|user)\/[\w-]+\/)?(?:comments|s)\/\w+/.test(u.pathname) },
+  {
+    hosts: ["bilibili.com"],
+    test: (u) =>
+      /^\/(?:video\/(?:BV\w+|av\d+)|bangumi\/play\/ep\d+)/i.test(u.pathname) ||
+      (u.hostname.startsWith("player.") && (u.searchParams.has("bvid") || u.searchParams.has("aid"))) ||
+      (u.hostname.startsWith("live.") && /^\/\d+/.test(u.pathname)),
+  },
+  { hosts: ["rumble.com"], test: (u) => /^\/(?:v[\w-]+\.html|embed\/[\w.-]+)/.test(u.pathname) },
+  {
+    hosts: ["soundcloud.com"],
+    test: (u) =>
+      u.hostname.startsWith("w.")
+        ? /\/tracks\//.test(u.searchParams.get("url") ?? "")
+        : /^\/(?!(?:discover|stream|feed|you|search|charts|tags|settings)\/)[\w-]+\/(?!(?:sets|likes|tracks|albums|reposts|popular-tracks|followers|following|comments|spotlight|toptracks)\/?$)[\w-]+\/?$/.test(u.pathname),
+  },
+  { hosts: ["bandcamp.com"], test: (u) => /^\/track\/|\/track=\d+/.test(u.pathname) },
+  {
+    hosts: ["kick.com"],
+    test: (u) =>
+      u.searchParams.has("clip") ||
+      /^\/(?:video\/[\w-]+|[\w-]+\/(?:videos|clips)\/[\w-]+|(?!(?:video|videos|categories|category|search|browse|following|auth)\/?$)[\w-]+\/?$)/.test(u.pathname),
+  },
+];
 /** False for pages known to list many videos, where the button must not send the page itself. */
 function isSingleVideoPage(url) {
   const u = parseUrl(url);
   if (!u) return false;
-  if (hostMatches(u.hostname, YOUTUBE_HOSTS)) return isYoutubeVideo(u);
-  return true;
+  const rule = SINGLE_PAGES.find((r) => hostMatches(u.hostname, r.hosts));
+  return rule ? rule.test(u) : true;
+}
+/** A link to one video of a site yt-dlp downloads from. */
+function isVideoLink(url) {
+  return isExtractorPage(url) && isSingleVideoPage(url);
+}
+/** How the app fetches a link: a video's page (yt-dlp), a playlist, or the file itself. */
+function linkKind(url) {
+  if (isVideoLink(url)) return "page";
+  return MANIFEST_EXT.test(parseUrl(url)?.pathname ?? "") ? "stream" : "direct";
 }
 function message(key, fallback) {
   try {
@@ -273,7 +335,7 @@ async function candidatesFor(tabId, frameUrl, tabUrl, linkUrl) {
   await restore();
   const items = [];
   let pageUrl = isExtractorPage(frameUrl) ? frameUrl : tabUrl;
-  if (linkUrl && isExtractorPage(linkUrl) && !isSingleVideoPage(pageUrl)) pageUrl = linkUrl;
+  if (isVideoLink(linkUrl) && !isSingleVideoPage(pageUrl)) pageUrl = linkUrl;
   if (pageUrl && /^https?:/.test(pageUrl) && isSingleVideoPage(pageUrl)) {
     items.push({
       url: pageUrl,
@@ -305,7 +367,7 @@ async function resolveTarget(msg, sender) {
   const tabId = sender.tab?.id;
   const frameUrl = frameUrlOf(msg, sender);
   // A preview playing in a feed: download the video it links to.
-  if (msg.linkUrl && isExtractorPage(msg.linkUrl) && !isSingleVideoPage(frameUrl)) {
+  if (isVideoLink(msg.linkUrl) && !isSingleVideoPage(frameUrl)) {
     return { url: msg.linkUrl, kind: "page", title: msg.linkTitle };
   }
   if (isExtractorPage(frameUrl)) {
@@ -711,7 +773,7 @@ api.downloads.onErased.addListener((id) => judged.delete(id));
 async function forceLink(msg, sender) {
   const url = msg.url;
   if (!/^https?:/i.test(url ?? "")) throw new Error("link sem endereço http(s)");
-  const kind = isExtractorPage(url) && isSingleVideoPage(url) ? "page" : MANIFEST_EXT.test(parseUrl(url)?.pathname ?? "") ? "stream" : "direct";
+  const kind = linkKind(url);
   const { id, pending } = await sendToApp({
     url,
     kind,
@@ -751,11 +813,14 @@ async function sendLinks(info, tab, onlySelected) {
 api.contextMenus.onClicked.addListener(async (info, tab) => {
   try {
     if (info.menuItemId === "fisga-link" && info.linkUrl) {
+      // Like the force key: a video's page goes to yt-dlp, not saved as HTML.
+      const kind = linkKind(info.linkUrl);
       await sendToApp({
         url: info.linkUrl,
-        kind: "direct",
+        kind,
         referrer: info.pageUrl,
         pageUrl: tab?.url,
+        title: kind === "page" ? info.linkText || undefined : undefined,
         userAgent: navigator.userAgent,
         cookies: await cookiesFor(info.linkUrl),
       });

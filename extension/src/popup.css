@@ -98,6 +98,22 @@ li small {
 }
 li button.sent small { color: var(--ok); }
 li button.failed small { color: var(--err); }
+.gallery {
+  all: unset;
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  margin: 4px 0 10px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+.gallery small { display: block; opacity: 0.85; font-size: 12px; }
+.gallery:hover { filter: brightness(1.08); }
+.gallery:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.gallery[hidden] { display: none; }
 .grant {
   border: 1px solid var(--line);
   border-radius: 8px;

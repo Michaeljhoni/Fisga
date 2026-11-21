@@ -27,6 +27,9 @@ enum Incoming {
     /// "Baixar todos os links com o Fisga": a page's links, to pick from in the app.
     #[serde(rename_all = "camelCase")]
     Links { page_url: String, links: Vec<String> },
+    /// The media gallery's selection: each one with its own details, straight
+    /// to the queue (no "Novo download" window).
+    MediaBatch { downloads: Vec<AddRequest> },
 }
 
 fn read_message(input: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
@@ -80,6 +83,18 @@ async fn handle(message: Incoming) -> Value {
             .await;
             match result {
                 Ok(_) => json!({ "type": "shown" }),
+                Err(e) => json!({ "type": "error", "message": e.to_string() }),
+            }
+        }
+        Incoming::MediaBatch { downloads } => {
+            let result = async {
+                fisga_ipc::ensure_daemon().await?;
+                fisga_ipc::call(&Request::AddMany { downloads }).await
+            }
+            .await;
+            match result {
+                Ok(Response::AddedBatch { ids }) => json!({ "type": "added-batch", "ids": ids }),
+                Ok(other) => json!({ "type": "error", "message": trf!("resposta inesperada: {}", format!("{other:?}")) }),
                 Err(e) => json!({ "type": "error", "message": e.to_string() }),
             }
         }
@@ -160,6 +175,15 @@ mod tests {
         assert!(matches!(parse(br#"{"type":"settings"}"#).unwrap(), Incoming::Settings));
         let links = parse(br#"{"type":"links","pageUrl":"https://e.com/","links":["https://e.com/a.zip"]}"#).unwrap();
         assert!(matches!(links, Incoming::Links { page_url, links } if page_url == "https://e.com/" && links.len() == 1));
+        let batch = parse(
+            br#"{"type":"media-batch","downloads":[{"url":"https://e.com/a.jpg","category":"image","subfolder":"e.com","pageUrl":"https://e.com/"}]}"#,
+        )
+        .unwrap();
+        let Incoming::MediaBatch { downloads } = batch else { panic!("expected a media batch") };
+        assert_eq!(downloads[0].category, Some(fisga_ipc::Category::Image));
+        assert_eq!(downloads[0].subfolder.as_deref(), Some("e.com"));
+        assert_eq!(downloads[0].page_url.as_deref(), Some("https://e.com/"));
+        assert!(!downloads[0].confirm && downloads[0].start);
         assert!(parse(br#"{"type":"nope"}"#).is_err());
         assert!(parse(b"[1,2]").is_err());
     }

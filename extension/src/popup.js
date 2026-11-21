@@ -32,6 +32,13 @@ async function init() {
     $("empty").hidden = false;
     return;
   }
+  // Every photo, video and audio of the page, to pick and download at once.
+  $("gallery").hidden = false;
+  $("gallery").addEventListener("click", async () => {
+    await api.runtime.sendMessage({ type: "gallery-open", tabId: tab.id }).catch(() => {});
+    window.close();
+  });
+
   // The page's button was closed over a video (its ×): bring it back without reloading.
   const dismissed = await api.tabs.sendMessage(tab.id, { type: "overlay-dismissed" }).catch(() => null);
   if (dismissed?.dismissed) {

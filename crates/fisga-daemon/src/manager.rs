@@ -212,6 +212,13 @@ fn looks_like_video_page(request: &AddRequest) -> bool {
     matches!(url.scheme(), "http" | "https") && on_site && !is_file
 }
 
+/// A folder name from what the browser sent (a site's name): one path
+/// component, safe on every system; `None` when nothing usable is left.
+fn folder_name(name: &str) -> Option<String> {
+    let name = name.trim().trim_matches('.').trim();
+    (!name.is_empty()).then(|| fisga_core::filename::sanitize(name))
+}
+
 fn display_name(request: &AddRequest) -> String {
     request
         .file_name
@@ -479,6 +486,32 @@ impl Manager {
         Ok(ids)
     }
 
+    /// The browser's media gallery: many downloads, each with its own address,
+    /// cookies and folder, straight to the queue. Nothing is added unless every
+    /// address is valid; no "Novo download" window for any of them.
+    pub fn add_many(self: &Arc<Self>, downloads: Vec<AddRequest>) -> anyhow::Result<Vec<u64>> {
+        if downloads.is_empty() {
+            bail!(tr!("nenhum endereço no lote"));
+        }
+        if downloads.len() > fisga_ipc::MAX_BATCH {
+            bail!(trf!("são {} endereços; o máximo é {}", downloads.len(), fisga_ipc::MAX_BATCH));
+        }
+        for request in &downloads {
+            check_url(&request.url).with_context(|| trf!("no lote: {}", request.url))?;
+            if let Some(queue) = request.queue {
+                self.check_queue(queue)?;
+            }
+        }
+        let ids = downloads
+            .into_iter()
+            .map(|request| self.insert(AddRequest { confirm: false, ..request }))
+            .collect::<anyhow::Result<Vec<u64>>>()?;
+        tracing::info!(count = ids.len(), "mídias adicionadas");
+        self.save();
+        self.schedule();
+        Ok(ids)
+    }
+
     /// Creates the download (and tells the subscribers); saving and starting are the caller's.
     fn insert(self: &Arc<Self>, mut request: AddRequest) -> anyhow::Result<u64> {
         check_url(&request.url)?;
@@ -492,9 +525,20 @@ impl Manager {
         self.check_queue(queue)?;
         let probe = request.confirm;
         let name = display_name(&request);
-        let category = Category::detect(request.file_name.as_deref().unwrap_or(&name), request.kind);
-        let auto = request.output_dir.is_none();
-        let dir = request.output_dir.clone().unwrap_or_else(|| auto_dir(&self.settings(), category));
+        let category = request
+            .category
+            .unwrap_or_else(|| Category::detect(request.file_name.as_deref().unwrap_or(&name), request.kind));
+        // A folder of its own (the site of a gallery's media) is chosen once:
+        // the category it was sent with stays.
+        let subfolder = request.subfolder.as_deref().and_then(folder_name);
+        let auto = request.output_dir.is_none() && request.category.is_none() && subfolder.is_none();
+        let dir = request.output_dir.clone().unwrap_or_else(|| {
+            let dir = auto_dir(&self.settings(), category);
+            match &subfolder {
+                Some(folder) => dir.join(folder),
+                None => dir,
+            }
+        });
         if !request.confirm {
             request.output_dir = Some(dir.clone());
         }
@@ -1361,6 +1405,44 @@ mod tests {
         let referrer = manager.inner.lock().unwrap().jobs[&ids[0]].request.referrer.clone();
         assert_eq!(referrer.as_deref(), Some("https://e.com/aulas/"), "the page they came from");
         assert_eq!(order_of(&manager, MAIN_QUEUE), ids, "in the batch's order");
+    }
+
+    #[tokio::test]
+    async fn gallery_media_go_to_the_site_folder_of_their_category() {
+        let manager = manager();
+        let base = manager.settings().download_dir.unwrap();
+        let media = |url: &str, kind, category, subfolder: &str| AddRequest {
+            url: url.into(),
+            kind,
+            category,
+            subfolder: Some(subfolder.into()),
+            start: false,
+            confirm: true,
+            ..Default::default()
+        };
+        let downloads = vec![
+            // A photo whose address has no extension: the gallery says what it is.
+            media("http://127.0.0.1:9/media/abc?format=jpg&name=orig", SourceKind::Direct, Some(Category::Image), "x.com"),
+            media("https://www.youtube.com/watch?v=jNQXAC9IVRw", SourceKind::Page, None, "www.youtube.com"),
+            media("http://127.0.0.1:9/a.mp3", SourceKind::Direct, Some(Category::Music), "../../etc"),
+        ];
+        let mut bad = downloads.clone();
+        bad.push(media("javascript:alert(1)", SourceKind::Direct, None, "x.com"));
+        assert!(manager.add_many(bad).is_err());
+        assert!(manager.list().is_empty(), "nothing added when one address is wrong");
+        assert!(manager.add_many(Vec::new()).is_err());
+
+        let ids = manager.add_many(downloads).unwrap();
+        let info = |id| manager.list().into_iter().find(|i| i.id == id).unwrap();
+        assert_eq!(info(ids[0]).category, Category::Image);
+        assert_eq!(info(ids[0]).dir.unwrap(), base.join("Imagens").join("x.com"));
+        assert_eq!(info(ids[1]).dir.unwrap(), base.join("Vídeos").join("www.youtube.com"));
+        let escaped = info(ids[2]).dir.unwrap();
+        assert_eq!(escaped.parent(), Some(base.join("Músicas").as_path()), "one folder, never a path: {escaped:?}");
+        assert!(ids.iter().all(|&id| info(id).state == State::Paused), "never a \"Novo download\" window");
+        assert_eq!(order_of(&manager, MAIN_QUEUE), ids, "in the gallery's order");
+        assert_eq!(folder_name(" .. "), None);
+        assert_eq!(folder_name("pt.wikipedia.org").as_deref(), Some("pt.wikipedia.org"));
     }
 
     #[tokio::test]

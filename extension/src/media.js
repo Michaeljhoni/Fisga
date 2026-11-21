@@ -1,0 +1,436 @@
+// The gallery: every photo, video and audio of a tab (media.html?tab=ID),
+// in tabs, to pick and send to Fisga in one go. The background finds them
+// (galleryScan), checks the addresses (probeUrl) and sends the selection to
+// the queue, into a folder named after the site (galleryDownload).
+(() => {
+  "use strict";
+  const api = globalThis.browser ?? globalThis.chrome;
+  const $ = (id) => document.getElementById(id);
+  const t = (key, ...subs) => {
+    try {
+      return api.i18n.getMessage(key, subs.map(String)) || key;
+    } catch {
+      return key;
+    }
+  };
+
+  const tabId = Number(new URLSearchParams(location.search).get("tab"));
+  // Photos smaller than this (both sides) are icons, avatars and buttons.
+  const SMALL = 150;
+  // Address checks at the same time.
+  const PROBES = 6;
+  const TYPES = ["video", "image", "audio"];
+
+  let page = null;
+  let items = [];
+  let current = "video";
+  const selected = new Set();
+  const cards = new Map();
+  let anchor = null;
+  let sending = false;
+
+  for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = t(el.dataset.i18n) || el.textContent;
+  for (const el of document.querySelectorAll("[data-i18n-placeholder]")) el.placeholder = t(el.dataset.i18nPlaceholder);
+  document.title = t("galleryTitle");
+
+  // ----------------------------------------------------------- describing
+  function fileName(url) {
+    try {
+      const u = new URL(url);
+      return decodeURIComponent(u.pathname.split("/").filter(Boolean).pop() || u.hostname);
+    } catch {
+      return url;
+    }
+  }
+  function host(url) {
+    try {
+      return new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+      return "";
+    }
+  }
+  function formatSize(bytes) {
+    if (!bytes) return "";
+    const units = ["B", "KB", "MB", "GB"];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit++;
+    }
+    return `${value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
+  }
+  function formatDuration(seconds) {
+    if (!Number.isFinite(seconds) || seconds <= 0) return "";
+    const s = Math.round(seconds);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const pad = (n) => String(n).padStart(2, "0");
+    return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
+  }
+  /** The address to download: the one checked, else the one the page gave. */
+  const addressOf = (item) => item.best || item.url;
+
+  function format(item) {
+    if (item.kind === "page") return item.generic ? t("galleryGeneric") : t("galleryViaPage");
+    if (item.kind === "stream") return /\.mpd(\?|$)/i.test(item.url) || /dash/i.test(item.detail || "") ? "DASH" : "HLS";
+    const ext = /\.(\w{2,5})$/.exec(fileName(addressOf(item)))?.[1];
+    return ext ? ext.toUpperCase() : item.type === "image" ? t("galleryPhoto") : "";
+  }
+  function isSmall(item) {
+    if (item.type !== "image" || item.original) return false;
+    const w = item.width || item.shownWidth || 0;
+    const h = item.height || item.shownHeight || 0;
+    return w > 0 && h > 0 && w < SMALL && h < SMALL;
+  }
+  function visible(item) {
+    if (item.dead) return false;
+    if (isSmall(item) && !$("small").checked) return false;
+    const text = $("filter").value.trim().toLowerCase();
+    return !text || `${item.name || ""} ${item.url}`.toLowerCase().includes(text);
+  }
+  function typeIcon(type) {
+    return type === "video" ? "🎬" : type === "audio" ? "🎵" : "🖼";
+  }
+
+  // --------------------------------------------------------------- cards
+  function node(tag, className, text) {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text != null) el.textContent = text;
+    return el;
+  }
+
+  function fillCard(el, item) {
+    const name = item.name || fileName(addressOf(item)) || host(item.url);
+    const dims = item.width && item.height ? `${item.width}×${item.height}` : "";
+    // What the network showed (streams) already says its type, size and host.
+    const detail =
+      item.source === "network" && item.detail
+        ? item.detail
+        : [dims, formatSize(item.size), host(addressOf(item))].filter(Boolean).join(" · ");
+    el.querySelector(".name").textContent = name;
+    el.querySelector(".detail").textContent = detail;
+    el.title = addressOf(item);
+    const badges = el.querySelector(".badges");
+    badges.replaceChildren();
+    const kind = format(item);
+    if (kind) badges.append(node("span", "badge", kind));
+    const duration = formatDuration(item.duration);
+    if (duration) badges.append(node("span", "badge", duration));
+    if (item.original) badges.append(node("span", "badge original", t("galleryOriginal")));
+    if (item.sent) badges.append(node("span", "badge original", t("galleryQueued")));
+    el.setAttribute("aria-selected", String(selected.has(item.url)));
+  }
+
+  function makeCard(item) {
+    const el = node("div", "card");
+    el.tabIndex = 0;
+    el.setAttribute("role", "option");
+    const thumb = node("div", "thumb");
+    const icon = () => thumb.replaceChildren(node("span", "icon", typeIcon(item.type)), node("span", "check"), badges);
+    const badges = node("div", "badges");
+    if (item.thumb) {
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.decoding = "async";
+      img.referrerPolicy = "no-referrer";
+      img.alt = "";
+      img.src = item.thumb;
+      img.addEventListener("error", icon, { once: true });
+      img.addEventListener(
+        "load",
+        () => {
+          // A photo the page showed without saying its size: the thumbnail is it.
+          if (item.type === "image" && !item.width && img.src === item.url) {
+            item.width = img.naturalWidth;
+            item.height = img.naturalHeight;
+            fillCard(el, item);
+          }
+        },
+        { once: true },
+      );
+      thumb.append(img, node("span", "check"), badges);
+    } else {
+      icon();
+    }
+    const meta = node("div", "meta");
+    meta.append(node("div", "name"), node("div", "detail"));
+    el.append(thumb, meta);
+    el.addEventListener("click", (e) => toggle(item, e.shiftKey));
+    el.addEventListener("dblclick", () => api.tabs.create({ url: addressOf(item), active: true }));
+    el.addEventListener("keydown", (e) => {
+      if (e.key === " " || e.key === "Enter") {
+        e.preventDefault();
+        toggle(item, e.shiftKey);
+      }
+    });
+    fillCard(el, item);
+    observer.observe(el);
+    return el;
+  }
+
+  function shown() {
+    return items.filter((item) => item.type === current && visible(item));
+  }
+
+  function render() {
+    observer.disconnect();
+    for (const type of TYPES) {
+      const tab = document.querySelector(`[data-tab="${type}"]`);
+      const count = items.filter((item) => item.type === type && visible(item)).length;
+      tab.hidden = !items.some((item) => item.type === type && !item.dead);
+      tab.setAttribute("aria-selected", String(type === current));
+      tab.querySelector(".count").textContent = `(${count})`;
+    }
+    $("small-wrap").hidden = current !== "image" || !items.some((item) => item.type === "image" && isSmall(item));
+    const list = shown();
+    const grid = $("grid");
+    const fragment = document.createDocumentFragment();
+    for (const item of list) {
+      let el = cards.get(item.url);
+      if (!el) {
+        el = makeCard(item);
+        cards.set(item.url, el);
+      } else {
+        observer.observe(el);
+      }
+      fragment.append(el);
+    }
+    grid.replaceChildren(fragment);
+    const status = $("status");
+    if (!items.length) {
+      status.textContent = t("galleryNothing");
+      status.hidden = false;
+    } else if (!list.length) {
+      status.textContent = t("galleryNothingHere");
+      status.hidden = false;
+    } else {
+      status.hidden = true;
+    }
+    updateBar();
+  }
+
+  function updateBar() {
+    const chosen = items.filter((item) => selected.has(item.url));
+    const counts = TYPES.map((type) => [type, chosen.filter((item) => item.type === type).length]).filter(([, n]) => n);
+    const words = { video: "galleryCountVideos", image: "galleryCountPhotos", audio: "galleryCountAudio" };
+    $("selected").textContent = chosen.length
+      ? counts.map(([type, n]) => t(words[type], n)).join(", ")
+      : t("galleryNoneSelected");
+    $("dest").textContent = page ? t("galleryDest", page.folder) : "";
+    const button = $("download");
+    button.textContent = t("galleryDownload", chosen.length);
+    button.disabled = !chosen.length || sending;
+  }
+
+  // ----------------------------------------------------------- selecting
+  function toggle(item, range) {
+    const list = shown();
+    if (range && anchor && list.includes(anchor)) {
+      const [a, b] = [list.indexOf(anchor), list.indexOf(item)].sort((x, y) => x - y);
+      const on = selected.has(anchor.url);
+      for (const other of list.slice(a, b + 1)) on ? selected.add(other.url) : selected.delete(other.url);
+    } else {
+      selected.has(item.url) ? selected.delete(item.url) : selected.add(item.url);
+      anchor = item;
+    }
+    for (const other of list) cards.get(other.url)?.setAttribute("aria-selected", String(selected.has(other.url)));
+    $("result").textContent = "";
+    updateBar();
+  }
+  $("select-all").addEventListener("click", () => {
+    for (const item of shown()) selected.add(item.url);
+    render();
+  });
+  $("select-none").addEventListener("click", () => {
+    for (const item of shown()) selected.delete(item.url);
+    render();
+  });
+  for (const type of TYPES) {
+    document.querySelector(`[data-tab="${type}"]`).addEventListener("click", () => {
+      current = type;
+      anchor = null;
+      render();
+    });
+  }
+  $("filter").addEventListener("input", render);
+  $("small").addEventListener("change", render);
+  $("refresh").addEventListener("click", scan);
+
+  // ------------------------------------------------- originals and sizes
+  // Each card on screen gets its address checked: the original of a
+  // thumbnail (fullsize.js) when there is one, and the size of the file.
+  const pending = [];
+  let running = 0;
+  const observer = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const item = items.find((i) => cards.get(i.url) === entry.target);
+        if (item) queueProbe(item);
+      }
+    },
+    { rootMargin: "300px" },
+  );
+  function ask(url) {
+    return api.runtime.sendMessage({ type: "gallery-probe", url }).catch(() => ({ ok: false }));
+  }
+  /** Is what the server sent the kind of file the card says? */
+  function accepts(item, type) {
+    if (!type) return item.type !== "image" && !item.verify; // some servers do not say
+    if (item.type === "image") return /^image\//.test(type);
+    if (/^application\/(octet-stream|ogg|x-mpegurl|vnd\.apple\.mpegurl|dash\+xml)$|^binary\/octet-stream$/.test(type)) return true;
+    return item.type === "audio" ? /^audio\//.test(type) : /^(video|audio)\//.test(type);
+  }
+  /**
+   * The first candidate (or its original, by fullsize.js) that answers with
+   * the right kind of file. A card whose candidates are all pages or missing
+   * files is dropped; one whose server could not be asked stays as it is.
+   */
+  async function probe(item) {
+    if (item.kind !== "direct") return;
+    const list = item.candidates?.length ? item.candidates : [item.url];
+    let refused = 0;
+    let asked = 0;
+    for (const candidate of list) {
+      for (const address of [...(globalThis.FisgaFullsize?.candidates(candidate) ?? []), candidate]) {
+        const res = await ask(address);
+        asked++;
+        if (res.ok && accepts(item, res.type)) {
+          item.best = address;
+          item.size = res.size ?? item.size;
+          if (address !== item.thumb && address !== list[list.length - 1]) {
+            item.original = address;
+            item.width = 0;
+            item.height = 0;
+          }
+          return;
+        }
+        if (res.ok || res.status === 404 || res.status === 410) refused++;
+      }
+    }
+    if (asked && refused === asked) item.dead = true;
+  }
+  function queueProbe(item) {
+    if (item.probe) return item.probe;
+    item.probe = new Promise((resolve) => pending.push({ item, resolve }));
+    pump();
+    return item.probe;
+  }
+  function pump() {
+    while (running < PROBES && pending.length) {
+      const { item, resolve } = pending.shift();
+      running++;
+      probe(item)
+        .catch(() => {})
+        .finally(() => {
+          running--;
+          const el = cards.get(item.url);
+          if (el) fillCard(el, item);
+          if (item.dead) render();
+          resolve();
+          pump();
+        });
+    }
+  }
+
+  // ------------------------------------------------------------- sending
+  $("download").addEventListener("click", async () => {
+    const chosen = items.filter((item) => selected.has(item.url));
+    if (!chosen.length || sending) return;
+    sending = true;
+    updateBar();
+    const result = $("result");
+    result.className = "result";
+    // The originals (and the real files behind links) of what was picked
+    // before it showed on screen.
+    const photos = chosen.filter((item) => item.kind === "direct" && (item.type === "image" || item.verify));
+    let done = 0;
+    result.textContent = t("galleryChecking", 0, photos.length);
+    await Promise.all(
+      photos.map((item) =>
+        queueProbe(item).then(() => {
+          done++;
+          result.textContent = t("galleryChecking", done, photos.length);
+        }),
+      ),
+    );
+    const live = chosen.filter((item) => !item.dead);
+    try {
+      const res = await api.runtime.sendMessage({
+        type: "gallery-download",
+        tabId,
+        pageUrl: page?.url,
+        items: live.map((item) => ({
+          url: addressOf(item),
+          kind: item.kind,
+          type: item.type,
+          name: item.name,
+          frameUrl: item.frameUrl,
+        })),
+      });
+      if (!res?.ok) throw new Error(res?.error || t("galleryFailed"));
+      for (const item of live) {
+        item.sent = true;
+        selected.delete(item.url);
+      }
+      result.textContent = t("gallerySent", res.ids.length, res.folder);
+      result.className = "result ok";
+    } catch (err) {
+      result.textContent = String(err?.message || err);
+      result.className = "result err";
+    } finally {
+      sending = false;
+      render();
+    }
+  });
+
+  // ------------------------------------------------------------- scanning
+  async function scan() {
+    $("status").textContent = t("galleryScanning");
+    $("status").hidden = false;
+    $("result").textContent = "";
+    if (!Number.isInteger(tabId)) {
+      $("status").textContent = t("galleryNoTab");
+      return;
+    }
+    let res;
+    try {
+      res = await api.runtime.sendMessage({ type: "gallery-scan", tabId });
+    } catch (err) {
+      res = { ok: false, error: String(err?.message || err) };
+    }
+    if (!res?.ok) {
+      $("status").textContent = t("galleryScanFailed", res?.error || "?");
+      return;
+    }
+    page = res.page;
+    $("page").textContent = [page.title, host(page.url)].filter(Boolean).join(" — ");
+    if (res.blocked) {
+      $("status").textContent = t("blockedSite");
+      items = [];
+      $("grid").replaceChildren();
+      updateBar();
+      return;
+    }
+    // A refresh keeps what was already checked and picked.
+    const before = new Map(items.map((item) => [item.url, item]));
+    items = res.items.map((item) => {
+      const old = before.get(item.url);
+      return old
+        ? { ...item, best: old.best, original: old.original, size: old.size ?? item.size, dead: old.dead, sent: old.sent, probe: old.probe }
+        : { ...item };
+    });
+    for (const key of [...selected]) if (!items.some((item) => item.url === key)) selected.delete(key);
+    for (const key of [...cards.keys()]) if (!items.some((item) => item.url === key)) cards.delete(key);
+    for (const item of items) {
+      const el = cards.get(item.url);
+      if (el) fillCard(el, item);
+    }
+    if (!items.some((item) => item.type === current)) current = TYPES.find((type) => items.some((item) => item.type === type)) ?? "video";
+    render();
+  }
+
+  scan();
+})();

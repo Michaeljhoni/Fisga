@@ -104,6 +104,14 @@ pub struct AddRequest {
     /// The checksum the download page published, checked when it finishes.
     #[serde(default)]
     pub checksum: Option<Checksum>,
+    /// What the file is, when the sender knows better than its name (the
+    /// browser's media gallery: a photo whose address has no extension).
+    #[serde(default)]
+    pub category: Option<Category>,
+    /// A folder inside the category's one, for downloads that belong together
+    /// (the gallery: the site's name). One folder name, never a path.
+    #[serde(default)]
+    pub subfolder: Option<String>,
 }
 
 fn yes() -> bool {
@@ -1458,6 +1466,9 @@ pub enum Request {
         #[serde(default)]
         referrer: Option<String>,
     },
+    /// Many downloads, each with its own details, straight to the queue in one
+    /// go (the browser's media gallery). Answered with `Response::AddedBatch`.
+    AddMany { downloads: Vec<AddRequest> },
     /// IDM's "Download all links": the links of a page open in the browser.
     /// The ones to files go to the GUI as `Response::Links`, where the user
     /// picks what to download; answered with `Response::Ok`.

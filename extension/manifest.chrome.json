@@ -21,6 +21,6 @@
       "run_at": "document_start"
     }
   ],
-  "permissions": ["nativeMessaging", "webRequest", "downloads", "cookies", "storage", "tabs", "contextMenus"],
+  "permissions": ["nativeMessaging", "webRequest", "downloads", "cookies", "storage", "tabs", "contextMenus", "scripting"],
   "host_permissions": ["<all_urls>"]
 }

@@ -543,8 +543,360 @@
     }
     return [...urls];
   }
+  // ------------------------------------------------------- media gallery
+  // Every photo, video and audio of this frame, for the gallery page
+  // (media.html): the address of the real file when the page has it (the
+  // largest of a srcset, the full image a thumbnail links to, the lazy-load
+  // attributes), the thumbnail to show, and what is known of its size. The
+  // background calls it in every frame (scripting.executeScript) and turns
+  // thumbnails into originals (fullsize.js) before showing them.
+  const IMAGE_EXT = /\.(jpe?g|jfif|png|gif|webp|avif|bmp|tiff?|heic|heif|jxl)$/i;
+  const VIDEO_EXT = /\.(mp4|m4v|webm|mkv|mov|flv|avi|ogv|3gp|wmv)$/i;
+  const AUDIO_EXT = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac|wma)$/i;
+  const STREAM_EXT = /\.(m3u8|mpd)$/i;
+  // Where galleries keep the full-size image (zoom, lightbox, WordPress).
+  const FULL_ATTRS = [
+    "data-full", "data-full-src", "data-fullsrc", "data-large", "data-large-file", "data-large_image",
+    "data-orig-file", "data-original-src", "data-zoom-image", "data-zoom-src", "data-hi-res", "data-hires",
+    "data-highres", "data-src-large", "data-big",
+  ];
+  // Where lazy-loading scripts keep the address until the image is on screen.
+  const LAZY_ATTRS = [
+    "data-src", "data-original", "data-lazy-src", "data-lazy", "data-image", "data-img", "data-img-src",
+    "data-actualsrc", "data-echo", "data-pagespeed-lazy-src", "data-url",
+  ];
+  const LAZY_SRCSET_ATTRS = ["data-srcset", "data-lazy-srcset", "data-original-set"];
+  const BG_ATTRS = ["data-bg", "data-background", "data-background-image", "data-bg-src"];
+  const MAX_ITEMS = 3000;
+  const MAX_BG_ELEMENTS = 4000;
+
+  function absolute(url) {
+    if (!url || typeof url !== "string") return "";
+    try {
+      return new URL(url.trim(), document.baseURI).href;
+    } catch {
+      return "";
+    }
+  }
+  const isHttp = (url) => /^https?:/i.test(url);
+  function pathOf(url) {
+    try {
+      return decodeURIComponent(new URL(url).pathname);
+    } catch {
+      return "";
+    }
+  }
+  function nameOf(url) {
+    return pathOf(url).split("/").filter(Boolean).pop() || "";
+  }
+  function typeOfUrl(url) {
+    const path = pathOf(url);
+    if (STREAM_EXT.test(path)) return { type: "video", kind: "stream" };
+    if (VIDEO_EXT.test(path)) return { type: "video", kind: "direct" };
+    if (AUDIO_EXT.test(path)) return { type: "audio", kind: "direct" };
+    if (IMAGE_EXT.test(path)) return { type: "image", kind: "direct" };
+    return null;
+  }
+
+  /** The candidates of a srcset, as the HTML spec splits them (URLs may hold commas). */
+  function parseSrcset(value) {
+    const out = [];
+    const s = String(value || "");
+    let i = 0;
+    while (i < s.length) {
+      while (i < s.length && /[\s,]/.test(s[i])) i++;
+      if (i >= s.length) break;
+      const start = i;
+      while (i < s.length && !/\s/.test(s[i])) i++;
+      let url = s.slice(start, i);
+      let descriptor = "";
+      if (/,+$/.test(url)) {
+        url = url.replace(/,+$/, "");
+      } else {
+        const from = i;
+        let depth = 0;
+        while (i < s.length && (s[i] !== "," || depth > 0)) {
+          if (s[i] === "(") depth++;
+          else if (s[i] === ")") depth--;
+          i++;
+        }
+        descriptor = s.slice(from, i).trim();
+        i++;
+      }
+      const m = /^(\d+(?:\.\d+)?)([wx])$/i.exec(descriptor.split(/\s+/)[0] || "");
+      out.push({ url, w: m && /w/i.test(m[2]) ? Number(m[1]) : 0, x: m && /x/i.test(m[2]) ? Number(m[1]) : m ? 0 : 1 });
+    }
+    return out;
+  }
+  /** The largest candidate of a srcset: by width, else by density. */
+  function largestOf(srcset) {
+    const list = parseSrcset(srcset).filter((c) => c.url && !/^data:/i.test(c.url));
+    if (!list.length) return null;
+    list.sort((a, b) => b.w - a.w || b.x - a.x);
+    return { url: absolute(list[0].url), w: list[0].w, x: list[0].x };
+  }
+
+  /** Open shadow roots too: many sites build their players and grids inside them. */
+  function* roots() {
+    const stack = [document];
+    let seen = 0;
+    while (stack.length && seen < 200) {
+      const root = stack.pop();
+      seen++;
+      yield root;
+      for (const el of root.querySelectorAll("*")) if (el.shadowRoot) stack.push(el.shadowRoot);
+    }
+  }
+  function queryAll(selector) {
+    const out = [];
+    for (const root of roots()) out.push(...root.querySelectorAll(selector));
+    return out;
+  }
+
+  /** A small frame of a playing video, when the page lets us read it (same origin or CORS). */
+  function frameOf(video) {
+    try {
+      if (!video.videoWidth || video.readyState < 2) return "";
+      const scale = Math.min(1, 320 / video.videoWidth);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(video.videoWidth * scale);
+      canvas.height = Math.round(video.videoHeight * scale);
+      canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/jpeg", 0.7);
+    } catch {
+      return ""; // a cross-origin video taints the canvas
+    }
+  }
+
+  // Single videos of the sites whose videos yt-dlp downloads from the page: in
+  // a feed, each one is offered with its thumbnail. The address is the one
+  // yt-dlp expects.
+  const VIDEO_PAGES = [
+    { re: /^https?:\/\/(?:www\.|m\.)?youtube\.com\/watch\?(?:.*&)?v=([\w-]{11})/, url: (m) => `https://www.youtube.com/watch?v=${m[1]}`, thumb: (m) => `https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg` },
+    { re: /^https?:\/\/(?:www\.|m\.)?youtube\.com\/(?:shorts|live|embed)\/([\w-]{11})/, url: (m) => `https://www.youtube.com/watch?v=${m[1]}`, thumb: (m) => `https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg` },
+    { re: /^https?:\/\/(?:www\.)?youtube-nocookie\.com\/embed\/([\w-]{11})/, url: (m) => `https://www.youtube.com/watch?v=${m[1]}`, thumb: (m) => `https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg` },
+    { re: /^https?:\/\/youtu\.be\/([\w-]{11})/, url: (m) => `https://www.youtube.com/watch?v=${m[1]}`, thumb: (m) => `https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg` },
+    { re: /^https?:\/\/(?:www\.)?vimeo\.com\/(\d{5,})(?:[/?#]|$)/, url: (m) => `https://vimeo.com/${m[1]}` },
+    { re: /^https?:\/\/player\.vimeo\.com\/video\/(\d{5,})/, url: (m) => `https://vimeo.com/${m[1]}` },
+    { re: /^https?:\/\/(?:www\.)?dailymotion\.com\/(?:embed\/)?video\/([a-z0-9]+)/i, url: (m) => `https://www.dailymotion.com/video/${m[1]}` },
+    { re: /^https?:\/\/(?:www\.)?instagram\.com\/(?:[\w.]+\/)?(?:reels?|tv)\/([\w-]+)/, url: (m) => `https://www.instagram.com/reel/${m[1]}/` },
+    { re: /^https?:\/\/(?:www\.)?tiktok\.com\/@[\w.-]+\/video\/(\d+)/, url: (m) => m[0] },
+    { re: /^https?:\/\/(?:www\.|m\.)?facebook\.com\/(?:[\w.]+\/videos\/(?:[\w-]+\/)?\d+|watch\/?\?v=\d+|reel\/\d+)/, url: (m) => m[0] },
+    { re: /^https?:\/\/(?:www\.)?twitch\.tv\/(?:videos\/\d+|[\w]+\/clip\/[\w-]+)/, url: (m) => m[0] },
+    { re: /^https?:\/\/clips\.twitch\.tv\/[\w-]+/, url: (m) => m[0] },
+    { re: /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/\w+\/status\/(\d+)\/video\/\d/, url: (m) => m[0].replace(/\/video\/\d$/, "") },
+    { re: /^https?:\/\/(?:www\.)?bilibili\.com\/video\/(BV[\w]+|av\d+)/, url: (m) => `https://www.bilibili.com/video/${m[1]}` },
+    { re: /^https?:\/\/(?:www\.)?rumble\.com\/v[\w-]+\.html/, url: (m) => m[0] },
+  ];
+  function videoPage(url) {
+    for (const rule of VIDEO_PAGES) {
+      const m = rule.re.exec(url);
+      if (m) return { url: rule.url(m), thumb: rule.thumb?.(m) || "" };
+    }
+    return null;
+  }
+
+  function collectMedia() {
+    const items = [];
+    const seen = new Set();
+    const clean = (s) => String(s || "").replace(/\s+/g, " ").trim().slice(0, 200);
+    const add = (item) => {
+      if (!item.url || seen.has(item.url) || items.length >= MAX_ITEMS) return;
+      seen.add(item.url);
+      items.push(item);
+    };
+
+    // Videos and audio players. A blob: or MediaSource player has no address
+    // of its own: the feed link it plays under, the page itself (yt-dlp) or
+    // the stream the background sniffed stand in for it. On a video's own
+    // page the largest player is that video: the links inside it (end
+    // screens, chapters) are other videos or the same one.
+    const players = queryAll("video, audio");
+    const here = videoPage(location.href);
+    const area = (el) => {
+      const r = el.getBoundingClientRect();
+      return r.width * r.height;
+    };
+    const mainPlayer = here ? players.filter((el) => el instanceof HTMLVideoElement).sort((a, b) => area(b) - area(a))[0] : null;
+    for (const el of players) {
+      if (el.srcObject instanceof MediaStream) continue;
+      const isVideo = el instanceof HTMLVideoElement;
+      const sources = [el.currentSrc, el.src, ...[...el.querySelectorAll("source[src]")].map((s) => s.src)].map(absolute);
+      const src = sources.find(isHttp) || "";
+      const poster = isVideo ? absolute(el.poster) : "";
+      const base = {
+        type: isVideo ? "video" : "audio",
+        thumb: poster || (isVideo ? frameOf(el) : ""),
+        width: isVideo ? el.videoWidth || 0 : 0,
+        height: isVideo ? el.videoHeight || 0 : 0,
+        duration: Number.isFinite(el.duration) ? el.duration : null,
+        name: clean(el.getAttribute("title") || el.getAttribute("aria-label")),
+        source: "player",
+      };
+      if (src) {
+        const known = typeOfUrl(src);
+        add({ ...base, url: src, kind: known?.kind === "stream" ? "stream" : "direct" });
+        continue;
+      }
+      // MediaWiki loads the sources on play; its file page leads to the file.
+      const resource = absolute(el.getAttribute("resource"));
+      if (isHttp(resource) && typeOfUrl(resource)) {
+        add({ ...base, url: resource, kind: "direct", candidates: [resource], verify: true, name: base.name || nameOf(resource) });
+        continue;
+      }
+      const link = el === mainPlayer ? null : videoLink(el);
+      const page = videoPage(link?.url || "") || here;
+      if (page) {
+        // The page's own video is named by the page; a feed's, by its link.
+        const title = page.url === here?.url ? clean(document.title.replace(/\s+[-|–]\s+[^-|–]+$/, "")) : link?.title;
+        add({ ...base, url: page.url, kind: "page", thumb: base.thumb || page.thumb, name: title || base.name || clean(document.title) });
+      } else {
+        add({ ...base, url: `blob:${location.href}#${items.length}`, kind: "blob", name: base.name || clean(document.title) });
+      }
+    }
+
+    // Videos of the page's feed (YouTube, Vimeo, TikTok, Instagram reels...)
+    // and embedded players: one each, with its thumbnail.
+    const titles = new Map();
+    for (const a of queryAll("a[href]")) {
+      const page = videoPage(a.href);
+      if (!page) continue;
+      const title = clean(a.getAttribute("title") || a.getAttribute("aria-label"));
+      const text = clean(a.textContent);
+      const best = title.length > 3 ? title : text.length > 3 && !/^\d+:\d{2}/.test(text) ? text : "";
+      const entry = titles.get(page.url) ?? { page, title: "", thumb: "" };
+      if (best && best.length > entry.title.length) entry.title = best;
+      const img = a.querySelector("img");
+      const shown = img && (largestOf(img.srcset)?.url || absolute(img.currentSrc || img.src));
+      if (!entry.thumb && shown && isHttp(shown)) entry.thumb = shown;
+      titles.set(page.url, entry);
+    }
+    for (const frame of queryAll("iframe[src], embed[src]")) {
+      const page = videoPage(absolute(frame.getAttribute("src")));
+      if (page && !titles.has(page.url)) titles.set(page.url, { page, title: clean(frame.title), thumb: "" });
+    }
+    for (const { page, title, thumb } of titles.values()) {
+      add({ type: "video", kind: "page", url: page.url, thumb: page.thumb || thumb, name: title, source: "link" });
+    }
+
+    // Photos, the real file first: the image a thumbnail links to, then the
+    // gallery's full-size attribute, then the widest of its srcset (or of its
+    // <picture>) when wider than what shows, then the lazy-load address while
+    // a placeholder shows, then what shows.
+    for (const img of queryAll("img")) {
+      const shown = absolute(img.currentSrc || img.src);
+      const natural = { w: img.naturalWidth || 0, h: img.naturalHeight || 0 };
+      const placeholder = !isHttp(shown) || natural.w <= 2;
+      const linked = img.closest("a[href]");
+      const link = linked && typeOfUrl(linked.href)?.type === "image" && isHttp(linked.href) ? linked.href : "";
+      const full = FULL_ATTRS.map((attr) => absolute(img.getAttribute(attr))).find(isHttp) || "";
+      const sets = [img.srcset || img.getAttribute("srcset"), ...LAZY_SRCSET_ATTRS.map((attr) => img.getAttribute(attr))];
+      if (img.parentElement instanceof HTMLPictureElement) {
+        for (const source of img.parentElement.querySelectorAll("source[srcset]")) sets.push(source.srcset);
+      }
+      const widest = sets.map(largestOf).filter((c) => c && isHttp(c.url)).sort((a, b) => b.w - a.w)[0];
+      const lazy = LAZY_ATTRS.map((attr) => absolute(img.getAttribute(attr))).find(isHttp) || "";
+      // A link may lead to a page about the photo (Wikipedia's "File:"), not
+      // to the photo: the gallery checks each candidate in this order.
+      const order = [];
+      if (link) order.push({ url: link, from: "link" });
+      if (full) order.push({ url: full, from: "full" });
+      if (widest && widest.url !== shown && (widest.w > natural.w || (!widest.w && widest.x > 1) || placeholder)) {
+        order.push({ ...widest, from: "srcset" });
+      }
+      if (lazy && placeholder) order.push({ url: lazy, from: "lazy" });
+      if (!placeholder) order.push({ url: shown, w: natural.w, h: natural.h, from: "shown" });
+      const candidates = [...new Set(order.map((c) => c.url))];
+      if (!candidates.length || seen.has(candidates[0])) continue;
+      const best = order[0];
+      add({
+        type: "image",
+        kind: "direct",
+        url: best.url,
+        candidates,
+        verify: best.from === "link",
+        thumb: placeholder ? (order.find((c) => c.from !== "link") ?? best).url : shown,
+        width: best.from === "shown" ? natural.w : best.w || 0,
+        height: best.from === "shown" ? natural.h : 0,
+        shownWidth: natural.w,
+        shownHeight: natural.h,
+        name: clean(img.alt || img.title),
+        source: best.from,
+      });
+    }
+
+    // Backgrounds: inline styles and lazy-load attributes, then the computed
+    // style of elements big enough to be a photo (banners, covers, galleries).
+    const bgUrl = (value) => /url\(\s*(['"]?)(.*?)\1\s*\)/i.exec(value || "")?.[2] || "";
+    let checked = 0;
+    for (const el of queryAll("body *")) {
+      if (checked++ > MAX_BG_ELEMENTS) break;
+      let url = "";
+      for (const attr of BG_ATTRS) url ||= absolute(el.getAttribute(attr));
+      if (!url && el.offsetWidth >= 120 && el.offsetHeight >= 120) url = absolute(bgUrl(getComputedStyle(el).backgroundImage));
+      if (!isHttp(url)) continue;
+      add({ type: "image", kind: "direct", url, thumb: url, width: 0, height: 0, name: clean(el.getAttribute("aria-label") || el.title), source: "background" });
+    }
+
+    // Links to media files ("download the original", galleries without a viewer).
+    for (const a of queryAll("a[href]")) {
+      const known = typeOfUrl(a.href);
+      if (!known || !isHttp(a.href)) continue;
+      add({
+        ...known,
+        url: a.href,
+        candidates: [a.href],
+        verify: true,
+        thumb: known.type === "image" ? a.href : "",
+        name: clean(a.textContent || a.title) || nameOf(a.href),
+        source: "link",
+      });
+    }
+
+    // What the page says it is about: og:image, og:video, JSON-LD.
+    const meta = (name) => document.querySelector(`meta[property="${name}"], meta[name="${name}"]`)?.content;
+    for (const name of ["og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream"]) {
+      const url = absolute(meta(name));
+      const known = isHttp(url) && typeOfUrl(url);
+      if (known && known.type === "video") add({ ...known, url, thumb: absolute(meta("og:image")), name: clean(meta("og:title") || document.title), source: "meta" });
+    }
+    for (const name of ["og:image:secure_url", "og:image", "twitter:image", "twitter:image:src"]) {
+      const url = absolute(meta(name));
+      if (isHttp(url)) add({ type: "image", kind: "direct", url, thumb: url, width: Number(meta("og:image:width")) || 0, height: Number(meta("og:image:height")) || 0, name: clean(meta("og:title") || document.title), source: "meta" });
+    }
+    for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+      let data;
+      try {
+        data = JSON.parse(script.textContent);
+      } catch {
+        continue;
+      }
+      const stack = [data];
+      for (let guard = 0; stack.length && guard < 500; guard++) {
+        const node = stack.pop();
+        if (!node || typeof node !== "object") continue;
+        if (Array.isArray(node)) {
+          stack.push(...node);
+          continue;
+        }
+        const type = String(node["@type"] || "");
+        const url = absolute(typeof node.contentUrl === "string" ? node.contentUrl : "");
+        const known = isHttp(url) && typeOfUrl(url);
+        if (/VideoObject/.test(type) && known) add({ ...known, url, thumb: absolute([].concat(node.thumbnailUrl || [])[0]), name: clean(node.name), source: "meta" });
+        if (/ImageObject/.test(type) && isHttp(url)) add({ type: "image", kind: "direct", url, thumb: url, width: Number(node.width) || 0, height: Number(node.height) || 0, name: clean(node.name || node.caption), source: "meta" });
+        for (const value of Object.values(node)) if (value && typeof value === "object") stack.push(value);
+      }
+    }
+
+    return { url: location.href, title: document.title, items };
+  }
+  // Called by the background with scripting.executeScript, in this same world.
+  globalThis.__fisgaCollectMedia = collectMedia;
+
   api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg?.type === "collect-links") {
+    if (msg?.type === "collect-media") {
+      sendResponse(collectMedia());
+    } else if (msg?.type === "collect-links") {
       sendResponse({ links: collectLinks(Boolean(msg.selection)) });
     } else if (msg?.type === "overlay-dismissed") {
       // Only frames with a closed button answer: the first answer wins.

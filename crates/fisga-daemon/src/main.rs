@@ -217,6 +217,10 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, updater: Arc<Updater
                 Ok(ids) => Response::AddedBatch { ids },
                 Err(e) => Response::Error { message: format!("{e:#}") },
             },
+            Request::AddMany { downloads } => match manager.add_many(downloads) {
+                Ok(ids) => Response::AddedBatch { ids },
+                Err(e) => Response::Error { message: format!("{e:#}") },
+            },
             Request::List => Response::Downloads { items: manager.list() },
             Request::Pause { id } => result(manager.pause(id)),
             Request::Resume { id } => result(manager.resume(id)),

@@ -387,8 +387,197 @@ async function ping() {
   }
 }
 
+// ------------------------------------------------------------ media gallery
+// media.html lists every photo, video and audio of a tab, and sends the ones
+// the user picks to Fisga in one go: into the queue, each in its category's
+// folder, inside a folder named after the site.
+
+/** The site's folder name: its host without "www." ("pt.wikipedia.org", "instagram.com"). */
+function siteFolder(url) {
+  const host = parseUrl(url)?.hostname ?? "";
+  return host.replace(/^www\d*\./, "") || "site";
+}
+
+/** Opens the gallery of `tab` next to it. */
+async function openGallery(tab) {
+  if (!tab?.id) return;
+  await api.tabs.create({
+    url: api.runtime.getURL(`media.html?tab=${tab.id}`),
+    index: (tab.index ?? 0) + 1,
+    openerTabId: tab.id,
+    windowId: tab.windowId,
+  });
+}
+
+/**
+ * What every frame of the tab has (content.js's collectMedia), plus the files
+ * and streams the tab loaded (the sniffing above). A player with no address
+ * of its own (blob:) becomes the stream it loaded, or the page for yt-dlp.
+ */
+async function galleryScan(tabId) {
+  const tab = await api.tabs.get(tabId);
+  if (isBlocked(tab.url)) return { ok: true, blocked: true, page: { url: tab.url, title: tab.title, folder: siteFolder(tab.url) }, items: [] };
+  let frames = [];
+  let error = null;
+  try {
+    frames = await api.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: () => globalThis.__fisgaCollectMedia?.() ?? null,
+    });
+  } catch (err) {
+    error = String(err?.message || err);
+  }
+  // Without the function in that world (Firefox, or a frame where the page
+  // script did not run yet): ask the frame's content script.
+  for (const frame of frames) {
+    if (frame.result == null && frame.frameId != null) {
+      frame.result = await api.tabs.sendMessage(tabId, { type: "collect-media" }, { frameId: frame.frameId }).catch(() => null);
+    }
+  }
+  if (!frames.length && !error) error = "nenhum quadro respondeu";
+
+  await restore();
+  const sniffed = mediaByTab.get(tabId) ?? [];
+  const items = [];
+  const seen = new Set();
+  const push = (item) => {
+    if (!item?.url || seen.has(item.url) || isBlocked(item.url)) return;
+    seen.add(item.url);
+    items.push(item);
+  };
+  // Frames that already have a video with an address: a player without one
+  // there is the same video (or one we cannot get); it is not offered twice.
+  const hasVideo = (frame) =>
+    sniffed.some((c) => c.frameId === frame.frameId) ||
+    (frame.result?.items ?? []).some((item) => item.type !== "image" && item.kind !== "blob");
+  for (const frame of frames) {
+    const result = frame.result;
+    if (!result?.items) continue;
+    const frameUrl = result.url || tab.url;
+    for (const item of result.items) {
+      if (item.kind === "blob") {
+        if (isExtractorPage(frameUrl) && isSingleVideoPage(frameUrl)) {
+          push({ ...item, url: frameUrl, kind: "page", frameUrl, frameId: frame.frameId });
+        } else if (hasVideo(frame)) {
+          continue;
+        } else if (/^https?:/.test(frameUrl)) {
+          // yt-dlp's generic extractor may still find it in the page.
+          push({ ...item, url: frameUrl, kind: "page", generic: true, frameUrl, frameId: frame.frameId });
+        }
+        continue;
+      }
+      push({ ...item, frameUrl, frameId: frame.frameId });
+    }
+  }
+  for (const candidate of sniffed) {
+    const described = describe(candidate);
+    const audio = /^audio\//.test(candidate.contentType) || /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac)$/i.test(parseUrl(candidate.url)?.pathname ?? "");
+    push({
+      type: audio ? "audio" : "video",
+      kind: candidate.kind,
+      url: candidate.url,
+      thumb: "",
+      name: described.label,
+      detail: described.detail,
+      size: candidate.size ?? null,
+      source: "network",
+      frameId: candidate.frameId,
+    });
+  }
+  return { ok: true, error, page: { url: tab.url, title: tab.title, folder: siteFolder(tab.url) }, items };
+}
+
+/** Is this address there, and what is it? HEAD, or one byte when HEAD is refused. */
+async function probeUrl(url) {
+  if (!/^https?:/i.test(url ?? "") || isBlocked(url)) return { ok: false };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    let res = await fetch(url, { method: "HEAD", credentials: "include", signal: controller.signal, redirect: "follow" });
+    if (!res.ok) {
+      res = await fetch(url, { headers: { Range: "bytes=0-0" }, credentials: "include", signal: controller.signal, redirect: "follow" });
+      res.body?.cancel().catch(() => {});
+    }
+    const type = (res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    const range = res.headers.get("content-range");
+    const total = range ? Number(range.split("/")[1]) : Number(res.headers.get("content-length"));
+    return { ok: res.ok, status: res.status, type, size: Number.isFinite(total) && total > 0 ? total : null, url: res.url || url };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Each batch is one message; the native host takes up to 8 MiB.
+const GALLERY_CHUNK = 150;
+
+/** The gallery's selection, to the queue: each in its category's folder, inside the site's. */
+async function galleryDownload(msg) {
+  const tab = await api.tabs.get(msg.tabId).catch(() => null);
+  const pageUrl = tab?.url || msg.pageUrl;
+  const folder = siteFolder(pageUrl);
+  const cookies = new Map();
+  const cookiesOf = async (url) => {
+    const origin = parseUrl(url)?.origin ?? "";
+    if (!cookies.has(origin)) cookies.set(origin, await cookiesFor(url));
+    return cookies.get(origin);
+  };
+  const downloads = [];
+  for (const item of msg.items ?? []) {
+    if (!/^(https?|ftp):/i.test(item.url ?? "") || isBlocked(item.url)) continue;
+    const kind = item.kind === "page" || item.kind === "stream" ? item.kind : "direct";
+    downloads.push({
+      url: item.url,
+      kind,
+      referrer: item.frameUrl || pageUrl,
+      pageUrl,
+      title: kind === "direct" ? undefined : item.name || undefined,
+      userAgent: navigator.userAgent,
+      cookies: await cookiesOf(item.url),
+      category: item.type === "image" ? "image" : item.type === "audio" ? "music" : "video",
+      subfolder: folder,
+      start: true,
+    });
+  }
+  if (!downloads.length) throw new Error(message("galleryNothingSelected", "Nenhuma mídia selecionada."));
+  const ids = [];
+  for (let i = 0; i < downloads.length; i += GALLERY_CHUNK) {
+    let reply;
+    try {
+      reply = await api.runtime.sendNativeMessage(HOST, { type: "media-batch", downloads: downloads.slice(i, i + GALLERY_CHUNK) });
+    } catch (err) {
+      const text = String(err?.message || err);
+      if (/not found|no such native application|forbidden/i.test(text)) {
+        throw new Error(message("hostMissing", "App Fisga não encontrado. Instale-o e rode: fisga install-hosts"));
+      }
+      throw new Error(text);
+    }
+    if (reply?.type !== "added-batch") throw new Error(reply?.message || "resposta inválida do app");
+    ids.push(...reply.ids);
+  }
+  return { ok: true, ids, folder };
+}
+
+/** Pages of the extension itself (popup, gallery), not content scripts. */
+function fromExtensionPage(sender) {
+  return Boolean(sender?.url?.startsWith(api.runtime.getURL("")));
+}
+
 async function handle(msg, sender) {
+  if (/^gallery-/.test(msg?.type ?? "") && !fromExtensionPage(sender)) return { ok: false, error: "mensagem desconhecida" };
   switch (msg?.type) {
+    case "gallery-open": {
+      const tab = await api.tabs.get(msg.tabId);
+      await openGallery(tab);
+      return { ok: true };
+    }
+    case "gallery-scan":
+      return galleryScan(msg.tabId);
+    case "gallery-probe":
+      return probeUrl(msg.url);
+    case "gallery-download":
+      return galleryDownload(msg);
     case "media-candidates":
       return { ok: true, items: await candidatesFor(sender.tab?.id, frameUrlOf(msg, sender), sender.tab?.url, msg.linkUrl) };
     case "download-media":
@@ -525,6 +714,7 @@ api.runtime.onInstalled.addListener(async () => {
     title: message("menuSelectedLinks", "Baixar os links selecionados com o Fisga"),
     contexts: ["selection"],
   });
+  api.contextMenus.create({ id: "fisga-gallery", title: message("menuGallery", "Baixar fotos e vídeos da página com o Fisga…"), contexts: ["page", "image", "video"] });
 });
 
 /** The links of the clicked frame (or the selected ones) go to the app, which lists them to pick from. */
@@ -547,6 +737,8 @@ api.contextMenus.onClicked.addListener(async (info, tab) => {
         userAgent: navigator.userAgent,
         cookies: await cookiesFor(info.linkUrl),
       });
+    } else if (info.menuItemId === "fisga-gallery") {
+      await openGallery(tab);
     } else if (info.menuItemId === "fisga-all-links" || info.menuItemId === "fisga-selected-links") {
       await sendLinks(info, tab, info.menuItemId === "fisga-selected-links");
     } else if (info.menuItemId === "fisga-media") {

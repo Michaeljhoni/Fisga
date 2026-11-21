@@ -9,9 +9,12 @@
 //   scenarios: search, menu-search, watch, spa (search -> click a video -> button), home,
 //   takeover (a .safetensors download, named only by Content-Disposition), force (Alt+click on a link),
 //   dismiss (the × hides the button; the popup and the next video bring it back),
-//   store (the Chrome Web Store package: nothing on YouTube, the rest still works)
+//   store (the Chrome Web Store package: nothing on YouTube, the rest still works),
+//   gallery (the media gallery on a local page: what it finds, the originals, what it sends),
+//   gallery-web (the gallery on real sites: GALLERY_URLS="url url", a report and screenshots)
 //   CHROME=/path/to/chrome overrides the browser; results go to extension/test/out/<label>/.
 import { spawn } from "node:child_process";
+import { deflateSync } from "node:zlib";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -90,6 +93,7 @@ const STUB = `(() => {
     globalThis.__fisgaSent.push(msg);
     if (msg.type === "ping") return { type: "pong", version: "stub", daemon: true };
     if (msg.type === "settings") return { type: "settings", fileTypes: ["zip", "safetensors"], forceKey: "alt" };
+    if (msg.type === "media-batch") return { type: "added-batch", ids: msg.downloads.map((_, i) => 1000 + i) };
     return { type: "added", id: globalThis.__fisgaSent.length, pending: msg.confirm !== false };
   };
   try { chrome.runtime.sendNativeMessage = fake; } catch {}
@@ -411,6 +415,200 @@ async function dismissScenario() {
   return { name: "dismiss", steps };
 }
 
+// ------------------------------------------------------------ media gallery
+/** A real PNG of that size (one colour), so pages see its natural size. */
+function png(width, height, seed = 0) {
+  const table = new Int32Array(256).map((_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c;
+  });
+  const crc = (buf) => {
+    let c = -1;
+    for (const b of buf) c = table[(c ^ b) & 255] ^ (c >>> 8);
+    return (c ^ -1) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const out = Buffer.alloc(body.length + 8);
+    out.writeUInt32BE(data.length, 0);
+    body.copy(out, 4);
+    out.writeUInt32BE(crc(body), body.length + 4);
+    return out;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 2;
+  const row = Buffer.alloc(width * 3 + 1);
+  for (let x = 0; x < width; x++) row.set([(seed * 53) % 256, (x * 255) / width, 160], 1 + x * 3);
+  const raw = Buffer.concat(Array.from({ length: height }, () => row));
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", header), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
+
+const GALLERY_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Galeria de teste</title>
+<meta property="og:image" content="/img/1200x630/capa.png"></head>
+<body style="font:16px sans-serif;padding:20px">
+<img id="srcset" src="/img/200x150/praia-200.png" srcset="/img/200x150/praia-200.png 200w, /img/1600x1200/praia-1600.png 1600w" sizes="200px" width="200">
+<img id="lazy" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" data-src="/img/800x600/montanha.png" width="200" height="150">
+<a href="/img/2000x1500/cachoeira.png"><img id="linked" src="/img/300x225/cachoeira-thumb.png"></a>
+<img id="full" src="/img/300x200/ponte-300.png" data-large-file="/img/1800x1200/ponte.png">
+<img id="wp" src="/wp-content/uploads/2024/05/flor-300x200.png">
+<img id="icon" src="/img/16x16/icone.png">
+<div id="bg" style="width:320px;height:200px;background-image:url('/img/640x400/fundo.png')"></div>
+<video id="video" src="/media/filme.mp4" poster="/img/640x360/poster.png" width="320" height="180"></video>
+<audio id="audio" src="/media/musica.mp3" controls></audio>
+<p><a href="/media/extra.webm">Vídeo extra</a></p>
+<p><a href="https://www.youtube.com/watch?v=jNQXAC9IVRw" title="Me at the zoo"><img src="/img/320x180/yt.png"></a></p>
+</body></html>`;
+
+async function gallerySite() {
+  const { createServer } = await import("node:http");
+  const server = createServer((req, res) => {
+    const path = decodeURIComponent(req.url.split("?")[0]);
+    const size = /^\/img\/(\d+)x(\d+)\//.exec(path);
+    const wp = /^\/wp-content\/uploads\/2024\/05\/flor(-300x200)?\.png$/.exec(path);
+    if (path === "/") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(GALLERY_PAGE);
+    } else if (size || wp) {
+      const [w, h] = size ? [Number(size[1]), Number(size[2])] : wp[1] ? [300, 200] : [1200, 800];
+      const body = png(w, h, w + h);
+      res.writeHead(200, { "content-type": "image/png", "content-length": body.length });
+      res.end(body);
+    } else if (/^\/media\/\w+\.(mp4|webm|mp3)$/.test(path)) {
+      const type = path.endsWith(".mp3") ? "audio/mpeg" : path.endsWith(".webm") ? "video/webm" : "video/mp4";
+      const body = Buffer.alloc(300 * 1024);
+      res.writeHead(200, { "content-type": type, "content-length": body.length });
+      res.end(body);
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  return { server, base: `http://127.0.0.1:${server.address().port}` };
+}
+
+/** Opens the gallery of the active tab and waits for its cards. */
+async function openGallery(sw) {
+  const url = await evaluate(sw, "chrome.tabs.query({ active: true, lastFocusedWindow: true }).then(([tab]) => chrome.runtime.getURL('media.html?tab=' + tab.id))");
+  const { targetId } = await cdp.send("Target.createTarget", { url });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  await cdp.send("Runtime.enable", {}, sessionId);
+  for (let i = 0; i < 40; i++) {
+    await sleep(500);
+    const ready = await evaluate(sessionId, "document.querySelectorAll('.card').length > 0 || !document.getElementById('status').hidden && !/Procurando|Looking/.test(document.getElementById('status').textContent)").catch(() => false);
+    if (ready) break;
+  }
+  return { sessionId, targetId };
+}
+
+/** What each tab of the gallery shows: address, name, badges and details of each card. */
+const GALLERY_STATE = (wait = 150) => `(async () => {
+  const out = {};
+  for (const tab of document.querySelectorAll('[data-tab]')) {
+    if (tab.hidden) continue;
+    tab.click();
+    await new Promise((r) => setTimeout(r, ${wait}));
+    out[tab.dataset.tab] = [...document.querySelectorAll('.card')].map((c) => ({
+      url: c.title,
+      name: c.querySelector('.name').textContent,
+      detail: c.querySelector('.detail').textContent,
+      badges: [...c.querySelectorAll('.badge')].map((b) => b.textContent),
+    }));
+  }
+  return out;
+})()`;
+
+async function galleryScenario(sw) {
+  const { server, base } = await gallerySite();
+  log(`--- gallery: ${base}`);
+  await openPage(base + "/");
+  const { sessionId: gallery, targetId } = await openGallery(sw);
+  await sleep(2500); // the originals' checks
+  const state = await evaluate(gallery, GALLERY_STATE());
+  await evaluate(gallery, "document.querySelector('[data-tab=image]').click()");
+  await sleep(300);
+  await shot(gallery, "gallery-photos");
+  // Everything, in every tab, then "Baixar".
+  const before = await evaluate(sw, "globalThis.__fisgaSent.length");
+  const result = await evaluate(
+    gallery,
+    `(async () => {
+      for (const tab of document.querySelectorAll('[data-tab]')) {
+        if (tab.hidden) continue;
+        tab.click();
+        await new Promise((r) => setTimeout(r, 100));
+        document.getElementById('select-all').click();
+      }
+      document.getElementById('download').click();
+      for (let i = 0; i < 40 && !document.getElementById('result').classList.contains('ok') && !document.getElementById('result').classList.contains('err'); i++) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      return document.getElementById('result').textContent;
+    })()`,
+  );
+  await shot(gallery, "gallery-sent");
+  const sent = await evaluate(sw, `JSON.stringify(globalThis.__fisgaSent.slice(${before}).filter((m) => m.type === 'media-batch').flatMap((m) => m.downloads.map((d) => ({ url: d.url, kind: d.kind, category: d.category, subfolder: d.subfolder, referrer: d.referrer }))))`).then(JSON.parse);
+  await cdp.send("Target.closeTarget", { targetId });
+  server.close();
+
+  const urls = (type) => (state[type] ?? []).map((c) => c.url.replace(base, ""));
+  const expect = {
+    srcsetLargest: urls("image").includes("/img/1600x1200/praia-1600.png") && !urls("image").includes("/img/200x150/praia-200.png"),
+    lazyAddress: urls("image").includes("/img/800x600/montanha.png"),
+    linkedFull: urls("image").includes("/img/2000x1500/cachoeira.png") && !urls("image").includes("/img/300x225/cachoeira-thumb.png"),
+    fullAttribute: urls("image").includes("/img/1800x1200/ponte.png"),
+    wordpressOriginal: urls("image").includes("/wp-content/uploads/2024/05/flor.png"),
+    background: urls("image").includes("/img/640x400/fundo.png"),
+    ogImage: urls("image").includes("/img/1200x630/capa.png"),
+    smallHidden: !urls("image").includes("/img/16x16/icone.png"),
+    videoFile: urls("video").includes("/media/filme.mp4") && urls("video").includes("/media/extra.webm"),
+    videoPage: urls("video").includes("https://www.youtube.com/watch?v=jNQXAC9IVRw"),
+    audio: urls("audio").includes("/media/musica.mp3"),
+    sentAll: sent.length === state.image.length + state.video.length + (state.audio?.length ?? 0),
+    sentOriginal: sent.some((d) => d.url.endsWith("/flor.png") && d.category === "image"),
+    sentFolder: sent.length > 0 && sent.every((d) => d.subfolder === "127.0.0.1"),
+    sentCategories: sent.some((d) => d.category === "video" && d.kind === "page") && sent.some((d) => d.category === "music"),
+  };
+  const pass = Object.values(expect).every(Boolean);
+  log(JSON.stringify({ expect, result }));
+  return { name: "gallery", pass, expect, result, state, sent };
+}
+
+async function galleryWebScenario(sw) {
+  const urls = (process.env.GALLERY_URLS ?? "https://pt.wikipedia.org/wiki/Gato https://www.youtube.com/results?search_query=gatos").split(/\s+/).filter(Boolean);
+  const report = [];
+  for (const [n, url] of urls.entries()) {
+    log(`--- gallery-web: ${url}`);
+    const page = await openPage(url);
+    // Scroll a little: lazy pages load more as they are seen.
+    for (let i = 0; i < 4; i++) {
+      await evaluate(page, "window.scrollBy(0, innerHeight)");
+      await sleep(700);
+    }
+    await evaluate(page, "window.scrollTo(0, 0)");
+    const { sessionId: gallery, targetId } = await openGallery(sw);
+    // Each tab long enough for the cards on screen to be checked.
+    const state = await evaluate(gallery, GALLERY_STATE(6000));
+    await evaluate(gallery, "document.querySelector('[data-tab]:not([hidden])')?.click()");
+    await sleep(500);
+    await shot(gallery, `gallery-web-${n}`);
+    const summary = Object.fromEntries(
+      Object.entries(state).map(([type, cards]) => [
+        type,
+        { count: cards.length, originals: cards.filter((c) => c.badges.includes("Original")).length, sample: cards.slice(0, 6).map((c) => `${c.name} | ${c.detail} | ${c.badges.join(",")} | ${c.url.slice(0, 140)}`) },
+      ]),
+    );
+    log(JSON.stringify(summary, null, 1));
+    report.push({ url, summary });
+    await cdp.send("Target.closeTarget", { targetId });
+  }
+  return { name: "gallery-web", report };
+}
+
 // A local site for the takeover and the force key: a link like Civitai's,
 // whose address has no extension and whose name only comes in the
 // Content-Disposition of the redirect's target, and a link to a plain page.
@@ -547,6 +745,8 @@ try {
     if (s === "spa") report.push(await spaScenario(sw));
     if (s === "dismiss") report.push(await dismissScenario());
     if (s === "store") report.push(await storeScenario(sw));
+    if (s === "gallery") report.push(await galleryScenario(sw));
+    if (s === "gallery-web") report.push(await galleryWebScenario(sw));
     if (s === "takeover" || s === "force") {
       const { server, base } = await localSite();
       report.push(await (s === "takeover" ? takeoverScenario : forceScenario)(sw, base));

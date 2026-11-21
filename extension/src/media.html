@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title data-i18n="galleryTitle">Fotos e vídeos da página</title>
+    <link rel="icon" href="icons/icon-32.png" />
+    <link rel="stylesheet" href="media.css" />
+  </head>
+  <body>
+    <header class="top">
+      <img src="icons/icon-32.png" alt="" width="24" height="24" />
+      <div class="where">
+        <h1 data-i18n="galleryTitle">Fotos e vídeos da página</h1>
+        <p id="page" class="muted"></p>
+      </div>
+      <input id="filter" type="search" data-i18n-placeholder="galleryFilter" placeholder="Filtrar" />
+      <button id="refresh" type="button" class="secondary" data-i18n="galleryRefresh">Atualizar</button>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="video"><span data-i18n="galleryVideos">Vídeos</span> <span class="count"></span></button>
+      <button type="button" role="tab" data-tab="image"><span data-i18n="galleryPhotos">Fotos</span> <span class="count"></span></button>
+      <button type="button" role="tab" data-tab="audio"><span data-i18n="galleryAudio">Áudios</span> <span class="count"></span></button>
+      <span class="spacer"></span>
+      <label class="small-toggle" id="small-wrap"><input id="small" type="checkbox" /> <span data-i18n="galleryShowSmall">Mostrar imagens pequenas</span></label>
+      <button id="select-all" type="button" class="link" data-i18n="gallerySelectAll">Selecionar todas</button>
+      <button id="select-none" type="button" class="link" data-i18n="gallerySelectNone">Limpar seleção</button>
+    </nav>
+
+    <main>
+      <p id="status" class="status muted" data-i18n="galleryScanning">Procurando fotos, vídeos e áudios na página…</p>
+      <div id="grid" class="grid" role="listbox" aria-multiselectable="true"></div>
+    </main>
+
+    <footer class="bar">
+      <div class="summary">
+        <strong id="selected"></strong>
+        <span id="dest" class="muted"></span>
+      </div>
+      <span id="result" class="result"></span>
+      <button id="download" type="button" class="primary" disabled></button>
+    </footer>
+
+    <script src="fullsize.js"></script>
+    <script src="media.js"></script>
+  </body>
+</html>

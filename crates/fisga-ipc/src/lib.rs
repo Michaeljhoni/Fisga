@@ -418,23 +418,40 @@ impl BrowserSettings {
         types
     }
 
-    /// `"https://Banco.com.br/conta, *.exemplo.com"` → `["banco.com.br",
-    /// "exemplo.com"]`: the hosts, lowercase, each once.
+    /// `"https://Banco.com.br/conta, *.exemplo.com nas [::1]:8080 münchen.de"` →
+    /// `["banco.com.br", "exemplo.com", "nas", "[::1]", "xn--mnchen-3ya.de"]`:
+    /// the hosts as browsers write them (lowercase, IDNA's ASCII), each once.
     pub fn parse_sites(text: &str) -> Vec<String> {
         let mut sites: Vec<String> = Vec::new();
         for word in text.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
-            let host = word.split_once("://").map_or(word, |(_, rest)| rest);
-            let host = host.split(['/', '?', '#']).next().unwrap_or_default();
-            let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
-            let host = host.split(':').next().unwrap_or_default();
-            let host = host.trim_start_matches("*.").trim_matches('.').to_ascii_lowercase();
-            let valid = host.contains('.') || host == "localhost";
-            let valid = valid && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
-            if valid && !sites.contains(&host) {
-                sites.push(host);
+            if let Some(host) = Self::site_host(word) {
+                if !sites.contains(&host) {
+                    sites.push(host);
+                }
             }
         }
         sites
+    }
+
+    /// The host of one site of the list, if it is one.
+    fn site_host(word: &str) -> Option<String> {
+        let host = word.split_once("://").map_or(word, |(_, rest)| rest);
+        let host = host.split(['/', '?', '#']).next().unwrap_or_default();
+        let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+        let host = match host.parse::<std::net::Ipv6Addr>() {
+            // Without brackets, the colons are the address's, not a port's.
+            Ok(ip) => return Some(url::Host::<String>::Ipv6(ip).to_string()),
+            Err(_) if host.starts_with('[') => host.split_inclusive(']').next().unwrap_or_default(),
+            Err(_) => host.split(':').next().unwrap_or_default(),
+        };
+        match url::Host::parse(host.trim_start_matches("*.").trim_matches('.')).ok()? {
+            url::Host::Domain(name) => {
+                let label = |label: &str| !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                let valid = name.split('.').all(label);
+                valid.then_some(name)
+            }
+            ip => Some(ip.to_string()),
+        }
     }
 
     /// `url` is on one of the excluded sites (or a subdomain of one).
@@ -707,6 +724,7 @@ impl Settings {
         self.max_parallel = self.max_parallel.clamp(1, 20);
         self.connections = self.connections.clamp(1, 32);
         self.browser.file_types = BrowserSettings::parse_file_types(&self.browser.file_types.join(" "));
+        self.browser.excluded_sites = BrowserSettings::parse_sites(&self.browser.excluded_sites.join(" "));
         sanitize_days(&mut self.schedule.days);
         let mut seen = vec![MAIN_QUEUE];
         self.queues.retain(|queue| {
@@ -1835,18 +1853,30 @@ mod tests {
 
     #[test]
     fn excluded_sites() {
-        let sites = BrowserSettings::parse_sites("https://Banco.com.br/conta, *.exemplo.com;intranet.local:8080 banco.com.br lixo localhost");
+        let sites = BrowserSettings::parse_sites("https://Banco.com.br/conta, *.exemplo.com;intranet.local:8080 banco.com.br lixo! localhost");
         assert_eq!(sites, ["banco.com.br", "exemplo.com", "intranet.local", "localhost"]);
-        let browser = BrowserSettings { excluded_sites: sites, ..Default::default() };
+        // A computer of the network by its name, IP addresses, a name with accents.
+        let sites = BrowserSettings::parse_sites("nas NAS:5000 http://[FE80::1]:8080/x ::1 192.168.0.10 München.de * a..b [::1");
+        assert_eq!(sites, ["nas", "[fe80::1]", "[::1]", "192.168.0.10", "xn--mnchen-3ya.de"]);
+        let browser = BrowserSettings {
+            excluded_sites: BrowserSettings::parse_sites("banco.com.br *.exemplo.com nas [::1] münchen.de"),
+            ..Default::default()
+        };
         assert!(browser.excludes("https://banco.com.br/extrato.pdf"));
         assert!(browser.excludes("https://www.banco.com.br/a.zip"));
         assert!(browser.excludes("http://arquivos.exemplo.com/a.iso"));
         assert!(!browser.excludes("https://outrobanco.com.br/a.zip"), "a site is matched whole");
         assert!(!browser.excludes("https://exemplo.com.br/a.zip"));
         assert!(!browser.excludes("não é endereço"));
+        assert!(browser.excludes("http://nas/filmes/a.mkv"));
+        assert!(browser.excludes("http://[::1]:8080/a.iso"));
+        assert!(browser.excludes("https://www.münchen.de/a.zip"));
         // Settings from before the list.
         let settings: Settings = serde_json::from_str(r#"{"browser":{"fileTypes":["iso"]}}"#).unwrap();
         assert!(settings.browser.excluded_sites.is_empty());
+        // Stored by hand or by an older version: written as the list writes them.
+        let settings: Settings = serde_json::from_str(r#"{"browser":{"excludedSites":["Banco.com.br","lixo!","münchen.de"]}}"#).unwrap();
+        assert_eq!(settings.sanitized().browser.excluded_sites, ["banco.com.br", "xn--mnchen-3ya.de"]);
     }
 
     #[test]

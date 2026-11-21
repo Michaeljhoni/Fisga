@@ -345,6 +345,52 @@ test("a download Chrome names later is judged by that name", async () => {
   assert.deepEqual(downloadsSent(bg).map((m) => m.fileName), ["model.zip"]);
 });
 
+// --------------------------------------------------- frames and cookies
+test("what a frame loaded goes with the frame's address (popup)", async () => {
+  const tab = { id: 1, url: "https://news.example/article" };
+  const bg = load({ tabs: { 1: tab }, frames: { 5: "https://player.example/embed/9" } });
+  // Firefox gives the frame's address (documentUrl); Chrome's frame is asked.
+  await sniff(bg, { frameId: 3, url: "https://cdn.example/a/master.m3u8", type: HLS, documentUrl: "https://player.example/embed/1" });
+  await sniff(bg, { frameId: 5, url: "https://cdn.example/b/master.m3u8", type: HLS });
+  for (const url of ["https://cdn.example/a/master.m3u8", "https://cdn.example/b/master.m3u8", "https://news.example/article"]) {
+    await bg.run("handle")({ type: "popup-download", tabId: 1, item: { url, kind: "stream" } }, {});
+  }
+  assert.deepEqual(
+    downloadsSent(bg).map((m) => [m.referrer, m.pageUrl]),
+    [
+      ["https://player.example/embed/1", tab.url],
+      ["https://player.example/embed/9", tab.url],
+      [tab.url, tab.url],
+    ],
+  );
+});
+
+test("the menus in a frame go with the frame's address", async () => {
+  const tab = { id: 1, url: "https://news.example/article" };
+  const bg = load({ tabs: { 1: tab } });
+  const frame = { pageUrl: tab.url, frameUrl: "https://player.example/embed/1", frameId: 3 };
+  await bg.chrome.contextMenus.onClicked.fire({ menuItemId: "fisga-media", srcUrl: "https://cdn.example/clip.mp4", ...frame }, tab);
+  await bg.chrome.contextMenus.onClicked.fire({ menuItemId: "fisga-link", linkUrl: "https://files.example/a.zip", ...frame }, tab);
+  assert.deepEqual(downloadsSent(bg).map((m) => m.referrer), [frame.frameUrl, frame.frameUrl]);
+});
+
+test("cookies come from the tab's store; private downloads stay with the browser", async () => {
+  const container = { id: 1, url: "https://site.example/", cookieStoreId: "firefox-container-2" };
+  const incognito = { id: 2, url: "https://site.example/", incognito: true };
+  const bg = load({
+    stores: [{ id: "0", tabIds: [3] }, { id: "1", tabIds: [2] }],
+    downloads: { 7: { ...ZIP, incognito: true }, 8: { ...ZIP, cookieStoreId: "firefox-container-3" } },
+  });
+  for (const [file, tab] of [["b.zip", container], ["c.zip", incognito], ["d.zip", { id: 3, url: "https://site.example/" }]]) {
+    await bg.run("forceLink")({ url: "https://files.example/" + file }, { tab });
+  }
+  await bg.chrome.downloads.onCreated.fire({ id: 7, ...ZIP, incognito: true });
+  await bg.chrome.downloads.onCreated.fire({ id: 8, ...ZIP, cookieStoreId: "firefox-container-3" });
+  const stores = bg.calls.filter(([name]) => name === "cookies").map(([, details]) => details.storeId ?? "default");
+  assert.deepEqual(stores, ["firefox-container-2", "1", "default", "firefox-container-3"]);
+  assert.equal(bg.items.get(7).paused, false, "the private download is not touched");
+});
+
 test("the link menu sends a video's page to yt-dlp, not its HTML", async () => {
   const bg = load();
   const tab = { id: 1, url: "https://blog.example/" };

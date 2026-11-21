@@ -283,7 +283,8 @@ api.webRequest.onHeadersReceived.addListener(
   (details) => {
     if (isBlocked(details.initiator ?? details.documentUrl)) return;
     const candidate = classify(details);
-    if (candidate) record(details.tabId, details.frameId, candidate);
+    // documentUrl (Firefox): the frame's address, the referrer this file goes with.
+    if (candidate) record(details.tabId, details.frameId, { ...candidate, frameUrl: details.documentUrl });
   },
   { urls: ["<all_urls>"], types: ["media", "xmlhttprequest", "object", "other"] },
   ["responseHeaders"],
@@ -407,15 +408,35 @@ async function resolveTarget(msg, sender) {
 }
 
 // ---------------------------------------------------------- talking to Fisga
-async function cookiesFor(url) {
+/** The cookies the browser sends to `url`, from that store (a container, a private window); none: the default one. */
+async function cookiesFor(url, storeId) {
   try {
-    const cookies = await api.cookies.getAll({ url });
+    const cookies = await api.cookies.getAll(storeId ? { url, storeId } : { url });
     return cookies.map(({ name, value, domain, path, secure, hostOnly, expirationDate }) => ({
       name, value, domain, path, secure, hostOnly, expirationDate,
     }));
   } catch {
     return [];
   }
+}
+
+/** The cookie store of a tab: its container (Firefox) or the incognito one; undefined: the default one. */
+async function cookieStoreOf(tab) {
+  if (tab?.cookieStoreId) return tab.cookieStoreId;
+  if (tab?.id == null || !tab.incognito) return undefined;
+  const stores = await api.cookies.getAllCookieStores().catch(() => []);
+  return stores.find((store) => store.tabIds?.includes(tab.id))?.id;
+}
+
+/** The address of the frame a sniffed file or stream came from: Firefox recorded it, a Chrome frame is asked. */
+async function frameUrlOfCandidate(tab, candidate) {
+  if (candidate.frameUrl) return candidate.frameUrl;
+  if (!candidate.frameId) return tab?.url ?? null;
+  if (tab?.id == null) return null;
+  const [frame] = await api.scripting
+    .executeScript({ target: { tabId: tab.id, frameIds: [candidate.frameId] }, func: () => location.href })
+    .catch(() => []);
+  return frame?.result ?? null;
 }
 
 /** Resolves to { id, pending }: pending = the app is asking the user to confirm. */
@@ -438,7 +459,7 @@ async function sendToApp(payload) {
   throw new Error(reply?.message || "resposta inválida do app");
 }
 
-async function sendMedia(target, { referrer, pageUrl, title }) {
+async function sendMedia(target, { referrer, pageUrl, title, tab }) {
   return sendToApp({
     url: target.url,
     kind: target.kind,
@@ -446,7 +467,7 @@ async function sendMedia(target, { referrer, pageUrl, title }) {
     pageUrl,
     title,
     userAgent: navigator.userAgent,
-    cookies: await cookiesFor(target.url),
+    cookies: await cookiesFor(target.url, await cookieStoreOf(tab)),
   });
 }
 
@@ -463,10 +484,13 @@ async function downloadMedia(msg, sender) {
   } else {
     target = await resolveTarget(msg, sender);
   }
+  // What another frame loaded goes with that frame's address.
+  const otherFrame = target.frameId != null && target.frameId !== sender.frameId;
   const { id, pending } = await sendMedia(target, {
-    referrer: frameUrlOf(msg, sender),
+    referrer: (otherFrame && (await frameUrlOfCandidate(sender.tab, target))) || frameUrlOf(msg, sender),
     pageUrl: sender.tab?.url || msg.pageUrl,
     title: target.title || (target.url === msg.linkUrl && msg.linkTitle) || msg.title,
+    tab: sender.tab,
   });
   return { ok: true, id, pending };
 }
@@ -562,6 +586,8 @@ async function galleryScan(tabId) {
       push({ ...item, frameUrl, frameId: frame.frameId });
     }
   }
+  // The address of each frame, the referrer of what it loaded.
+  const frameUrls = new Map(frames.map((frame) => [frame.frameId, frame.result?.url]));
   for (const candidate of sniffed) {
     const described = describe(candidate);
     const audio = /^audio\//.test(candidate.contentType) || /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac)$/i.test(parseUrl(candidate.url)?.pathname ?? "");
@@ -574,6 +600,7 @@ async function galleryScan(tabId) {
       detail: described.detail,
       size: candidate.size ?? null,
       source: "network",
+      frameUrl: candidate.frameUrl || frameUrls.get(candidate.frameId),
       frameId: candidate.frameId,
     });
   }
@@ -610,10 +637,11 @@ async function galleryDownload(msg) {
   const tab = await api.tabs.get(msg.tabId).catch(() => null);
   const pageUrl = tab?.url || msg.pageUrl;
   const folder = siteFolder(pageUrl);
+  const storeId = await cookieStoreOf(tab);
   const cookies = new Map();
   const cookiesOf = async (url) => {
     const origin = parseUrl(url)?.origin ?? "";
-    if (!cookies.has(origin)) cookies.set(origin, await cookiesFor(url));
+    if (!cookies.has(origin)) cookies.set(origin, await cookiesFor(url, storeId));
     return cookies.get(origin);
   };
   const downloads = [];
@@ -681,7 +709,11 @@ async function handle(msg, sender) {
     }
     case "popup-download": {
       const tab = await api.tabs.get(msg.tabId);
-      const { id, pending } = await sendMedia(msg.item, { referrer: tab.url, pageUrl: tab.url, title: tab.title });
+      await restore();
+      // What a frame loaded goes with that frame's address.
+      const sniffed = (mediaByTab.get(tab.id) ?? []).find((c) => c.url === msg.item?.url);
+      const referrer = (sniffed && (await frameUrlOfCandidate(tab, sniffed))) || tab.url;
+      const { id, pending } = await sendMedia(msg.item, { referrer, pageUrl: tab.url, title: tab.title, tab });
       return { ok: true, id, pending };
     }
     case "force-link":
@@ -727,7 +759,8 @@ const judged = new Set();
 async function takeOver(item) {
   if (judged.has(item.id) || !/^https?:/i.test(item.finalUrl || item.url)) return;
   judged.add(item.id);
-  if (item.byExtensionId === api.runtime.id) return;
+  // Private windows' downloads (and their cookies) stay with the browser.
+  if (item.byExtensionId === api.runtime.id || item.incognito) return;
   // Without the app (not installed) the browser keeps its downloads; after a
   // failed try the app is asked again now.
   await syncWithApp(!appReachable);
@@ -766,7 +799,8 @@ async function takeOver(item) {
       referrer: item.referrer || undefined,
       fileName: extensionOf(item.filename) ? item.filename.split(/[\\/]/).pop() : undefined,
       userAgent: navigator.userAgent,
-      cookies: await cookiesFor(url),
+      // The download's cookie store (a Firefox container).
+      cookies: await cookiesFor(url, item.cookieStoreId),
     });
   } catch (err) {
     console.warn("Fisga: the download stays with the browser:", err);
@@ -800,7 +834,7 @@ async function forceLink(msg, sender) {
     pageUrl: sender.tab?.url || msg.pageUrl,
     title: kind === "page" ? msg.linkTitle : undefined,
     userAgent: navigator.userAgent,
-    cookies: await cookiesFor(url),
+    cookies: await cookiesFor(url, await cookieStoreOf(sender.tab)),
   });
   return { ok: true, id, pending };
 }
@@ -837,11 +871,11 @@ api.contextMenus.onClicked.addListener(async (info, tab) => {
       await sendToApp({
         url: info.linkUrl,
         kind,
-        referrer: info.pageUrl,
+        referrer: info.frameUrl || info.pageUrl,
         pageUrl: tab?.url,
         title: kind === "page" ? info.linkText || undefined : undefined,
         userAgent: navigator.userAgent,
-        cookies: await cookiesFor(info.linkUrl),
+        cookies: await cookiesFor(info.linkUrl, await cookieStoreOf(tab)),
       });
     } else if (info.menuItemId === "fisga-gallery") {
       await openGallery(tab);
@@ -849,7 +883,7 @@ api.contextMenus.onClicked.addListener(async (info, tab) => {
       await sendLinks(info, tab, info.menuItemId === "fisga-selected-links");
     } else if (info.menuItemId === "fisga-media") {
       const sender = { tab, url: info.frameUrl || info.pageUrl, frameId: info.frameId ?? 0 };
-      await downloadMedia({ src: info.srcUrl, pageUrl: info.pageUrl, title: tab?.title }, sender);
+      await downloadMedia({ src: info.srcUrl, pageUrl: info.frameUrl || info.pageUrl, title: tab?.title }, sender);
     }
   } catch (err) {
     console.warn("Fisga:", err);

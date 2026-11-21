@@ -125,7 +125,7 @@ function load({ session = {}, local = {}, native, tabs = {}, downloads = {}, sto
   };
   const context = vm.createContext({
     chrome,
-    console,
+    console: { log: console.log, error: console.error, warn() {} },
     URL,
     setTimeout,
     clearTimeout,
@@ -271,6 +271,78 @@ test("in a feed, the button sends the video the preview links to", async () => {
   const own = "https://vimeo.com/123456789";
   const other = "https://vimeo.com/987654321";
   assert.equal((await pick(bg, { pageUrl: own, linkUrl: other }, { tab: { id: 1, url: own }, frameId: 0 })).url, own, "a video's own page wins");
+});
+
+// ------------------------------------------------------------- takeover
+const ZIP = {
+  url: "https://files.example/get?id=1",
+  finalUrl: "https://files.example/a.zip",
+  filename: "C:\\Downloads\\a.zip",
+  mime: "application/zip",
+  state: "in_progress",
+  referrer: "https://files.example/",
+};
+const actions = (bg) => bg.calls.map(([name]) => name).filter((name) => name !== "cookies");
+const downloadsSent = (bg) => bg.sent.filter((m) => m.type === "download");
+
+test("the app gets the download: the browser's is held, then cancelled and erased", async () => {
+  const bg = load({ downloads: { 7: ZIP } });
+  await bg.chrome.downloads.onCreated.fire({ id: 7, ...ZIP });
+  assert.deepEqual(downloadsSent(bg).map((m) => [m.url, m.fileName]), [[ZIP.finalUrl, "a.zip"]]);
+  assert.deepEqual(actions(bg), ["pause", "cancel", "erase"]);
+});
+
+test("a download that finished before the takeover stays with the browser", async () => {
+  const bg = load({ downloads: { 7: { ...ZIP, state: "complete" } } });
+  await bg.chrome.downloads.onCreated.fire({ id: 7, ...ZIP }); // seen in progress when created
+  assert.deepEqual(downloadsSent(bg), []);
+  assert.ok(bg.items.has(7), "not erased");
+});
+
+test("when the app refuses, the browser's download goes on", async () => {
+  const native = (msg) => (msg.type === "settings" ? { type: "settings", fileTypes: ["zip"] } : { type: "error", message: "no" });
+  const bg = load({ downloads: { 7: ZIP }, native });
+  await bg.chrome.downloads.onCreated.fire({ id: 7, ...ZIP });
+  assert.deepEqual(actions(bg), ["pause", "resume"]);
+  assert.equal(bg.items.get(7).paused, false);
+});
+
+test("without the app the download is not touched; once installed, the next one is taken", async () => {
+  let installed = false;
+  const native = (msg) => {
+    if (!installed) throw new Error("Specified native messaging host not found.");
+    return msg.type === "settings" ? { type: "settings", fileTypes: ["zip"] } : { type: "added", id: 1 };
+  };
+  const bg = load({ downloads: { 7: ZIP, 8: ZIP }, native });
+  await bg.chrome.downloads.onCreated.fire({ id: 7, ...ZIP });
+  assert.deepEqual(actions(bg), []);
+  installed = true;
+  await bg.chrome.downloads.onCreated.fire({ id: 8, ...ZIP });
+  assert.deepEqual(actions(bg), ["pause", "cancel", "erase"]);
+  assert.equal(downloadsSent(bg).length, 1);
+});
+
+test("the name's extension decides, the type only when the name has none", () => {
+  const bg = load();
+  const prefs = { fileTypes: ["zip", "mp4"] };
+  const intercept = (filename, mime) => bg.run("shouldIntercept")({ filename, mime }, prefs);
+  assert.equal(intercept("/home/u/report.pdf", "application/octet-stream"), false);
+  assert.equal(intercept("/home/u/clip.webm", "video/webm"), false);
+  assert.equal(intercept("/home/u/a.zip", "text/html"), true);
+  assert.equal(intercept("/home/u/video", "video/mp4"), true);
+  assert.equal(intercept("/home/u/notes", "text/plain"), false);
+});
+
+test("a download Chrome names later is judged by that name", async () => {
+  const unnamed = { ...ZIP, finalUrl: "https://files.example/storage/abc", filename: "", mime: "application/octet-stream" };
+  const bg = load({ downloads: { 7: unnamed, 8: unnamed } });
+  for (const [id, name] of [[7, "C:\\Downloads\\report.pdf"], [8, "C:\\Downloads\\model.zip"]]) {
+    await bg.chrome.downloads.onCreated.fire({ id, ...unnamed });
+    bg.items.get(id).filename = name;
+    await bg.chrome.downloads.onChanged.fire({ id, filename: { current: name } });
+    await tick(20);
+  }
+  assert.deepEqual(downloadsSent(bg).map((m) => m.fileName), ["model.zip"]);
 });
 
 test("the link menu sends a video's page to yt-dlp, not its HTML", async () => {

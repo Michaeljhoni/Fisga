@@ -165,22 +165,31 @@ async function settings() {
 const SYNC_EVERY_MS = 5000;
 let lastSync = 0;
 let syncing = null;
+// Whether the last try reached the app (false: not installed, or its host fails).
+let appReachable = true;
 
-/** Copies the app's file types and force key; without the app, keeps the last ones. */
-function syncWithApp() {
-  if (syncing || Date.now() - lastSync < SYNC_EVERY_MS) return syncing ?? Promise.resolve();
+/** Copies the app's file types and force key; without the app, keeps the last ones. `force` skips the wait. */
+function syncWithApp(force = false) {
+  if (syncing || (!force && Date.now() - lastSync < SYNC_EVERY_MS)) return syncing ?? Promise.resolve();
   lastSync = Date.now();
   syncing = (async () => {
+    let reply;
     try {
-      const reply = await api.runtime.sendNativeMessage(HOST, { type: "settings" });
-      if (reply?.type === "settings" && Array.isArray(reply.fileTypes)) {
-        await api.storage.local.set({
+      reply = await api.runtime.sendNativeMessage(HOST, { type: "settings" });
+      appReachable = true;
+    } catch {
+      appReachable = false;
+      return;
+    }
+    if (reply?.type === "settings" && Array.isArray(reply.fileTypes)) {
+      await api.storage.local
+        .set({
           fileTypes: reply.fileTypes,
           forceKey: reply.forceKey ?? "none",
           excludedSites: Array.isArray(reply.excludedSites) ? reply.excludedSites : [],
-        });
-      }
-    } catch {}
+        })
+        .catch(() => {});
+    }
   })().finally(() => (syncing = null));
   return syncing;
 }
@@ -691,8 +700,6 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // --------------------------------------------------- browser download takeover
-const passThrough = new Set();
-
 function extensionOf(name) {
   const base = (name || "").split(/[\\/]/).pop().split(/[?#]/)[0];
   const dot = base.lastIndexOf(".");
@@ -705,11 +712,11 @@ function isExcluded(url, prefs) {
   return Boolean(u && hostMatches(u.hostname.toLowerCase(), prefs.excludedSites ?? []));
 }
 
+/** The extension of the file's name decides (the user's file types); its type only when the name has none. */
 function shouldIntercept(item, prefs) {
   const allowed = new Set((prefs.fileTypes ?? []).map((type) => String(type).toLowerCase()));
-  const url = item.finalUrl || item.url;
-  const ext = extensionOf(item.filename) || extensionOf(parseUrl(url)?.pathname);
-  if (ext && allowed.has(ext)) return true;
+  const ext = extensionOf(item.filename);
+  if (ext) return allowed.has(ext);
   const mime = (item.mime || "").toLowerCase();
   return /^(video|audio)\//.test(mime) || /^application\/(zip|x-7z|x-rar|vnd\.rar|x-tar|gzip|x-xz|zstd|x-iso9660|x-msdownload|x-debian|x-rpm|x-apple-diskimage|octet-stream)/.test(mime);
 }
@@ -718,32 +725,40 @@ function shouldIntercept(item, prefs) {
 const judged = new Set();
 
 async function takeOver(item) {
-  const url = item.finalUrl || item.url;
-  if (judged.has(item.id) || !/^https?:/i.test(url)) return;
+  if (judged.has(item.id) || !/^https?:/i.test(item.finalUrl || item.url)) return;
   judged.add(item.id);
-  if (passThrough.delete(url) || item.byExtensionId === api.runtime.id) return;
-  await syncWithApp();
+  if (item.byExtensionId === api.runtime.id) return;
+  // Without the app (not installed) the browser keeps its downloads; after a
+  // failed try the app is asked again now.
+  await syncWithApp(!appReachable);
+  if (!appReachable) return;
   const prefs = await settings();
   if (!prefs.intercept || item.state !== "in_progress") return;
-  // The site of the file, or of the page it came from.
-  if (isExcluded(url, prefs) || isExcluded(item.referrer, prefs)) return;
-  if (!shouldIntercept(item, prefs)) {
-    // Chrome names the file (Content-Disposition) after creating the item: the
-    // name may have come while waiting, or gets its own look in onChanged.
+  // Chrome names the file (Content-Disposition) after creating the item: the
+  // name may have come while waiting, else it gets its own look in onChanged.
+  if (!item.filename) {
     const [named] = await api.downloads.search({ id: item.id }).catch(() => []);
-    if (!named || !shouldIntercept(named, prefs)) {
-      if (!extensionOf(named?.filename)) judged.delete(item.id);
+    if (!named?.filename) {
+      judged.delete(item.id);
       return;
     }
     item = named;
   }
+  const url = item.finalUrl || item.url;
+  // The site of the file, or of the page it came from.
+  if (isExcluded(url, prefs) || isExcluded(item.referrer, prefs) || !shouldIntercept(item, prefs)) return;
 
+  // The browser holds the download while the app is asked, and goes on with
+  // it if the app refuses. One that already finished stays with the browser:
+  // pause() refuses it (Chrome's cancel() would not), and one still finishing
+  // does not pause.
   try {
-    await api.downloads.cancel(item.id);
+    await api.downloads.pause(item.id);
   } catch {
-    return; // already finished or not cancellable: leave it to the browser
+    return;
   }
-  api.downloads.erase({ id: item.id }).catch(() => {});
+  const [held] = await api.downloads.search({ id: item.id }).catch(() => []);
+  if (!held || held.state === "complete" || (held.state === "in_progress" && !held.paused)) return;
   try {
     await sendToApp({
       url,
@@ -754,10 +769,14 @@ async function takeOver(item) {
       cookies: await cookiesFor(url),
     });
   } catch (err) {
-    console.warn("Fisga: devolvendo o download ao navegador:", err);
-    passThrough.add(url);
-    api.downloads.download({ url }).catch(() => passThrough.delete(url));
+    console.warn("Fisga: the download stays with the browser:", err);
+    api.downloads.resume(item.id).catch(() => {});
+    return;
   }
+  await api.downloads.cancel(item.id).catch(() => {});
+  // Finished before the cancel after all: the browser's copy stays listed.
+  const [after] = await api.downloads.search({ id: item.id }).catch(() => []);
+  if (after?.state !== "complete") api.downloads.erase({ id: item.id }).catch(() => {});
 }
 
 api.downloads.onCreated.addListener((item) => takeOver(item));

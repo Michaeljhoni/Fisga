@@ -87,12 +87,18 @@ async function evaluate(session, expression) {
   return r.result.value;
 }
 
+// globalThis.__fisgaApp = "missing" (not installed), "refuses" (answers
+// downloads with an error) or "slow" (takes 1.5 s to send its settings)
+// changes how the stubbed app behaves.
 const STUB = `(() => {
   globalThis.__fisgaSent ??= [];
   const fake = async (host, msg) => {
     globalThis.__fisgaSent.push(msg);
+    if (globalThis.__fisgaApp === "missing") throw new Error("Specified native messaging host not found.");
+    if (globalThis.__fisgaApp === "slow" && msg.type === "settings") await new Promise((r) => setTimeout(r, 1500));
     if (msg.type === "ping") return { type: "pong", version: "stub", daemon: true };
     if (msg.type === "settings") return { type: "settings", fileTypes: ["zip", "safetensors"], forceKey: "alt" };
+    if (globalThis.__fisgaApp === "refuses") return { type: "error", message: "refused by the stub" };
     if (msg.type === "media-batch") return { type: "added-batch", ids: msg.downloads.map((_, i) => 1000 + i) };
     return { type: "added", id: globalThis.__fisgaSent.length, pending: msg.confirm !== false };
   };
@@ -652,7 +658,12 @@ async function localSite() {
       res.end(`<!doctype html><body style="font:20px sans-serif;padding:40px">
         <p><a id="model" href="/api/download/models/1">Baixar modelo</a></p>
         <p><a id="page" href="/outra-pagina">Uma página qualquer</a></p>
-        <p><a id="yt" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ">Um vídeo do YouTube</a></p></body>`);
+        <p><a id="yt" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ">Um vídeo do YouTube</a></p>
+        <p><a id="small" href="/small.zip">Um zip pequeno</a></p></body>`);
+    } else if (req.url === "/small.zip") {
+      const body = Buffer.alloc(1024);
+      res.writeHead(200, { "content-type": "application/zip", "content-length": body.length });
+      res.end(body);
     } else if (req.url === "/api/download/models/1") {
       res.writeHead(307, { location: "/storage/a1b2c3?X-Amz-Signature=abc" });
       res.end();
@@ -695,6 +706,48 @@ async function takeoverScenario(sw, base) {
   const left = await evaluate(sw, "chrome.downloads.search({}).then(list => list.map(d => d.state + ' ' + d.filename))");
   log(`sent: ${JSON.stringify(msg)}; browser downloads: ${JSON.stringify(left)}`);
   return { name: "takeover", results: [{ expected: base + "/storage/a1b2c3?X-Amz-Signature=abc", sent: msg, browserDownloads: left }] };
+}
+
+// When Fisga cannot take a download, the browser's own goes on: without the
+// app it is not touched, when the app refuses it is resumed (not fetched
+// again with a plain GET), and one that finished while the extension waited
+// for the app stays with the browser (not erased and fetched again by Fisga).
+async function takeoverFallbackScenario(sw, base) {
+  log(`--- takeover-fallback: ${base}`);
+  const page = await openPage(base + "/");
+  await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: out, eventsEnabled: true });
+  const latest = `chrome.downloads.search({ orderBy: ["-startTime"], limit: 1 }).then(([d]) => d && {
+    state: d.state, url: d.url, file: d.filename.split(/[\\\\/]/).pop(), error: d.error, bytes: d.bytesReceived, total: d.totalBytes })`;
+  const steps = {};
+  for (const [step, link, app] of [["missing", "model", "missing"], ["refuses", "model", "refuses"], ["fast", "small", "slow"]]) {
+    await evaluate(sw, `globalThis.__fisgaApp = ${JSON.stringify(app)}`);
+    // The app's state as the extension last saw it; for "fast", a sync is due
+    // when the download starts, and the slow app lets it finish meanwhile.
+    if (app === "slow") await sleep(5500);
+    else await evaluate(sw, "syncWithApp(true)");
+    const before = await evaluate(sw, "globalThis.__fisgaSent.length");
+    const box = await linkBox(page, link);
+    await click(page, box.x, box.y);
+    // Time for the extension to act, then for the browser to finish (the
+    // next download of the same name must not collide with this one).
+    await sleep(3500);
+    let browser = await evaluate(sw, latest);
+    for (let i = 0; i < 40 && browser?.state === "in_progress"; i++) {
+      await sleep(500);
+      browser = await evaluate(sw, latest);
+    }
+    const tried = await evaluate(sw, `globalThis.__fisgaSent.slice(${before}).map((m) => m.type)`);
+    steps[step] = { tried, browser };
+  }
+  await evaluate(sw, "delete globalThis.__fisgaApp; syncWithApp(true)");
+  const kept = (s, url, file) => s.browser?.state === "complete" && s.browser.url === url && file.test(s.browser.file);
+  const model = base + "/api/download/models/1";
+  const pass =
+    kept(steps.missing, model, /^lora_estilo.*\.safetensors$/) && !steps.missing.tried.includes("download") &&
+    kept(steps.refuses, model, /^lora_estilo.*\.safetensors$/) && steps.refuses.tried.includes("download") &&
+    kept(steps.fast, base + "/small.zip", /^small.*\.zip$/) && !steps.fast.tried.includes("download");
+  log(JSON.stringify(steps));
+  return { name: "takeover-fallback", pass, steps };
 }
 
 // Alt+click on a link to a page: to Fisga, and the tab stays where it was.
@@ -846,7 +899,13 @@ try {
     if (s === "store") report.push(await storeScenario(sw));
     if (s === "gallery") report.push(await galleryScenario(sw));
     if (s === "gallery-web") report.push(await galleryWebScenario(sw));
-    const local = { takeover: takeoverScenario, force: forceScenario, "fake-force": fakeForceScenario, "two-players": twoPlayersScenario };
+    const local = {
+      takeover: takeoverScenario,
+      "takeover-fallback": takeoverFallbackScenario,
+      force: forceScenario,
+      "fake-force": fakeForceScenario,
+      "two-players": twoPlayersScenario,
+    };
     if (local[s]) {
       const { server, base } = await localSite();
       report.push(await local[s](sw, base));

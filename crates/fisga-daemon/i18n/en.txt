@@ -294,3 +294,6 @@ o download não pausou a tempo; tente de novo
 
 outro download da lista usa o arquivo {}
 = another download in the list uses the file {}
+
+outro fisgad já está usando a lista de downloads ({})
+= another fisgad is already using the download list ({})

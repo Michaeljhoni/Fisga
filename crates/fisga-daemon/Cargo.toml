@@ -26,7 +26,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
 
-# Stopping yt-dlp's process group.
+# Stopping yt-dlp's process group, and the lock on the download list.
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 

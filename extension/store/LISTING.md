@@ -25,6 +25,7 @@ O QUE A EXTENSÃO FAZ
 
 • Botão "Baixar" sobre vídeos e músicas: ao passar o mouse sobre um player, em qualquer site, aparece um botão no canto. Um clique manda a mídia para o Fisga; o × esconde o botão naquele vídeo.
 • Escolha do que baixar: a setinha ao lado do botão lista tudo o que foi detectado na página, como transmissões HLS/DASH e arquivos MP4 e MP3, além da opção de detectar automaticamente a melhor qualidade em sites de vídeo.
+• Fotos e vídeos da página de uma vez: "Baixar fotos e vídeos da página…", no popup ou no botão direito, lista as fotos, os vídeos e os áudios da página, em abas. Vem o arquivo original, não a miniatura. Marque os que quiser, ou todos: eles vão para a fila do Fisga, numa pasta com o nome do site.
 • Captura dos downloads do navegador: ao clicar num link de arquivo (programas, compactados, vídeos, documentos…), o download vai para o Fisga em vez do baixador do navegador. Os tipos de arquivo e os sites que ficam de fora são escolhidos nas preferências do Fisga, e a captura pode ser desligada no popup.
 • Menu do botão direito: "Baixar link com o Fisga", "Baixar esta mídia com o Fisga", "Baixar todos os links com o Fisga" (você escolhe quais na lista) e "Baixar os links selecionados".
 • Tecla de atalho: segure Alt (ou a combinação escolhida no Fisga) ao clicar num link para mandá-lo ao Fisga, seja ele o que for.
@@ -61,6 +62,7 @@ WHAT THE EXTENSION DOES
 
 • "Download" button over videos and music: hover a player on any site and a button appears in its corner. One click sends the media to Fisga; the × hides the button on that video.
 • Choose what to download: the arrow next to the button lists everything detected on the page, such as HLS/DASH streams and MP4 and MP3 files, plus automatic detection of the best quality on video sites.
+• All the photos and videos of a page at once: "Download photos and videos of the page…", in the popup or the right-click menu, lists the page's photos, videos and audio in tabs. You get the original file, not the thumbnail. Tick the ones you want, or all of them: they go to Fisga's queue, in a folder named after the site.
 • Takes over browser downloads: when you click a link to a file (programs, archives, videos, documents…), the download goes to Fisga instead of the browser's downloader. The file types and the excluded sites are chosen in Fisga's preferences, and the takeover can be turned off in the popup.
 • Right-click menu: "Download link with Fisga", "Download this media with Fisga", "Download all links with Fisga" (you pick which ones from the list) and "Download selected links".
 • Shortcut key: hold Alt (or the combination chosen in Fisga) while clicking a link to send it to Fisga, whatever it is.
@@ -152,7 +154,10 @@ This version does not work on YouTube, per the Chrome Web Store policy: the cont
   > This extension is the browser side of Fisga, a free (GPL-3.0) download manager:
   > https://github.com/Michaeljhoni/Fisga. It talks only to the Fisga application installed on the
   > same computer, through native messaging (host "io.fisga.native"); it sends nothing to any server.
-  > To test it with the app: install a release from https://github.com/Michaeljhoni/Fisga/releases
-  > (on Linux, "fisga install-hosts" registers the native host), then click "Download" over a video
-  > or right-click a link and pick "Download link with Fisga". Without the app, the popup says that
-  > the app was not found.
+  > To test it with the app: install Fisga 1.4.0 or later from
+  > https://github.com/Michaeljhoni/Fisga/releases (on Linux, "fisga install-hosts" registers the
+  > native host), then click "Download" over a video or right-click a link and pick "Download link
+  > with Fisga". Without the app, the popup says that the app was not found.
+  > To try the list of the page's media: click the toolbar button and pick "Download photos and
+  > videos of the page…" (or right-click the page). The "scripting" permission runs the media
+  > collector in the tab's frames, only when that list is opened or refreshed.

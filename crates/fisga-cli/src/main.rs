@@ -767,7 +767,9 @@ async fn settings(args: SettingsArgs) -> anyhow::Result<()> {
         language.apply();
     }
     if changed {
-        fisga_ipc::call(&Request::SetSettings { settings: current.clone() }).await?;
+        fisga_ipc::call(&Request::SetSettings { settings: current }).await?;
+        // Read back: what the daemon kept (limited, normalized).
+        current = get_settings().await?;
     }
     let yes_no = |on: bool| if on { tr!("sim") } else { tr!("não") };
     /// Each label padded to the same column, in either language.
@@ -917,11 +919,13 @@ async fn logins(command: LoginCommand) -> anyhow::Result<()> {
     let Response::Logins { mut logins } = fisga_ipc::call(&Request::GetLogins).await? else {
         bail!(tr!("resposta inesperada do daemon"));
     };
-    match command {
-        LoginCommand::List => {}
+    // Listing writes nothing back.
+    let changed = match command {
+        LoginCommand::List => false,
         LoginCommand::Add { host, user } => {
             let password = read_secret(&trf!("Senha de {} em {}", user, host))?;
             logins.push(SiteLogin { host, user, password });
+            true
         }
         LoginCommand::Rm { host } => {
             let host = SiteLogin::normalize_host(&host);
@@ -930,12 +934,16 @@ async fn logins(command: LoginCommand) -> anyhow::Result<()> {
             if logins.len() == before {
                 bail!(trf!("nenhum login para {}", host));
             }
+            true
         }
-    }
-    fisga_ipc::call(&Request::SetLogins { logins }).await?;
-    let Response::Logins { logins } = fisga_ipc::call(&Request::GetLogins).await? else {
-        bail!(tr!("resposta inesperada do daemon"));
     };
+    if changed {
+        fisga_ipc::call(&Request::SetLogins { logins }).await?;
+        let Response::Logins { logins: stored } = fisga_ipc::call(&Request::GetLogins).await? else {
+            bail!(tr!("resposta inesperada do daemon"));
+        };
+        logins = stored;
+    }
     if logins.is_empty() {
         println!("{}", tr!("nenhum login por site"));
     }
@@ -996,6 +1004,8 @@ async fn schedule(args: ScheduleArgs) -> anyhow::Result<()> {
 
 async fn queues(command: QueueCommand) -> anyhow::Result<()> {
     let mut settings = get_settings().await?;
+    // Listing writes nothing back.
+    let changed = !matches!(command, QueueCommand::List);
     match command {
         QueueCommand::List => {}
         QueueCommand::Add { name, max_parallel } => {
@@ -1023,9 +1033,12 @@ async fn queues(command: QueueCommand) -> anyhow::Result<()> {
             settings.remove_queue(id);
         }
     }
-    fisga_ipc::call(&Request::SetSettings { settings: settings.clone() }).await?;
-    // Read back: the daemon names and limits them (sanitized).
-    for queue in get_settings().await?.all_queues() {
+    if changed {
+        fisga_ipc::call(&Request::SetSettings { settings }).await?;
+        // Read back: the daemon names and limits them (sanitized).
+        settings = get_settings().await?;
+    }
+    for queue in settings.all_queues() {
         let at_once = match queue.max_parallel {
             1 => tr!("1 por vez").to_string(),
             n => trf!("{} ao mesmo tempo", n),
@@ -1252,6 +1265,11 @@ async fn watch() -> anyhow::Result<()> {
             Response::Downloads { items } => items.iter().for_each(|i| println!("{}", row(i))),
             Response::Update { item } => println!("{}", row(&item)),
             Response::Removed { id } => println!("{id:>4}  {}", tr!("removido")),
+            // The proxy's password stays off the terminal.
+            Response::Settings { mut settings } => {
+                settings.proxy.url = fisga_ipc::redact_url(&settings.proxy.url);
+                println!("{}", serde_json::to_string(&Response::Settings { settings })?);
+            }
             other => println!("{}", serde_json::to_string(&other)?),
         }
     }

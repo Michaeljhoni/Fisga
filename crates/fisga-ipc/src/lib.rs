@@ -514,7 +514,7 @@ pub struct ProxySettings {
 }
 
 /// Hides the password of `user:password@host`.
-fn redact_url(text: &str) -> String {
+pub fn redact_url(text: &str) -> String {
     match url::Url::parse(text) {
         Ok(mut url) if url.password().is_some() => {
             let _ = url.set_password(Some("***"));

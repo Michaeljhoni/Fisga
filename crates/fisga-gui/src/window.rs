@@ -1195,17 +1195,23 @@ pub fn release_closed_windows() {
                         }
                     }
                 }
+                // By index: these models declare a base type, and iter::<T>()
+                // panics unless the declared type is T or below it.
+                let model = window.observe_controllers();
                 let controllers: Vec<gtk::EventController> =
-                    window.observe_controllers().iter::<gtk::EventController>().flatten().collect();
+                    (0..model.n_items()).filter_map(|i| model.item(i).and_downcast::<gtk::EventController>()).collect();
                 for controller in controllers {
                     window.remove_controller(&controller);
                 }
             });
         });
     }
+    // The list holds widgets (GtkWidget is its declared type): by index.
     let toplevels = gtk::Window::toplevels();
-    for window in toplevels.iter::<gtk::Window>().flatten() {
-        watch(&window);
+    for index in 0..toplevels.n_items() {
+        if let Some(window) = toplevels.item(index).and_downcast::<gtk::Window>() {
+            watch(&window);
+        }
     }
     toplevels.connect_items_changed(|list, position, _, added| {
         for index in position..position + added {

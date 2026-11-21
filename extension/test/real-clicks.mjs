@@ -687,6 +687,27 @@ async function forceScenario(sw, base) {
   return { name: "force", results: [{ expected: base + "/outra-pagina", sent: msg, stayedAt: at, plainClick: plain }] };
 }
 
+// A page faking the force key (a synthetic Alt+click on a link) sends nothing.
+async function fakeForceScenario(sw, base) {
+  log(`--- fake-force: ${base}`);
+  const page = await openPage(base + "/");
+  const before = (await sent(sw)).length;
+  await evaluate(
+    page,
+    `(() => {
+      document.addEventListener("click", (e) => e.preventDefault()); // the page stays where it is
+      const link = document.getElementById("page");
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true, button: 0, view: window }));
+      link.click();
+    })()`,
+  );
+  await sleep(1500);
+  const after = (await sent(sw)).slice(before);
+  const pass = after.length === 0;
+  log(`sent: ${JSON.stringify(after)}`);
+  return { name: "fake-force", pass, sent: after };
+}
+
 // The Chrome Web Store package (dist-store): on YouTube no button and no
 // media, and YouTube addresses are refused; a link elsewhere still goes.
 async function storeScenario(sw) {
@@ -747,9 +768,9 @@ try {
     if (s === "store") report.push(await storeScenario(sw));
     if (s === "gallery") report.push(await galleryScenario(sw));
     if (s === "gallery-web") report.push(await galleryWebScenario(sw));
-    if (s === "takeover" || s === "force") {
+    if (s === "takeover" || s === "force" || s === "fake-force") {
       const { server, base } = await localSite();
-      report.push(await (s === "takeover" ? takeoverScenario : forceScenario)(sw, base));
+      report.push(await { takeover: takeoverScenario, force: forceScenario, "fake-force": fakeForceScenario }[s](sw, base));
       server.close();
     }
   }

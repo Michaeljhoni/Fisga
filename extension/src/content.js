@@ -88,7 +88,8 @@
     "click",
     (e) => {
       const keys = forceKey;
-      if (!keys || e.button !== 0 || e.metaKey) return;
+      // Only the user's own clicks: a page could fake one to send any address with the user's cookies.
+      if (!e.isTrusted || !keys || e.button !== 0 || e.metaKey) return;
       if (e.altKey !== keys.alt || e.ctrlKey !== keys.ctrl || e.shiftKey !== keys.shift) return;
       const link = e.composedPath().find((el) => el instanceof HTMLAnchorElement || el instanceof HTMLAreaElement);
       if (!link || !/^https?:/i.test(link.href)) return;

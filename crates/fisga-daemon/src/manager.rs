@@ -54,6 +54,8 @@ struct Job {
     info: DownloadInfo,
     request: AddRequest,
     cancel: Option<CancellationToken>,
+    /// The task that runs it, last started.
+    task: Option<tokio::task::JoinHandle<()>>,
     /// "Baixar agora": start even when its queue is full or outside its hours.
     forced: bool,
     /// The folder follows the category (no folder was chosen by the user), so it
@@ -71,7 +73,7 @@ struct Job {
 impl Job {
     fn new(info: DownloadInfo, request: AddRequest, auto_dir: bool) -> Self {
         let limiter = Arc::new(fisga_core::RateLimiter::new(info.speed_limit));
-        Self { info, request, cancel: None, forced: false, auto_dir, from_queue: false, requeue: false, limiter }
+        Self { info, request, cancel: None, task: None, forced: false, auto_dir, from_queue: false, requeue: false, limiter }
     }
 }
 
@@ -133,6 +135,9 @@ pub struct Manager {
     /// `$FISGA_SOUND_CMD` replaces the sound player (tests).
     sound_command: Option<String>,
 }
+
+/// How long a removed download may take to stop before its files are deleted.
+const STOP_WAIT: Duration = Duration::from_secs(10);
 
 /// Where a download of `category` goes when the user did not pick a folder.
 fn auto_dir(settings: &Settings, category: Category) -> PathBuf {
@@ -814,8 +819,12 @@ impl Manager {
         let job = self.inner.lock().unwrap().jobs.remove(&id).context(tr!("download não encontrado"))?;
         if let Some(cancel) = &job.cancel {
             cancel.cancel();
-            // Give the engine a moment to flush before files are deleted.
-            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        // The engine saves its control file as it stops: the files go after that.
+        if let Some(task) = job.task {
+            if tokio::time::timeout(STOP_WAIT, task).await.is_err() {
+                tracing::warn!(id, "o download não parou a tempo de ser removido");
+            }
         }
         if delete_file {
             if let Some(path) = &job.info.path {
@@ -873,7 +882,7 @@ impl Manager {
             // The file is about to change: an earlier check no longer holds.
             job.info.hash = None;
             let _ = self.updates.send(Response::Update { item: job.info.clone() });
-            tokio::spawn(self.clone().run_job(id, cancel));
+            job.task = Some(tokio::spawn(self.clone().run_job(id, cancel)));
         }
         self.dirty.store(true, Ordering::Relaxed);
     }
@@ -1409,6 +1418,73 @@ mod tests {
             }
         });
         url
+    }
+
+    /// Serves `size` bytes with Range support, 16 KiB at a time.
+    async fn range_server(size: usize) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/grande.bin", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut head = vec![0; 4096];
+                    let read = socket.read(&mut head).await.unwrap_or(0);
+                    let head = String::from_utf8_lossy(&head[..read]).to_ascii_lowercase();
+                    let range = head.lines().find_map(|line| line.strip_prefix("range: bytes=")).and_then(|range| {
+                        let (start, end) = range.trim().split_once('-')?;
+                        Some((start.parse::<usize>().ok()?, end.parse::<usize>().unwrap_or(size - 1).min(size - 1)))
+                    });
+                    let (start, end) = range.unwrap_or((0, size - 1));
+                    let reply = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{size}\r\nConnection: close\r\n\r\n",
+                        end + 1 - start
+                    );
+                    if socket.write_all(reply.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let mut left = end + 1 - start;
+                    while left > 0 {
+                        let chunk = left.min(16 * 1024);
+                        if socket.write_all(&vec![b'x'; chunk]).await.is_err() {
+                            return;
+                        }
+                        left -= chunk;
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                });
+            }
+        });
+        url
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_removed_download_leaves_no_files_behind() {
+        let manager = manager();
+        let url = range_server(8 * 1024 * 1024).await;
+        let id = manager.add(AddRequest { url, start: false, ..Default::default() }).unwrap();
+        // So slow that a connection waits seconds for the speed limit.
+        manager.set_speed_limit(id, 16 * 1024).unwrap();
+        manager.resume(id).unwrap();
+        let mut path = None;
+        for _ in 0..100 {
+            path = manager.list().into_iter().find(|i| i.id == id).and_then(|i| i.path);
+            if path.as_ref().is_some_and(|path| fisga_core::control::control_path(path).exists()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let path = path.expect("the download started");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let started = std::time::Instant::now();
+        manager.remove(id, true).await.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        let (part, control) = (fisga_core::control::part_path(&path), fisga_core::control::control_path(&path));
+        assert!(!part.exists() && !control.exists());
+        // Nothing still stopping writes them back.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(!part.exists() && !control.exists());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -16,7 +16,7 @@ use fisga_i18n::{tr, trf};
 use url::Url;
 
 use crate::control::{ControlFile, SegmentState};
-use crate::engine::{finalize, resolve_target, SpeedMeter, SAVE_EVERY};
+use crate::engine::{finalize, limit, resolve_target, SpeedMeter, SAVE_EVERY};
 use crate::probe::ProbeResult;
 use crate::{control, filename, DownloadOptions, EngineEvent, Error, Outcome, Progress, RequestSpec, Result, Target};
 
@@ -344,8 +344,8 @@ pub async fn download(
         }
         file.write_all(&buffer[..n]).await?;
         downloaded += n as u64;
-        for limiter in &opts.limiters {
-            limiter.consume(n).await;
+        if !limit(&opts.limiters, n, &cancel).await {
+            break true;
         }
         if last_report.elapsed() >= Duration::from_millis(500) {
             last_report = Instant::now();

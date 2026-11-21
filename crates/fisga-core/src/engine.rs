@@ -298,8 +298,10 @@ async fn single_stream(
             Ok(Some(Ok(chunk))) => {
                 file.write_all(&chunk).await?;
                 downloaded += chunk.len() as u64;
-                for limiter in &opts.limiters {
-                    limiter.consume(chunk.len()).await;
+                if !limit(&opts.limiters, chunk.len(), &cancel).await {
+                    drop(file);
+                    let _ = tokio::fs::remove_file(&part).await;
+                    return Ok(Outcome::Paused(final_path));
                 }
             }
         }
@@ -658,8 +660,9 @@ impl Ctx {
             if limited {
                 self.hold(index, true);
             }
-            for limiter in &self.limiters {
-                limiter.consume(chunk.len()).await;
+            if !limit(&self.limiters, chunk.len(), &self.cancel).await {
+                self.flush(index, &mut buf, &mut offset).await?;
+                return Err(Error::Cancelled);
             }
             if limited {
                 self.hold(index, false);
@@ -693,6 +696,18 @@ async fn sleep_or_cancel(cancel: &CancellationToken, duration: Duration) -> bool
         _ = cancel.cancelled() => false,
         _ = tokio::time::sleep(duration) => true,
     }
+}
+
+/// Waits as the speed limits say for `bytes` just received; false when the
+/// download is paused meanwhile (a low limit can mean a long wait).
+pub(crate) async fn limit(limiters: &[Arc<crate::RateLimiter>], bytes: usize, cancel: &CancellationToken) -> bool {
+    for limiter in limiters {
+        tokio::select! {
+            _ = cancel.cancelled() => return false,
+            _ = limiter.consume(bytes) => {}
+        }
+    }
+    true
 }
 
 async fn worker(ctx: Arc<Ctx>, delay: Duration) -> Result<()> {

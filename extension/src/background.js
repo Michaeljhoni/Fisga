@@ -129,15 +129,20 @@ api.tabs.onActivated.addListener(() => syncWithApp());
 // ------------------------------------------------------------ media sniffing
 // tabId -> [{ url, kind, contentType, size, frameId, ts }]
 const mediaByTab = new Map();
+// tabId -> the address its media belongs to (a new one clears the list).
+const pageByTab = new Map();
 let restored = null;
 
 function restore() {
   restored ??= (async () => {
     try {
-      const { media } = await api.storage.session.get("media");
+      const { media, pages } = await api.storage.session.get(["media", "pages"]);
       for (const [tab, list] of Object.entries(media ?? {})) {
         const current = mediaByTab.get(Number(tab)) ?? [];
         mediaByTab.set(Number(tab), [...list, ...current]);
+      }
+      for (const [tab, url] of Object.entries(pages ?? {})) {
+        if (!pageByTab.has(Number(tab))) pageByTab.set(Number(tab), url);
       }
     } catch {}
   })();
@@ -148,7 +153,9 @@ let persistTimer = 0;
 function persist() {
   clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
-    api.storage.session?.set({ media: Object.fromEntries(mediaByTab) }).catch(() => {});
+    api.storage.session
+      ?.set({ media: Object.fromEntries(mediaByTab), pages: Object.fromEntries(pageByTab) })
+      .catch(() => {});
   }, 400);
 }
 
@@ -211,15 +218,25 @@ api.webRequest.onHeadersReceived.addListener(
   ["responseHeaders"],
 );
 
-api.tabs.onUpdated.addListener((tabId, change) => {
-  if (change.url) {
-    mediaByTab.delete(tabId);
-    persist();
-    updateBadge(tabId);
-  }
-});
-api.tabs.onRemoved.addListener((tabId) => {
+const withoutHash = (url) => String(url).split("#")[0];
+
+// The stored lists come first: a navigation may wake the worker with empty
+// maps, and saving those would wipe every other tab's media.
+api.tabs.onUpdated.addListener(async (tabId, change) => {
+  if (!change.url) return;
+  await restore();
+  // Only the fragment changed (#t=30, #comments): same page, same player.
+  const before = pageByTab.get(tabId);
+  if (before && withoutHash(before) === withoutHash(change.url)) return;
+  pageByTab.set(tabId, change.url);
   mediaByTab.delete(tabId);
+  persist();
+  updateBadge(tabId);
+});
+api.tabs.onRemoved.addListener(async (tabId) => {
+  await restore();
+  mediaByTab.delete(tabId);
+  pageByTab.delete(tabId);
   persist();
 });
 

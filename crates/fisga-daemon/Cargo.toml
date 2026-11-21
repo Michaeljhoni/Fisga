@@ -25,3 +25,11 @@ tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
+
+# Stopping yt-dlp's process group.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+# A job object holds yt-dlp and what it starts (ffmpeg), ended together.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }

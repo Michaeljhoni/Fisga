@@ -6,10 +6,112 @@
 //! (yt-dlp, cmd, PowerShell...) would open a window of its own: they all get
 //! `CREATE_NO_WINDOW`.
 
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// How long a group asked to stop has before it is killed.
+#[cfg(unix)]
+const GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A program and everything it starts, stopped together: yt-dlp runs
+/// ffmpeg, which killing yt-dlp alone leaves running (and on Windows
+/// yt-dlp.exe is a launcher whose own child does the work). On Unix it is
+/// the program's own process group; on Windows, a job object.
+pub struct Group {
+    #[cfg(unix)]
+    leader: Option<u32>,
+    #[cfg(windows)]
+    job: Option<Job>,
+}
+
+impl Group {
+    /// For `command`, before it starts.
+    pub fn prepare(command: &mut Command) {
+        #[cfg(unix)]
+        command.process_group(0);
+        #[cfg(not(unix))]
+        let _ = command;
+    }
+
+    /// The group of `child`, just started from a prepared command.
+    pub fn of(child: &Child) -> Group {
+        #[cfg(not(any(unix, windows)))]
+        let _ = child;
+        Group {
+            #[cfg(unix)]
+            leader: child.id(),
+            #[cfg(windows)]
+            job: Job::assign(child),
+        }
+    }
+
+    /// Asks the whole group to stop (SIGINT, as Ctrl+C: yt-dlp keeps its
+    /// partial files), then kills what is left after a moment.
+    pub async fn stop(&mut self, child: &mut Child) {
+        #[cfg(unix)]
+        if let Some(leader) = self.leader.take().and_then(|pid| i32::try_from(pid).ok()) {
+            // SAFETY: kill() only sends a signal, to the group this child leads.
+            unsafe { libc::kill(-leader, libc::SIGINT) };
+            let _ = tokio::time::timeout(GRACE, child.wait()).await;
+            // SAFETY: as above.
+            unsafe { libc::kill(-leader, libc::SIGKILL) };
+        }
+        let _ = child.kill().await;
+        // Closing the job ends what is left in it.
+        #[cfg(windows)]
+        drop(self.job.take());
+    }
+}
+
+/// A job object that ends its processes when it is closed.
+#[cfg(windows)]
+struct Job(windows_sys::Win32::Foundation::HANDLE);
+
+// SAFETY: a job handle is not tied to the thread that opened it.
+#[cfg(windows)]
+unsafe impl Send for Job {}
+
+#[cfg(windows)]
+impl Job {
+    /// A new job holding `child` and what it starts from now on; `None`
+    /// when Windows refuses (then only `child` is killed).
+    fn assign(child: &Child) -> Option<Job> {
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+        let process = child.raw_handle()?;
+        // SAFETY: plain Win32 calls on the job's own handle and the live
+        // child's; `limits` outlives the call that reads it.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return None;
+            }
+            let job = Job(job);
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let size = std::mem::size_of_val(&limits) as u32;
+            let info = std::ptr::from_ref(&limits).cast::<std::ffi::c_void>();
+            if SetInformationJobObject(job.0, JobObjectExtendedLimitInformation, info, size) == 0
+                || AssignProcessToJobObject(job.0, process) == 0
+            {
+                return None;
+            }
+            Some(job)
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Job {
+    fn drop(&mut self) {
+        // SAFETY: the handle is this job's own, closed once.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
 
 /// `program`, without a console window on Windows.
 pub fn program(program: impl AsRef<std::ffi::OsStr>) -> Command {
@@ -66,6 +168,37 @@ fn base64_utf16(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stopping_a_group_stops_what_it_started() {
+        use super::*;
+        use std::time::Duration;
+        let beat = std::env::temp_dir().join(format!("fisgad-group-{}", std::process::id()));
+        let _ = std::fs::remove_file(&beat);
+        // A program that starts another one, as yt-dlp starts ffmpeg; the
+        // other one writes a count while it runs.
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(r#"(i=0; while :; do i=$((i+1)); echo $i > "$1"; sleep 0.05; done) & wait"#);
+        command.arg("sh").arg(&beat);
+        Group::prepare(&mut command);
+        let mut child = command.spawn().unwrap();
+        let mut group = Group::of(&child);
+        for _ in 0..100 {
+            if beat.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let started = std::time::Instant::now();
+        group.stop(&mut child).await;
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let count = std::fs::read_to_string(&beat).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(std::fs::read_to_string(&beat).unwrap(), count, "what it started still runs");
+        let _ = std::fs::remove_file(&beat);
+    }
+
     #[test]
     fn powershell_encoding() {
         // [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes(...)) in PowerShell.

@@ -220,6 +220,8 @@ async fn run_once(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel:
     // Deleted when this run ends, whichever way.
     let _cookies = add_request_options(&mut command, &id.to_string(), request);
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    // A pause stops ffmpeg too, not yt-dlp alone.
+    crate::shell::Group::prepare(&mut command);
 
     run_child(manager, id, command, cancel).await
 }
@@ -430,6 +432,7 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
         }
         Err(e) => return JobResult::Failed(trf!("não foi possível iniciar o yt-dlp: {}", e)),
     };
+    let mut group = crate::shell::Group::of(&child);
 
     let (lines_tx, mut lines) = mpsc::unbounded_channel::<String>();
     for stream in [
@@ -465,7 +468,7 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
         tokio::select! {
             _ = cancel.cancelled() => {
                 // yt-dlp keeps its .part files and continues them on the next run.
-                let _ = child.kill().await;
+                group.stop(&mut child).await;
                 return JobResult::Paused;
             }
             _ = ticker.tick() => {

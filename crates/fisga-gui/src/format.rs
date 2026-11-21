@@ -20,7 +20,8 @@ pub fn bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut value = n as f64;
     let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
+    // 1023.95 KB would print as "1024,0 KB": what rounds to 1024 moves up a unit.
+    while (value >= 1024.0 || (unit > 0 && (value * 10.0).round() / 10.0 >= 1024.0)) && unit < UNITS.len() - 1 {
         value /= 1024.0;
         unit += 1;
     }
@@ -68,7 +69,8 @@ pub fn fraction(info: &DownloadInfo) -> f64 {
 pub fn progress_text(info: &DownloadInfo) -> String {
     match info.total {
         _ if info.state == State::Completed => "100%".into(),
-        Some(total) if total > 0 => decimal(format!("{:.1}%", fraction(info) * 100.0)),
+        // Floored: 99.96% is not done yet.
+        Some(total) if total > 0 => decimal(format!("{:.1}%", (fraction(info) * 1000.0).floor() / 10.0)),
         _ if info.downloaded > 0 => bytes(info.downloaded),
         _ => String::new(),
     }
@@ -330,6 +332,9 @@ mod tests {
         assert_eq!(bytes(1536), "1,5 KB");
         assert_eq!(bytes(10 * 1024 * 1024), "10,0 MB");
         assert_eq!(bytes(3 * 1024 * 1024 * 1024), "3,0 GB");
+        // What rounds up to 1024 of a unit is shown in the next one.
+        assert_eq!(bytes(1024 * 1024 - 1), "1,0 MB");
+        assert_eq!(bytes(1023 * 1024 + 921), "1023,9 KB");
     }
 
     #[test]
@@ -349,6 +354,8 @@ mod tests {
         let running = info(State::Running, 256, Some(1024), 128.0);
         assert_eq!(fraction(&running), 0.25);
         assert_eq!(progress_text(&running), "25,0%");
+        // Not done until it is: 99.96% shows as 99.9%.
+        assert_eq!(progress_text(&info(State::Running, 9996, Some(10000), 0.0)), "99,9%");
         assert_eq!(speed(&running), "128 B/s");
         assert_eq!(remaining(&running), "6 s");
         assert_eq!(status(&running), "Baixando (8 conexões)");

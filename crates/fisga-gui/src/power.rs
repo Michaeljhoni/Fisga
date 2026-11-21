@@ -10,7 +10,7 @@ use gtk::glib;
 use fisga_i18n::{tr, trf};
 use fisga_ipc::{PowerPlan, Request, WhenDone};
 
-use crate::window::send;
+use crate::window::show_error;
 
 pub struct PowerDialog {
     pub plan: PowerPlan,
@@ -63,10 +63,16 @@ impl PowerDialog {
         let external = Rc::new(Cell::new(false));
         let w = window.clone();
         cancel.connect_clicked(move |_| w.close());
-        let ext = external.clone();
+        let (ext, app) = (external.clone(), app.clone());
         window.connect_close_request(move |_| {
             if !ext.get() {
-                send(Request::CancelPower, None);
+                let hold = app.hold();
+                glib::spawn_future_local(async move {
+                    if let Err(e) = crate::ipc::call(Request::CancelPower).await {
+                        show_error(None, tr!("O fisgad recusou o pedido"), &e.to_string());
+                    }
+                    drop(hold);
+                });
             }
             glib::Propagation::Proceed
         });

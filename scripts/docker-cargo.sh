@@ -15,4 +15,5 @@ MSYS_NO_PATHCONV=1 exec docker run --rm \
   -v fisga-cargo-registry:/usr/local/cargo/registry \
   -v "${FISGA_TARGET_VOLUME:-fisga-target}:/target" -e CARGO_TARGET_DIR=/target \
   -e CARGO_TERM_COLOR=never \
+  -e FISGA_LANG="${FISGA_LANG:-pt}" \
   "$image" cargo "$@"

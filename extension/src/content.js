@@ -696,6 +696,32 @@
     return null;
   }
 
+  // Posts of social networks: a player with no address of its own (blob:)
+  // inside one is that post's video, which yt-dlp downloads from the post's
+  // address. Only for players: a post may hold photos only.
+  const POST_PAGES = [
+    /^https?:\/\/(?:www\.|mobile\.)?(?:x|twitter)\.com\/\w+\/status\/\d+/,
+    /^https?:\/\/(?:www\.)?instagram\.com\/(?:[\w.]+\/)?(?:p|reels?|tv)\/[\w-]+/,
+    /^https?:\/\/(?:www\.|old\.|new\.)?reddit\.com\/r\/\w+\/comments\/\w+/,
+    /^https?:\/\/(?:www\.|m\.|web\.)?facebook\.com\/(?:[\w.]+\/(?:videos|posts)\/[\w.-]+|watch\/?\?v=\d+|reel\/\d+)/,
+    /^https?:\/\/(?:www\.)?threads\.(?:net|com)\/@[\w.]+\/post\/[\w-]+/,
+    /^https?:\/\/bsky\.app\/profile\/[^/]+\/post\/\w+/,
+  ];
+  /** The post a player sits in: the nearest ancestor with a link to one. */
+  function postLink(el) {
+    let node = el;
+    for (let depth = 0; node && depth < MAX_LINK_DEPTH + 6; depth++, node = parentOf(node)) {
+      if (node === document.body || node === document.documentElement) break;
+      for (const a of node.querySelectorAll?.("a[href]") ?? []) {
+        for (const re of POST_PAGES) {
+          const m = re.exec(a.href);
+          if (m) return m[0].replace(/\/$/, "") + (/instagram\.com/.test(m[0]) ? "/" : "");
+        }
+      }
+    }
+    return "";
+  }
+
   function collectMedia() {
     const items = [];
     const seen = new Set();
@@ -745,7 +771,8 @@
         continue;
       }
       const link = el === mainPlayer ? null : videoLink(el);
-      const page = videoPage(link?.url || "") || here;
+      const post = !link && !here ? postLink(el) : "";
+      const page = videoPage(link?.url || "") || (post ? { url: post, thumb: "" } : null) || here;
       if (page) {
         // The page's own video is named by the page; a feed's, by its link.
         const title = page.url === here?.url ? clean(document.title.replace(/\s+[-|–]\s+[^-|–]+$/, "")) : link?.title;

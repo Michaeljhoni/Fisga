@@ -3,7 +3,7 @@
 //! filtered by type and name, to tick and send to a queue. It also lists the
 //! links of a page open in the browser ("Baixar todos os links com o Fisga").
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -194,10 +194,17 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, page: Option<(S
     let found: Rc<RefCell<Vec<Found>>> = Rc::default();
     // The page the links are from: their `Referer`.
     let referrer: Rc<RefCell<Option<String>>> = Rc::default();
+    // Set while "Marcar todos" ticks every row: one refresh at the end, not
+    // one per row (with 5000 links that froze the window).
+    let bulk = Rc::new(Cell::new(false));
     // Shows the rows the filters let through, and counts the ticked ones.
     let refresh: Rc<dyn Fn()> = {
         let (found, type_buttons, pattern, count, add) = (found.clone(), type_buttons.clone(), pattern.clone(), count.clone(), add.clone());
+        let bulk = bulk.clone();
         Rc::new(move || {
+            if bulk.get() {
+                return;
+            }
             let wanted: Vec<Category> =
                 type_buttons.iter().filter(|(_, button)| button.is_active()).map(|(category, _)| *category).collect();
             let patterns = pattern.text();
@@ -227,11 +234,13 @@ pub fn show(parent: &gtk::ApplicationWindow, queues: Vec<Queue>, page: Option<(S
     let r = refresh.clone();
     pattern.connect_changed(move |_| r());
     for (button, active) in [(&all, true), (&none, false)] {
-        let (found, r) = (found.clone(), refresh.clone());
+        let (found, r, bulk) = (found.clone(), refresh.clone(), bulk.clone());
         button.connect_clicked(move |_| {
+            bulk.set(true);
             for item in found.borrow().iter().filter(|item| item.row.is_visible()) {
                 item.check.set_active(active);
             }
+            bulk.set(false);
             r();
         });
     }

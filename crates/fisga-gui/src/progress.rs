@@ -68,6 +68,9 @@ impl ProgressWindow {
         if let Some(parent) = parent {
             window.set_transient_for(Some(parent));
         }
+        // Its own group: a modal dialog open elsewhere (Preferências) does not
+        // take its input.
+        gtk::WindowGroup::new().add_window(&window);
 
         let name = gtk::Label::builder()
             .xalign(0.0)
@@ -295,7 +298,7 @@ impl ProgressWindow {
         self.syncing.set(true);
         self.limit_on.set_active(info.speed_limit > 0);
         self.limit.set_sensitive(info.speed_limit > 0);
-        if info.speed_limit > 0 && !self.limit.has_focus() {
+        if info.speed_limit > 0 && !self.limit.state_flags().contains(gtk::StateFlags::FOCUS_WITHIN) {
             self.limit.set_value((info.speed_limit / 1024).max(1) as f64);
         }
         self.syncing.set(false);

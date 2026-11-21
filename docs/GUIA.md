@@ -325,6 +325,37 @@ Preferências, ou `fisga settings --category-folders false`.
 
 A GUI é só um cliente do `fisgad`: fechar a janela não interrompe os downloads.
 
+### Fotos e vídeos da página (galeria da extensão)
+
+No popup da extensão, **Baixar fotos e vídeos da página…** (ou o clique direito na página → **Baixar
+fotos e vídeos da página com o Fisga…**) abre, numa aba ao lado, tudo o que a página tem, separado
+nas abas **Vídeos**, **Fotos** e **Áudios**. Marque as que quiser (clique; Shift+clique marca um
+intervalo; **Selecionar todas** marca as da aba aberta, com o filtro) e clique em **Baixar**: todas
+vão de uma vez para a fila do Fisga, sem uma janela de confirmação para cada, e baixam quantas a
+fila permite ao mesmo tempo (Preferências → Filas). Cada uma vai para a pasta do seu tipo, dentro
+de uma pasta com o nome do site: `~/Downloads/Imagens/pt.wikipedia.org/`,
+`~/Downloads/Vídeos/youtube.com/`. Com "Separar por tipo de arquivo" desligado, a pasta do site
+fica direto na pasta de downloads.
+
+O que a galeria procura é o arquivo de verdade, não a miniatura:
+
+- **Fotos:** a imagem para onde a miniatura leva; os atributos de "tamanho grande" das galerias
+  (zoom, lightbox, WordPress); o maior tamanho do `srcset`; o endereço guardado pelo carregamento
+  preguiçoso (lazy-load); fundos (`background-image`); `og:image` e JSON-LD. Nos sites que põem o
+  tamanho no endereço (X/Twitter, Wikipedia, Pinterest, Reddit, Imgur, Flickr, Tumblr, Google,
+  Amazon, eBay, Etsy, WordPress, Shopify, Squarespace, Wix, Cloudinary, imgix/Unsplash, Medium,
+  ArtStation, Behance, YouTube...), ela troca a miniatura pelo original e confere se ele existe; o
+  cartão mostra **Original**. Imagens pequenas (ícones, avatares, botões) ficam escondidas, com a
+  opção **Mostrar imagens pequenas**.
+- **Vídeos:** arquivos (`<video>`, links para .mp4/.webm...), as transmissões HLS/DASH que a aba
+  carregou, e os vídeos dos sites que o yt-dlp baixa (YouTube, Vimeo, Instagram, TikTok, Facebook,
+  X, Twitch, Dailymotion, Bilibili...): numa página com vários (busca, canal, feed), cada vídeo
+  aparece com a sua miniatura e é baixado inteiro pelo yt-dlp, não a miniatura. Na Wikipedia, os
+  vídeos e áudios vêm do arquivo original.
+
+Role a página antes de abrir a galeria (ou depois, e clique em **Atualizar**): muitos sites só
+carregam as fotos que aparecem na tela.
+
 ### Do clique no navegador à janela de confirmação
 
 1. A extensão manda `{"type":"download", …, "confirm": true}` ao `fisga-native-host` (o popup tem a

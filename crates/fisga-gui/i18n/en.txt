@@ -1052,3 +1052,6 @@ Pronto: a <b>Integração Fisga</b> aparece na lista. Fixe o ícone dela (na pe�
 
 Deixe o modo do desenvolvedor ligado e a pasta onde está: sem eles, o navegador desliga a extensão. As atualizações do Fisga trazem a extensão nova junto, e o navegador passa a usá-la quando é aberto de novo.
 = Keep developer mode on and the folder where it is: without them, the browser turns the extension off. Fisga's updates bring the new extension along, and the browser uses it the next time it opens.
+
+{} de {} pedidos falharam
+= {} of {} requests failed

@@ -110,6 +110,9 @@ impl ConfirmDialog {
         if let Some(parent) = parent {
             window.set_transient_for(Some(parent));
         }
+        // Its own group: a modal dialog open elsewhere (Preferências, Lote)
+        // does not take its input.
+        gtk::WindowGroup::new().add_window(&window);
 
         let url = gtk::Label::builder()
             .label(&info.url)

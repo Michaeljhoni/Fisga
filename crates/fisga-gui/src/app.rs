@@ -24,7 +24,7 @@ use crate::item::DownloadItem;
 use crate::power::PowerDialog;
 use crate::progress::ProgressWindow;
 use crate::tray;
-use crate::window::{send, MainWindow};
+use crate::window::MainWindow;
 
 /// In `--pending` mode the app quits when its last window closes; it lingers this
 /// long first, in case another download arrives right after the user answered.
@@ -52,6 +52,9 @@ pub struct App {
     connection: RefCell<Result<(), String>>,
     /// Keeps the app alive until the first list arrives from the daemon.
     startup_hold: RefCell<Option<gio::ApplicationHoldGuard>>,
+    /// "Novo download" windows the user answered or cancelled, until the
+    /// daemon says they left `Pending` (or were removed).
+    answered: RefCell<std::collections::HashSet<u64>>,
     /// `--background`: stays running without windows.
     background: Cell<bool>,
     /// The main window was opened or `--background` was given: the tray icon
@@ -84,6 +87,7 @@ impl App {
             settings_loaded: Cell::new(false),
             connection: RefCell::new(Err(tr!("conectando ao fisgad…").into())),
             startup_hold: RefCell::default(),
+            answered: RefCell::default(),
             background: Cell::new(false),
             persistent: Cell::new(false),
             tray: RefCell::new(TrayState::Off),
@@ -110,6 +114,7 @@ impl App {
         self.app.set_accels_for_action("win.properties", &["<Alt>Return"]);
         self.app.set_accels_for_action("window.close", &["<Control>w"]);
         self.startup_hold.replace(Some(self.app.hold()));
+        crate::window::release_closed_windows();
 
         let mut events = ipc::subscribe();
         let this = Rc::downgrade(self);
@@ -233,12 +238,13 @@ impl App {
     }
 
     fn for_each_in(&self, states: &[State], make: fn(u64) -> Request) {
-        for item in self.store.iter::<DownloadItem>().flatten() {
-            let (id, state) = item.with_info(|info| (info.id, info.state));
-            if states.contains(&state) {
-                send(make(id), None);
-            }
-        }
+        let requests = self
+            .store
+            .iter::<DownloadItem>()
+            .flatten()
+            .filter_map(|item| item.with_info(|info| states.contains(&info.state).then(|| make(info.id))))
+            .collect();
+        crate::window::send_all(requests, self.main_window().map(|w| w.upcast()));
     }
 
     fn handle(self: &Rc<Self>, event: Event) {
@@ -255,6 +261,9 @@ impl App {
                     self.upsert(info);
                 }
                 structural = true;
+                // The settings and the browser's links come right after the
+                // list: a `--pending` instance must still be here for them.
+                self.linger();
                 self.startup_hold.replace(None);
             }
             Event::Update(info) => structural = self.upsert(info),
@@ -321,6 +330,8 @@ impl App {
             Some(item) => {
                 let changed = item.with_info(|old| {
                     (old.state, old.category, old.queue, old.order) != (info.state, info.category, info.queue, info.order)
+                        || old.name != info.name
+                        || old.url != info.url
                 });
                 item.update(info);
                 changed
@@ -344,6 +355,7 @@ impl App {
         if let Some(progress) = progress {
             progress.close();
         }
+        self.answered.borrow_mut().remove(&id);
         let Some(item) = self.items.borrow_mut().remove(&id) else { return };
         let position = (0..self.store.n_items()).find(|&i| self.store.item(i).as_ref() == Some(item.upcast_ref()));
         if let Some(position) = position {
@@ -353,6 +365,12 @@ impl App {
 
     /// Opens, refreshes or closes the "Novo download" window of a download.
     fn sync_dialog(self: &Rc<Self>, info: &DownloadInfo) {
+        if info.state != State::Pending {
+            self.answered.borrow_mut().remove(&info.id);
+        } else if self.answered.borrow().contains(&info.id) {
+            // Answered or cancelled here; the daemon's word is on its way.
+            return;
+        }
         let existing = self.dialogs.borrow().get(&info.id).cloned();
         match (existing, info.state == State::Pending) {
             (Some(dialog), true) => dialog.update(info),
@@ -413,7 +431,10 @@ impl App {
         let id = info.id;
         dialog.connect_closed(move || {
             let Some(this) = this.upgrade() else { return };
-            this.dialogs.borrow_mut().remove(&id);
+            // Closed by the user (an answer or "Cancelar"), not by the daemon.
+            if this.dialogs.borrow_mut().remove(&id).is_some() {
+                this.answered.borrow_mut().insert(id);
+            }
             this.linger();
         });
         let this = Rc::downgrade(self);

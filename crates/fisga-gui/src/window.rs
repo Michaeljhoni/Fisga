@@ -943,11 +943,14 @@ impl MainWindow {
         simple(
             "clear-completed",
             Box::new(move || {
-                for item in store.iter::<DownloadItem>().flatten() {
-                    if item.with_info(|info| info.state == State::Completed) {
-                        send(Request::Remove { id: item.info().id, delete_file: false }, Some(parent.clone().upcast()));
-                    }
-                }
+                let requests = store
+                    .iter::<DownloadItem>()
+                    .flatten()
+                    .filter_map(|item| {
+                        item.with_info(|info| (info.state == State::Completed).then_some(Request::Remove { id: info.id, delete_file: false }))
+                    })
+                    .collect();
+                send_all(requests, Some(parent.clone().upcast()));
             }),
         );
 
@@ -1169,6 +1172,70 @@ pub fn close_on_escape(window: &impl IsA<gtk::Window>) {
         _ => glib::Propagation::Proceed,
     });
     window.as_ref().add_controller(keys);
+}
+
+/// GTK 4 does not dispose a destroyed window while the closures of its own
+/// buttons, actions and key handlers hold it, and with it its timers and the
+/// handlers it connected elsewhere. Once a window is destroyed (unrealized
+/// and hidden for good), let go of its children, actions and controllers.
+pub fn release_closed_windows() {
+    fn watch(window: &gtk::Window) {
+        window.connect_unrealize(|window| {
+            let weak = window.downgrade();
+            glib::idle_add_local_once(move || {
+                let Some(window) = weak.upgrade() else { return };
+                if window.is_visible() || window.is_realized() {
+                    return;
+                }
+                window.set_child(None::<&gtk::Widget>);
+                if let Some(map) = window.dynamic_cast_ref::<gio::ActionMap>() {
+                    if let Some(group) = window.dynamic_cast_ref::<gio::ActionGroup>() {
+                        for name in group.list_actions() {
+                            map.remove_action(&name);
+                        }
+                    }
+                }
+                let controllers: Vec<gtk::EventController> =
+                    window.observe_controllers().iter::<gtk::EventController>().flatten().collect();
+                for controller in controllers {
+                    window.remove_controller(&controller);
+                }
+            });
+        });
+    }
+    let toplevels = gtk::Window::toplevels();
+    for window in toplevels.iter::<gtk::Window>().flatten() {
+        watch(&window);
+    }
+    toplevels.connect_items_changed(|list, position, _, added| {
+        for index in position..position + added {
+            if let Some(window) = list.item(index).and_downcast::<gtk::Window>() {
+                watch(&window);
+            }
+        }
+    });
+}
+
+/// Many requests, one after the other (one connection at a time, which the
+/// daemon's single pipe instance on Windows needs); one error at the end.
+pub fn send_all(requests: Vec<Request>, parent: Option<gtk::Window>) {
+    if requests.is_empty() {
+        return;
+    }
+    glib::spawn_future_local(async move {
+        let total = requests.len();
+        let mut failed = 0;
+        let mut first = None;
+        for request in requests {
+            if let Err(e) = ipc::call(request).await {
+                failed += 1;
+                first.get_or_insert(e.to_string());
+            }
+        }
+        if let Some(error) = first {
+            show_error(parent.as_ref(), &trf!("{} de {} pedidos falharam", failed, total), &error);
+        }
+    });
 }
 
 /// Sends a request; failures are shown over `parent` (or logged).

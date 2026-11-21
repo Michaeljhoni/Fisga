@@ -16,7 +16,7 @@ use fisga_i18n::{tr, trf};
 use fisga_ipc::{
     BrowserSettings, Category, ForceKey, Language, ProxyMode, ProxySettings, Queue, Request, Schedule, Settings, SiteLogin,
     Theme,
-    TimeOfDay, WhenDone, MAIN_QUEUE, WEEKDAYS,
+    TimeOfDay, WhenDone, MAIN_QUEUE,
 };
 
 use crate::festive::Season;
@@ -355,9 +355,9 @@ impl QueueEditor {
         stop_box.append(&stop);
         let days_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         days_box.add_css_class("linked");
-        let days: Vec<gtk::ToggleButton> = WEEKDAYS
-            .iter()
-            .map(|name| {
+        let days: Vec<gtk::ToggleButton> = (0..7u8)
+            .map(|day| {
+                let name = fisga_ipc::weekday_name(day);
                 let mut label = name.to_string();
                 label[..1].make_ascii_uppercase();
                 let button = gtk::ToggleButton::with_label(&label);

@@ -110,6 +110,7 @@ pub fn show(parent: &gtk::Window) {
     let window = gtk::Window::builder()
         .title(tr!("Instalar a extensão no Chrome"))
         .transient_for(parent)
+        .modal(parent.is_modal())
         .resizable(false)
         .build();
 

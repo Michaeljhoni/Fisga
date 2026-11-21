@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+# Editor and agent state folders that tools create inside the tree.
+exclude = ["crates/.omc"]
 
 [workspace.package]
 version = "1.3.1"

@@ -71,6 +71,7 @@ h1 { font-size: 16px; margin: 0; }
 .primary:disabled { opacity: 0.45; cursor: default; }
 .link { all: unset; cursor: pointer; color: var(--accent); padding: 4px 6px; border-radius: 6px; }
 .link:hover, .link:focus-visible { background: var(--hover); }
+.link[hidden] { display: none; }
 
 .tabs {
   display: flex;

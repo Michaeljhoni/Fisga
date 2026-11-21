@@ -25,6 +25,9 @@
 - **Extensão para Chrome e Firefox:** pega os downloads do navegador e põe um botão **Baixar** sobre
   vídeos e músicas de qualquer site (YouTube e outros, pelo yt-dlp). Alt+clique num link manda o
   link direto para o Fisga.
+- **Fotos e vídeos da página de uma vez:** o popup da extensão lista tudo o que a página tem, em
+  abas (Vídeos, Fotos, Áudios), com o arquivo original e não a miniatura. Marque as que quiser (ou
+  todas) e elas vão para a fila, numa pasta com o nome do site.
 - **Janela "Novo download"**, como no IDM: confira nome, pasta e fila antes de começar.
 - **Filas e agendador:** quantos downloads ao mesmo tempo, horário para começar e parar, suspender
   ou desligar ao terminar.
@@ -147,7 +150,9 @@ No Windows, o `fisga.exe` fica em `%LOCALAPPDATA%\Programs\Fisga\bin`; no macOS,
 Internet Download Manager (IDM) written from scratch in Rust with a GTK 4 interface. It splits each
 file into up to 32 connections, resumes interrupted downloads, has queues and a scheduler, and comes
 with a Chrome and Firefox extension that catches the browser's downloads and adds a **Download** button
-over videos on any site (YouTube and others through yt-dlp). In Chrome, Edge, Brave and Vivaldi the
+over videos on any site (YouTube and others through yt-dlp). Its popup also lists every photo,
+video and audio of the page, in tabs, to download the originals at once into a folder named after
+the site. In Chrome, Edge, Brave and Vivaldi the
 extension is loaded from the folder that comes with Fisga (Developer mode → Load unpacked); the app
 shows how in ☰ → Install the extension in Chrome…. Get the Windows installer, the macOS
 `.dmg` or the Linux packages from the [latest release](https://github.com/Michaeljhoni/Fisga/releases/latest).

@@ -190,6 +190,7 @@
       tab.querySelector(".count").textContent = `(${count})`;
     }
     $("small-wrap").hidden = current !== "image" || !items.some((item) => item.type === "image" && isSmall(item));
+    $("select-all").hidden = $("select-none").hidden = !items.some((item) => !item.dead);
     const list = shown();
     const grid = $("grid");
     const fragment = document.createDocumentFragment();

@@ -375,6 +375,23 @@ step "all the links of a page: the files go to the GUI"
 host "{\"type\":\"links\",\"pageUrl\":\"$BASE/site/\",\"links\":[\"$BASE/files/1441792.bin\",\"docs/\",\"apostila.pdf\"]}" | grep '"type":"shown"'
 host "{\"type\":\"links\",\"pageUrl\":\"$BASE/site/\",\"links\":[\"docs/\"]}" | grep "nenhum link para arquivo"
 
+step "the media gallery: many at once, each in its type's folder inside the site's"
+"$BIN/fisga" settings --category-folders true >/dev/null
+# The same file twice in one folder (a gallery's thumbnails often share a
+# name): two files, never one written by both downloads.
+media() { printf '{"url":"%s","kind":"direct","category":"%s","subfolder":"www.exemplo.com.br","pageUrl":"https://www.exemplo.com.br/galeria"}' "$1" "$2"; }
+reply="$(host "{\"type\":\"media-batch\",\"downloads\":[$(media "$BASE/files/1048576.bin" image),$(media "$BASE/files/1048576.bin" image),$(media "$BASE/files/2097152.bin" music)]}")"
+echo "$reply"
+echo "$reply" | grep -q '"type":"added-batch"'
+for id in $(echo "$reply" | grep -o '"ids":\[[0-9,]*\]' | grep -o '[0-9]\+'); do wait_state "$id" concluído 120; done
+ls -la "$HOME/Downloads/Imagens/www.exemplo.com.br" "$HOME/Downloads/Músicas/www.exemplo.com.br"
+test "$(stat -c %s "$HOME/Downloads/Imagens/www.exemplo.com.br/1048576.bin")" -eq 1048576
+test "$(stat -c %s "$HOME/Downloads/Imagens/www.exemplo.com.br/1048576 (1).bin")" -eq 1048576
+test "$(stat -c %s "$HOME/Downloads/Músicas/www.exemplo.com.br/2097152.bin")" -eq 2097152
+cmp "$HOME/Downloads/Imagens/www.exemplo.com.br/1048576.bin" "$HOME/Downloads/Imagens/www.exemplo.com.br/1048576 (1).bin"
+echo "media in their folders, the repeated name kept apart"
+host '{"type":"media-batch","downloads":[{"url":"javascript:alert(1)"}]}' | grep '"type":"error"'
+
 step "a new version of Fisga: told, installed by the system's packages"
 "$BIN/fisga" update | tee "$SANDBOX/update.out"
 grep "Fisga 99.0.0 disponível" "$SANDBOX/update.out"

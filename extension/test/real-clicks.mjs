@@ -791,6 +791,32 @@ try {
     if (s === "store") report.push(await storeScenario(sw));
     if (s === "gallery") report.push(await galleryScenario(sw));
     if (s === "gallery-web") report.push(await galleryWebScenario(sw));
+    if (s === "gallery-timing") {
+      // Diagnostics: how fast the cards of the photos tab get checked.
+      await openPage(process.env.GALLERY_URLS);
+      const { sessionId: gallery } = await openGallery(sw);
+      await evaluate(gallery, "document.querySelector('[data-tab=image]')?.click()");
+      for (const wait of [1000, 2000, 4000, 8000]) {
+        await sleep(wait);
+        const state = await evaluate(
+          gallery,
+          `({ visibility: document.visibilityState, focus: document.hasFocus(), cards: document.querySelectorAll('.card').length,
+              sized: [...document.querySelectorAll('.card .detail')].filter((d) => /\d+(\.\d)? (KB|MB|B)/.test(d.textContent)).length,
+              originals: document.querySelectorAll('.badge.original').length })`,
+        );
+        log(JSON.stringify(state));
+      }
+      await shot(gallery, "gallery-timing");
+    }
+    if (s === "probe") {
+      // Diagnostics: the gallery's address check on PROBE_URLS, with its time.
+      for (const url of (process.env.PROBE_URLS ?? "").split(/\s+/).filter(Boolean)) {
+        const started = Date.now();
+        const result = await evaluate(sw, `probeUrl(${JSON.stringify(url)})`);
+        log(`${Date.now() - started} ms ${JSON.stringify(result)}`);
+        report.push({ name: "probe", url, ms: Date.now() - started, result });
+      }
+    }
     if (s === "takeover" || s === "force") {
       const { server, base } = await localSite();
       report.push(await (s === "takeover" ? takeoverScenario : forceScenario)(sw, base));

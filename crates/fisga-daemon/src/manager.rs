@@ -833,6 +833,11 @@ impl Manager {
                 }
                 let _ = tokio::fs::remove_file(fisga_core::control::part_path(path)).await;
                 let _ = tokio::fs::remove_file(fisga_core::control::control_path(path)).await;
+                if job.info.kind != SourceKind::Direct {
+                    for partial in ytdlp::partial_files(path) {
+                        let _ = tokio::fs::remove_file(partial).await;
+                    }
+                }
             }
         }
         self.paths.release(id);
@@ -1580,6 +1585,25 @@ mod tests {
         settings.remove_queue(1);
         manager.set_settings(settings).unwrap();
         assert!(manager.list().iter().all(|i| i.queue == MAIN_QUEUE));
+    }
+
+    #[tokio::test]
+    async fn removing_a_site_video_deletes_what_yt_dlp_left() {
+        let manager = manager();
+        let request = AddRequest { url: "https://example.com/v".into(), kind: SourceKind::Page, start: false, ..Default::default() };
+        let id = manager.add(request).unwrap();
+        let dir = manager.settings().download_dir.unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let partials = ["V [abc].mp4.part", "V [abc].f137.mp4.part", "V [abc].f137.mp4.ytdl"].map(|name| dir.join(name));
+        for path in &partials {
+            std::fs::write(path, b"x").unwrap();
+        }
+        std::fs::write(dir.join("Outro.mp4.part"), b"x").unwrap();
+        // As yt-dlp tells it when it starts.
+        manager.update(id, |info| info.path = Some(dir.join("V [abc].mp4")));
+        manager.remove(id, true).await.unwrap();
+        assert!(partials.iter().all(|path| !path.exists()), "{partials:?}");
+        assert!(dir.join("Outro.mp4.part").exists(), "another video's");
     }
 
     #[tokio::test]

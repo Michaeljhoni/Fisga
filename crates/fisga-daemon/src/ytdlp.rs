@@ -54,6 +54,26 @@ fn write_cookies_file(name: &str, cookies: &[Cookie]) -> std::io::Result<TempFil
     Ok(written)
 }
 
+/// What yt-dlp leaves while it downloads to `destination`: `name.part` and
+/// `name.ytdl`, each format's (`stem.f137.mp4.part`), their fragments
+/// (`….part-Frag3`) and the merger's `stem.temp.mp4`.
+pub fn partial_files(destination: &Path) -> Vec<PathBuf> {
+    let (Some(dir), Some(name)) = (destination.parent(), destination.file_name().and_then(|n| n.to_str())) else {
+        return Vec::new();
+    };
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            let Some(file) = path.file_name().and_then(|n| n.to_str()) else { return false };
+            let Some(rest) = file.strip_prefix(stem).filter(|rest| rest.starts_with('.')) else { return false };
+            rest.ends_with(".part") || rest.ends_with(".ytdl") || rest.contains(".part-Frag") || rest.starts_with(".temp.")
+        })
+        .collect()
+}
+
 /// Cookies files a fisgad that stopped abruptly left in `dir` (the runtime folder).
 pub fn remove_leftover_cookies(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
@@ -179,6 +199,8 @@ async fn run_once(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel:
         .args(["--max-downloads", "1"])
         .args(["--progress-template", PROGRESS_TEMPLATE])
         .args(["--print", "before_dl:FISGANAME %(title)s"])
+        // Where it goes, before it starts: what it leaves meanwhile is found from it.
+        .args(["--print", "before_dl:FISGADEST %(filename)s"])
         .args(["--print", "after_move:FISGAFILE %(filepath)s"])
         .args(["--concurrent-fragments", "4"]);
     // Per yt-dlp process: with several site videos at once the total is higher.
@@ -472,6 +494,9 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
                     if !title.is_empty() && title != "NA" {
                         manager.update(id, |info| info.name = title);
                     }
+                } else if let Some(path) = line.strip_prefix("FISGADEST ").map(str::trim).filter(|p| !p.is_empty() && *p != "NA") {
+                    let path = PathBuf::from(path);
+                    manager.update(id, |info| info.path = Some(path));
                 } else if let Some(path) = line.strip_prefix("FISGAFILE ") {
                     let path = PathBuf::from(path.trim());
                     manager.update(id, |info| info.path = Some(path.clone()));
@@ -523,6 +548,33 @@ mod tests {
         // The audio after the video: counting starts over.
         assert_eq!(rate.sample(at(17_000), 5 * MB), None);
         assert_eq!(rate.sample(at(18_000), 7 * MB), Some(2.0 * MB as f64));
+    }
+
+    #[test]
+    fn what_yt_dlp_leaves_while_downloading() {
+        let dir = std::env::temp_dir().join(format!("fisgad-partials-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let partials = [
+            "Vídeo [abc].mp4.part",
+            "Vídeo [abc].mp4.ytdl",
+            "Vídeo [abc].f137.mp4.part",
+            "Vídeo [abc].f137.mp4.part-Frag3",
+            "Vídeo [abc].temp.mp4",
+        ];
+        let others = ["Vídeo [abc].mp4", "Vídeo [abc].en.vtt", "Vídeo [abc]2.mp4.part", "Outro.mp4.part"];
+        for name in partials.iter().chain(&others) {
+            std::fs::write(dir.join(name), "x").unwrap();
+        }
+        let mut found: Vec<PathBuf> = partial_files(&dir.join("Vídeo [abc].mp4"));
+        found.sort();
+        let mut expected: Vec<PathBuf> = partials.iter().map(|name| dir.join(name)).collect();
+        expected.sort();
+        assert_eq!(found, expected);
+        // Without an extension.
+        std::fs::write(dir.join("LEIAME.part"), "x").unwrap();
+        assert_eq!(partial_files(&dir.join("LEIAME")), [dir.join("LEIAME.part")]);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

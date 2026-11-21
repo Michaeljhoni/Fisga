@@ -110,6 +110,9 @@ pub struct Manager {
     logins_path: PathBuf,
     store: PathBuf,
     dirty: AtomicBool,
+    /// The final path of each unfinished direct download, from the moment it
+    /// is chosen: no other download takes that name or its `.fisga-part`.
+    paths: Arc<fisga_core::filename::Paths>,
     /// Never locked while `inner` is held: take a copy first.
     settings: Mutex<Settings>,
     settings_path: PathBuf,
@@ -259,9 +262,16 @@ impl Manager {
             }
         }
         let settings = load_settings(&settings_path);
+        let paths = Arc::new(fisga_core::filename::Paths::default());
         for job in inner.jobs.values_mut() {
             if settings.queue(job.info.queue).is_none() {
                 job.info.queue = MAIN_QUEUE;
+            }
+            // A paused download's partial file stays its own.
+            if let Some(path) = job.info.path.as_ref().filter(|_| job.info.state != State::Completed) {
+                if !paths.take(job.info.id, path) {
+                    tracing::warn!(id = job.info.id, path = %path.display(), "dois downloads com o mesmo arquivo");
+                }
             }
         }
         let power_delay = std::env::var("FISGA_POWER_DELAY").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
@@ -281,6 +291,7 @@ impl Manager {
             logins_path,
             store,
             dirty: AtomicBool::new(false),
+            paths,
             limiter: Arc::new(fisga_core::RateLimiter::new(settings.speed_limit)),
             scheduler: Mutex::new(scheduler::Scheduler::new(&settings, LocalTime::now(), saved)),
             scheduler_path,
@@ -699,16 +710,31 @@ impl Manager {
             job.request.output_dir = job.info.dir.clone();
             if let (Some(conflict), Some(dir)) = (conflict, job.info.dir.clone()) {
                 let name = fisga_core::filename::sanitize(&job.info.name);
+                let path = dir.join(&name);
+                // Never another download's file, nor its partial file.
+                if conflict != Conflict::Rename && !self.paths.take(id, &path) {
+                    bail!(trf!("outro download da lista usa o arquivo {}", name));
+                }
                 let name = match conflict {
-                    Conflict::Rename => fisga_ipc::unique_name(&dir, &name),
+                    Conflict::Rename => {
+                        let free = fisga_core::filename::candidates(&dir, &name)
+                            .find(|path| fisga_ipc::existing(path) == fisga_ipc::Existing::Nothing && self.paths.take(id, path))
+                            .expect("infinite iterator");
+                        free.file_name().unwrap_or_default().to_string_lossy().into_owned()
+                    }
                     Conflict::Overwrite => {
-                        let path = dir.join(&name);
                         to_delete.extend(fisga_ipc::partial_paths(&path));
                         to_delete.push(path);
                         name
                     }
                     // The engine (and yt-dlp) continue a partial file with the same name.
-                    Conflict::Resume => name,
+                    Conflict::Resume => {
+                        // This one, whatever address it came from: the user chose it.
+                        if job.info.kind == SourceKind::Direct {
+                            job.info.path = Some(path);
+                        }
+                        name
+                    }
                 };
                 job.info.name = name.clone();
                 job.request.file_name = Some(name);
@@ -798,6 +824,7 @@ impl Manager {
                 let _ = tokio::fs::remove_file(fisga_core::control::control_path(path)).await;
             }
         }
+        self.paths.release(id);
         let _ = self.updates.send(Response::Removed { id });
         self.save();
         self.schedule();
@@ -938,6 +965,7 @@ impl Manager {
             connections: request.connections.unwrap_or(settings.connections).clamp(1, 32),
             // Both apply: the global limit for all downloads and this one's own.
             limiters: vec![self.limiter.clone(), limiter],
+            paths: Some((self.paths.clone(), id)),
             ..Default::default()
         };
         let (events_tx, mut events) = mpsc::unbounded_channel();
@@ -1012,6 +1040,9 @@ impl Manager {
             .unwrap_or_default();
         if from_queue && matches!(result, JobResult::Completed(_)) {
             self.scheduler.lock().unwrap().completed(queue);
+        }
+        if matches!(result, JobResult::Completed(_)) {
+            self.paths.release(id);
         }
         self.update(id, |info| {
             info.speed = 0.0;
@@ -1267,6 +1298,78 @@ mod tests {
         manager.confirm(overwritten, Answer { conflict: Some(Conflict::Overwrite), ..Default::default() }).unwrap();
         assert_eq!(info(overwritten).name, "file.iso");
         assert!(!dir.join("file.iso").exists() && !dir.join("file.iso.fisga-part").exists());
+    }
+
+    #[tokio::test]
+    async fn another_downloads_file_is_neither_continued_nor_overwritten() {
+        let manager = manager();
+        let dir = manager.settings().download_dir.unwrap().join("Programas");
+        let info = |id| manager.list().into_iter().find(|i| i.id == id).unwrap();
+        let first = add(&manager, true);
+        manager.confirm(first, Answer { conflict: Some(Conflict::Resume), ..Default::default() }).unwrap();
+        assert_eq!(info(first).path, Some(dir.join("file.iso")), "the partial file the user chose");
+
+        let second = add(&manager, true);
+        for conflict in [Conflict::Resume, Conflict::Overwrite] {
+            let answer = Answer { conflict: Some(conflict), ..Default::default() };
+            let error = manager.confirm(second, answer).unwrap_err().to_string();
+            assert!(error.contains("outro download"), "{error}");
+        }
+        manager.confirm(second, Answer { conflict: Some(Conflict::Rename), ..Default::default() }).unwrap();
+        assert_eq!(info(second).name, "file (1).iso", "a name no other download holds");
+    }
+
+    /// Serves `body` at any address, `delay` after the head; one answer per connection.
+    async fn file_server(body: Vec<u8>, delay: Duration) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/vi/x/maxresdefault.jpg", listener.local_addr().unwrap());
+        let body = Arc::new(body);
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let body = body.clone();
+                tokio::spawn(async move {
+                    let _ = socket.read(&mut [0; 4096]).await;
+                    let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    tokio::time::sleep(delay).await;
+                    let _ = socket.write_all(&body).await;
+                });
+            }
+        });
+        url
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn gallery_media_with_the_same_name_get_files_of_their_own() {
+        let manager = manager();
+        let mut downloads = Vec::new();
+        let mut bodies = Vec::new();
+        for n in 0..3u8 {
+            let body = vec![b'a' + n; 50_000];
+            let url = file_server(body.clone(), Duration::from_millis(300)).await;
+            downloads.push(AddRequest { url, subfolder: Some("i.ytimg.com".into()), start: true, ..Default::default() });
+            bodies.push(body);
+        }
+        let ids = manager.add_many(downloads).unwrap();
+        for _ in 0..100 {
+            if ids.iter().all(|&id| manager.state(id) == Some(State::Completed)) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let list = manager.list();
+        let mut paths = Vec::new();
+        for (id, body) in ids.iter().zip(&bodies) {
+            let info = list.iter().find(|i| i.id == *id).unwrap();
+            assert_eq!(info.state, State::Completed, "{info:?}");
+            let path = info.path.clone().unwrap();
+            assert!(std::fs::read(&path).unwrap() == *body, "{path:?} holds another download's data");
+            paths.push(path);
+        }
+        paths.sort();
+        paths.dedup();
+        assert_eq!(paths.len(), 3, "{paths:?}");
     }
 
     #[tokio::test]

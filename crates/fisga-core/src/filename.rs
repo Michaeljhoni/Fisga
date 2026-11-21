@@ -1,6 +1,8 @@
 //! File name detection and sanitizing.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use percent_encoding::percent_decode_str;
 use url::Url;
@@ -93,21 +95,49 @@ pub fn sanitize(name: &str) -> String {
     }
 }
 
-/// Returns `dir/name`, or `dir/name (n).ext` if that file (or an unrelated
-/// partial download of it) already exists.
-pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
-    let candidate = dir.join(name);
-    if !candidate.exists() && !control::part_path(&candidate).exists() {
-        return candidate;
-    }
+/// `dir/name`, then `dir/name (1).ext`, `dir/name (2).ext`...
+pub fn candidates<'a>(dir: &'a Path, name: &'a str) -> impl Iterator<Item = PathBuf> + 'a {
     let (stem, ext) = match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() && ext.len() <= 10 => (stem, format!(".{ext}")),
         _ => (name, String::new()),
     };
-    (1..)
-        .map(|n| dir.join(format!("{stem} ({n}){ext}")))
-        .find(|p| !p.exists() && !control::part_path(p).exists())
-        .expect("infinite iterator")
+    std::iter::once(dir.join(name)).chain((1..).map(move |n| dir.join(format!("{stem} ({n}){ext}"))))
+}
+
+/// Returns `dir/name`, or `dir/name (n).ext` if that file (or an unrelated
+/// partial download of it) already exists.
+pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
+    candidates(dir, name).find(|p| !p.exists() && !control::part_path(p).exists()).expect("infinite iterator")
+}
+
+/// The final paths of the downloads of one list (the daemon's), each held by
+/// one download from the moment it is chosen: two downloads never take the
+/// same name, nor write into each other's `.fisga-part`, even before the file
+/// exists or while one of them is paused.
+#[derive(Debug, Default)]
+pub struct Paths {
+    held: Mutex<HashMap<PathBuf, u64>>,
+}
+
+impl Paths {
+    /// Gives `path` to download `id`, which lets go of the one it held;
+    /// false when another download holds it.
+    pub fn take(&self, id: u64, path: &Path) -> bool {
+        let mut held = self.held.lock().unwrap();
+        match held.get(path) {
+            Some(owner) => *owner == id,
+            None => {
+                held.retain(|_, owner| *owner != id);
+                held.insert(path.to_path_buf(), id);
+                true
+            }
+        }
+    }
+
+    /// Download `id` no longer needs its path (finished or removed).
+    pub fn release(&self, id: u64) {
+        self.held.lock().unwrap().retain(|_, owner| *owner != id);
+    }
 }
 
 #[cfg(test)]
@@ -137,5 +167,29 @@ mod tests {
         assert_eq!(sanitize("../etc/passwd"), "_etc_passwd");
         assert_eq!(sanitize("  "), "download");
         assert_eq!(sanitize("a\nb.mp4"), "a_b.mp4");
+    }
+
+    #[test]
+    fn candidate_names() {
+        let dir = Path::new("/d");
+        let names: Vec<PathBuf> = candidates(dir, "a.tar.gz").take(3).collect();
+        assert_eq!(names, [dir.join("a.tar.gz"), dir.join("a.tar (1).gz"), dir.join("a.tar (2).gz")]);
+        assert_eq!(candidates(dir, "LEIAME").nth(1), Some(dir.join("LEIAME (1)")));
+    }
+
+    #[test]
+    fn a_path_has_one_holder() {
+        let paths = Paths::default();
+        let (a, b) = (Path::new("/d/a.jpg"), Path::new("/d/a (1).jpg"));
+        assert!(paths.take(1, a));
+        assert!(paths.take(1, a), "again: still its own");
+        assert!(!paths.take(2, a), "another download's");
+        assert!(paths.take(2, b));
+        // Taking another path lets go of the old one.
+        assert!(paths.take(1, Path::new("/d/b.jpg")));
+        assert!(paths.take(3, a));
+        paths.release(3);
+        assert!(paths.take(2, a), "released");
+        assert!(!paths.take(3, a));
     }
 }

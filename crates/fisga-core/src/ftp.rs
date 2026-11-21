@@ -244,7 +244,7 @@ pub async fn download(
         connected = connect => connected?,
     };
 
-    let final_path = resolve_target(target, &address.name);
+    let final_path = resolve_target(target, &address.name, &spec.url, opts.paths.as_ref())?;
     if let Some(parent) = final_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -450,14 +450,38 @@ mod tests {
         }
     }
 
+    /// What an earlier attempt at `url` left in `dir`: `done` bytes of `a.bin`.
+    fn earlier_attempt(dir: &std::path::Path, url: &str, done: usize) {
+        let path = dir.join("a.bin");
+        std::fs::write(control::part_path(&path), &content()[..done]).unwrap();
+        let segments = vec![control::SegmentState { start: 0, end: 299_999, done: done as u64 }];
+        let saved = control::ControlFile { version: control::VERSION, url: url.into(), total: 300_000, etag: None, segments };
+        control::save(&control::control_path(&path), &saved).unwrap();
+    }
+
     #[tokio::test]
     async fn resumes_where_it_stopped() {
         let (base, seen) = server(content(), true).await;
         let dir = scratch("resume");
-        std::fs::write(dir.join("a.bin.fisga-part"), &content()[..100_000]).unwrap();
-        let Outcome::Completed(path) = fetch(&format!("{base}/pub/a.bin"), &dir).await.unwrap() else { panic!() };
+        let url = format!("{base}/pub/a.bin");
+        earlier_attempt(&dir, &url, 100_000);
+        let Outcome::Completed(path) = fetch(&url, &dir).await.unwrap() else { panic!() };
+        assert_eq!(path, dir.join("a.bin"));
         assert_eq!(std::fs::read(&path).unwrap(), content());
         assert!(seen.lock().unwrap().contains(&"REST 100000".to_string()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_partial_file_of_another_address_is_left_alone() {
+        let (base, seen) = server(content(), true).await;
+        let dir = scratch("other");
+        earlier_attempt(&dir, "ftp://outro.exemplo.com/a.bin", 100_000);
+        let Outcome::Completed(path) = fetch(&format!("{base}/pub/a.bin"), &dir).await.unwrap() else { panic!() };
+        assert_eq!(path, dir.join("a (1).bin"));
+        assert_eq!(std::fs::read(&path).unwrap(), content());
+        assert_eq!(std::fs::read(dir.join("a.bin.fisga-part")).unwrap(), &content()[..100_000]);
+        assert!(!seen.lock().unwrap().iter().any(|command| command.starts_with("REST")));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

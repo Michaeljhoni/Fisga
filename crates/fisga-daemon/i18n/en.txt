@@ -294,3 +294,6 @@ Endereço não atualizado
 
 o download não pausou a tempo; tente de novo
 = the download did not pause in time; try again
+
+outro download da lista usa o arquivo {}
+= another download in the list uses the file {}

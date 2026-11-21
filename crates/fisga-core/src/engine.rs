@@ -60,6 +60,9 @@ pub struct DownloadOptions {
     pub connection_stagger: Duration,
     /// Speed limits, all respected: the global one (every download) and this download's own.
     pub limiters: Vec<Arc<crate::RateLimiter>>,
+    /// The final paths held by the other downloads of the same list, and
+    /// this download's id there.
+    pub paths: Option<(Arc<filename::Paths>, u64)>,
 }
 
 impl Default for DownloadOptions {
@@ -71,6 +74,7 @@ impl Default for DownloadOptions {
             idle_timeout: Duration::from_secs(30),
             connection_stagger: Duration::from_millis(150),
             limiters: Vec::new(),
+            paths: None,
         }
     }
 }
@@ -79,9 +83,10 @@ impl Default for DownloadOptions {
 #[derive(Debug, Clone)]
 pub enum Target {
     /// Pick the name (given or detected) inside `dir`, avoiding collisions, or
-    /// resume an existing `.fisga-part` with that name.
+    /// resume an existing `.fisga-part` with that name left by the same address.
     Dir { dir: PathBuf, file_name: Option<String> },
-    /// Exact final path (used when resuming a known download).
+    /// Exact final path (a known download, or a partial file the user chose
+    /// to continue), whatever address made its `.fisga-part`.
     File(PathBuf),
 }
 
@@ -133,7 +138,7 @@ pub async fn download(
     let followed = spec.for_final_url(&probe.final_url);
     let spec = &followed;
 
-    let final_path = resolve_target(target, &probe.file_name);
+    let final_path = resolve_target(target, &probe.file_name, &spec.url, opts.paths.as_ref())?;
     if let Some(parent) = final_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -147,6 +152,7 @@ pub async fn download(
 
     if probe.total == Some(0) {
         tokio::fs::write(&final_path, b"").await?;
+        let _ = tokio::fs::remove_file(control::part_path(&final_path)).await;
         return Ok(Outcome::Completed(final_path));
     }
     if segmented {
@@ -157,20 +163,48 @@ pub async fn download(
 }
 
 /// The file's final path: the one given, or in the folder with the name
-/// given (else the server's), keeping an unfinished `.fisga-part` of it to
-/// resume, else a name not taken yet.
-pub(crate) fn resolve_target(target: Target, detected_name: &str) -> PathBuf {
+/// given (else the server's). There it continues an unfinished `.fisga-part`
+/// that this same address left, else takes a name that no file, partial file
+/// or other download (`paths`) has, creating its `.fisga-part` right away so
+/// that nothing else takes it meanwhile.
+pub(crate) fn resolve_target(
+    target: Target,
+    detected_name: &str,
+    url: &str,
+    paths: Option<&(Arc<filename::Paths>, u64)>,
+) -> Result<PathBuf> {
+    let take = |path: &Path| paths.map_or(true, |(paths, id)| paths.take(*id, path));
     match target {
-        Target::File(path) => path,
+        Target::File(path) => match take(&path) {
+            true => Ok(path),
+            false => Err(Error::Other(trf!("outro download já usa o arquivo {}", path.display()))),
+        },
         Target::Dir { dir, file_name } => {
             let name = file_name.as_deref().map(filename::sanitize).unwrap_or_else(|| detected_name.to_string());
-            let candidate = dir.join(&name);
-            control::adopt_legacy(&candidate);
-            if control::part_path(&candidate).exists() {
-                candidate
-            } else {
-                filename::unique_path(&dir, &name)
+            std::fs::create_dir_all(&dir)?;
+            for candidate in filename::candidates(&dir, &name) {
+                if !take(&candidate) {
+                    continue;
+                }
+                control::adopt_legacy(&candidate);
+                let part = control::part_path(&candidate);
+                if part.exists() {
+                    let saved = control::load(&control::control_path(&candidate));
+                    if saved.is_some_and(|saved| saved.url == url) {
+                        return Ok(candidate);
+                    }
+                    continue;
+                }
+                if candidate.exists() {
+                    continue;
+                }
+                match OpenOptions::new().write(true).create_new(true).open(&part) {
+                    Ok(_) => return Ok(candidate),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(e.into()),
+                }
             }
+            unreachable!("infinite iterator")
         }
     }
 }
@@ -1003,6 +1037,50 @@ mod tests {
         assert!(ctx.leave());
         assert!(!ctx.leave(), "the last one keeps trying");
         assert_eq!(ctx.workers.load(Ordering::SeqCst), 1);
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fisga-target-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// An unfinished download of `url` at `path`.
+    fn leave_partial(path: &Path, url: &str) {
+        std::fs::write(control::part_path(path), b"x").unwrap();
+        let saved = ControlFile { version: control::VERSION, url: url.into(), total: 1, etag: None, segments: Vec::new() };
+        control::save(&control::control_path(path), &saved).unwrap();
+    }
+
+    #[test]
+    fn a_folder_target_continues_only_its_own_partial_file() {
+        let dir = scratch("own");
+        let target = || Target::Dir { dir: dir.clone(), file_name: Some("a.jpg".into()) };
+        let first = resolve_target(target(), "x", "http://a/1", None).unwrap();
+        assert_eq!(first, dir.join("a.jpg"));
+        assert!(control::part_path(&first).exists(), "taken on disk right away");
+        assert_eq!(resolve_target(target(), "x", "http://a/2", None).unwrap(), dir.join("a (1).jpg"));
+        leave_partial(&first, "http://a/1");
+        assert_eq!(resolve_target(target(), "x", "http://a/1", None).unwrap(), first, "the same address continues");
+        assert_eq!(resolve_target(target(), "x", "http://a/3", None).unwrap(), dir.join("a (2).jpg"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_name_held_by_another_download_is_skipped() {
+        let dir = scratch("held");
+        let paths = Arc::new(filename::Paths::default());
+        let theirs = dir.join("a.jpg");
+        assert!(paths.take(1, &theirs));
+        std::fs::create_dir_all(&dir).unwrap();
+        leave_partial(&theirs, "http://a/1");
+        // Not even the same address takes over a partial file another download holds.
+        let mine = (paths.clone(), 2);
+        let target = Target::Dir { dir: dir.clone(), file_name: Some("a.jpg".into()) };
+        assert_eq!(resolve_target(target, "x", "http://a/1", Some(&mine)).unwrap(), dir.join("a (1).jpg"));
+        assert!(!paths.take(3, &dir.join("a (1).jpg")), "now download 2's");
+        assert!(resolve_target(Target::File(theirs), "x", "http://a/1", Some(&mine)).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

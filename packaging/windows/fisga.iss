@@ -82,10 +82,17 @@ Filename: "{app}\bin\fisga-gui.exe"; Flags: nowait; Check: Relaunch
 ; The video programs Fisga fetched (see tools.rs in the daemon), and its updates.
 Type: filesandordirs; Name: "{localappdata}\fisga\tools"
 Type: filesandordirs; Name: "{localappdata}\fisga\update"
+; The daemon's pipe name (fisga-ipc's runtime_dir) and the browsers' manifests
+; (hosts.rs). The settings, logins and download list, in {userappdata}\fisga, stay.
+Type: filesandordirs; Name: "{localappdata}\fisga\run"
+Type: filesandordirs; Name: "{localappdata}\fisga\native-messaging-hosts"
+Type: dirifempty; Name: "{localappdata}\fisga"
 
 [UninstallRun]
 Filename: "{app}\bin\fisga.exe"; Parameters: "install-hosts --uninstall"; Flags: runhidden; RunOnceId: "Hosts"
 Filename: "{app}\bin\fisga.exe"; Parameters: "stop"; Flags: runhidden; RunOnceId: "StopDaemon"
+; `fisga stop` waits up to 10 s; a daemon still running would keep its files.
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM fisgad.exe"; Flags: runhidden; RunOnceId: "KillDaemon"
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM fisga-gui.exe"; Flags: runhidden; RunOnceId: "StopGui"
 
 [Code]
@@ -122,13 +129,16 @@ begin
 end;
 
 { An update replaces the programs: the daemon pauses its downloads and quits
-  (they resume when it starts again), the interface closes. }
+  (they resume when it starts again), the interface closes. `fisga stop`
+  waits up to 10 s for the daemon; one still running is ended, or its
+  program could not be replaced. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Code: Integer;
 begin
   if FileExists(ExpandConstant('{app}\bin\fisga.exe')) then
     Exec(ExpandConstant('{app}\bin\fisga.exe'), 'stop', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM fisgad.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM fisga-gui.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
   Result := '';
 end;

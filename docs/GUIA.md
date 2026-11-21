@@ -68,30 +68,39 @@ Navegadores em Flatpak/Snap rodam isolados e não conseguem iniciar o host nativ
 
 `packaging/arch/PKGBUILD` gera o pacote `fisga-git`, que instala tudo em `/usr`: os programas, o
 atalho no menu, o host nativo já registrado para todos os usuários (Firefox, Chromium, Chrome,
-Brave, Edge, Vivaldi, LibreWolf) e a extensão em `/usr/share/fisga/extension`. Enquanto o
-repositório for privado, construa a partir do seu checkout (o `makepkg` usa o que está
-commitado):
+Brave, Edge, Vivaldi, LibreWolf) e a extensão em `/usr/share/fisga/extension`. O `makepkg` compila
+o último commit da `main` do GitHub; do clone, ele só usa o PKGBUILD:
 
 ```bash
-cd packaging/arch
-FISGA_GIT="git+file://$(realpath ../..)" makepkg -si
+git clone https://github.com/Michaeljhoni/Fisga.git
+cd Fisga/packaging/arch && makepkg -si
 ```
 
-Para atualizar: `git pull` e o mesmo comando. Quem usava o `scripts/install-dev.sh` pode tirar a
-instalação antiga: `fisga install-hosts --uninstall` e `rm ~/.local/bin/{fisga,fisgad,fisga-native-host,fisga-gui}
-~/.local/share/applications/io.fisga.Fisga.desktop`. Na extensão, carregue `/usr/share/fisga/extension/chrome`
-(ou `firefox/manifest.json`).
+Para atualizar: `git pull` e o mesmo `makepkg -si`. Para compilar o que está commitado no seu
+checkout em vez do GitHub (um branch ainda não publicado), dentro de `packaging/arch`:
+`FISGA_GIT="git+file://$(realpath ../..)" makepkg -si`. Os binários prontos da última versão, sem
+compilar, vêm de `packaging/arch-bin` (pacote `fisga-bin`), do mesmo jeito.
+
+Quem usava o `scripts/install-dev.sh` pode tirar a instalação antiga:
+`fisga install-hosts --uninstall` e `rm ~/.local/bin/{fisga,fisgad,fisga-native-host,fisga-gui}
+~/.local/share/applications/io.fisga.Fisga.desktop`. Na extensão, carregue
+`/usr/share/fisga/extension/chrome` (ou `firefox/manifest.json`).
 
 ### Vindo do LDM (o nome antigo)
 
-O pacote `fisga-git` substitui o `ldm-git` (o `pacman` pergunta se pode removê-lo). Antes de
-atualizar, pare o antigo: `ldm stop; pkill -x ldm-gui`. Na primeira vez que o Fisga roda, ele leva
-para as pastas novas o que era do LDM: `~/.config/ldm` (configurações e logins), `~/.local/share/ldm`
-(a lista de downloads) e `~/.local/state/ldm` (logs). Downloads pausados continuam de onde pararam
-(os arquivos `.ldm-part` ganham o nome novo), o "Iniciar com a sessão" passa a abrir o Fisga, e
-comandos de "Ao concluir" que usam `$LDM_FILE` (e as outras) continuam valendo. No navegador,
-recarregue a extensão: ela agora conversa com `io.fisga.native`. Instalações com o
-`scripts/install-dev.sh` rodam `fisga install-hosts`, que também apaga o registro antigo
+Antes de atualizar, pare o antigo (`ldm stop; pkill -x ldm-gui`). Depois de instalar o
+`fisga-git`, remova o `ldm-git` (`sudo pacman -R ldm-git`): os dois pacotes não têm arquivos em
+comum, e o `pacman` não troca um pelo outro sozinho. O histórico do repositório foi refeito quando
+ele ficou público, em outubro de 2026: um clone de antes disso não acompanha mais com `git pull`;
+clone de novo.
+
+Na primeira vez que o Fisga roda, ele leva para as pastas novas o que era do LDM: `~/.config/ldm`
+(configurações e logins), `~/.local/share/ldm` (a lista de downloads) e `~/.local/state/ldm`
+(logs). Downloads pausados continuam de onde pararam (os arquivos `.ldm-part` ganham o nome novo),
+o "Iniciar com a sessão" passa a abrir o Fisga, e comandos de "Ao concluir" que usam `$LDM_FILE`
+(e as outras) continuam valendo. No navegador, recarregue a extensão: ela agora conversa com
+`io.fisga.native`. Instalações com o `scripts/install-dev.sh` rodam `fisga install-hosts`, que
+também apaga o registro antigo
 (`io.ldm.native.json`); apague à mão `~/.local/bin/{ldm,ldmd,ldm-native-host,ldm-gui}` e
 `~/.local/share/applications/io.ldm.Ldm.desktop`. No Firefox, a extensão mudou de ID
 (`fisga@fisga.local`): remova a antiga e carregue a nova.

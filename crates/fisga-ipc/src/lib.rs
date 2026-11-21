@@ -1091,7 +1091,7 @@ pub fn file_map(segments: impl IntoIterator<Item = (u64, u64, u64)>, total: u64)
         return Vec::new();
     }
     let bounds = |part: usize| total * part as u64 / MAP_PARTS as u64;
-    let mut done = vec![0u64; MAP_PARTS];
+    let mut done = [0u64; MAP_PARTS];
     for (start, end, written) in segments {
         let (from, to) = (start, (start + written).min(end + 1));
         for (part, sum) in done.iter_mut().enumerate() {

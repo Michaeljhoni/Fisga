@@ -67,20 +67,82 @@ function isExtractorPage(url) {
   return Boolean(u && /^https?:$/.test(u.protocol) && hostMatches(u.hostname, PAGE_EXTRACTOR_HOSTS));
 }
 
-// YouTube pages that are lists (home, search, channels, feeds) rather than one
-// video: sending them to yt-dlp would download every video in the list.
+// Pages of one video (or post, clip, track) on the PAGE_EXTRACTOR_HOSTS sites,
+// like content.js's VIDEO_PAGES. Their other pages (home, feeds, profiles,
+// channels, searches) list many: sending them to yt-dlp would download every
+// video in the list.
 const YOUTUBE_HOSTS = ["youtube.com", "youtube-nocookie.com", "youtu.be"];
 function isYoutubeVideo(u) {
   if (u.hostname === "youtu.be" || u.hostname.endsWith(".youtu.be")) return u.pathname.length > 1;
   if (u.pathname === "/watch") return u.searchParams.has("v");
   return /^\/(shorts|live|embed|v)\/[\w-]{6,}/.test(u.pathname);
 }
+const SINGLE_PAGES = [
+  { hosts: YOUTUBE_HOSTS, test: isYoutubeVideo },
+  {
+    hosts: ["vimeo.com"],
+    test: (u) => /^\/(?:\d+(?:\/\w+)?\/?$|channels\/[\w-]+\/\d+|(?:[\w-]+\/)*videos?\/\d+|[\w-]+\/review\/\d+|ondemand\/[\w-]+\/\d+|event\/\d+)/.test(u.pathname),
+  },
+  { hosts: ["dailymotion.com"], test: (u) => /^\/(?:embed\/)?video\/\w+/.test(u.pathname) || u.searchParams.has("video") },
+  { hosts: ["instagram.com"], test: (u) => /^\/(?:(?:[\w.]+\/)?(?:p|reels?|tv)\/[\w-]+|stories\/[\w.]+\/\d+)/.test(u.pathname) },
+  {
+    hosts: ["tiktok.com"],
+    test: (u) => /^v[mt]\./.test(u.hostname) || /^\/(?:@[\w.-]+\/(?:video|photo)\/\d+|@[\w.-]+\/live|embed(?:\/v2)?\/\d+|v\/\d+|t\/\w+|player\/v1\/\d+)/.test(u.pathname),
+  },
+  {
+    hosts: ["facebook.com"],
+    test: (u) =>
+      /^\/(?:[\w.-]+\/videos\/(?:[\w.-]+\/)?\d+|reel\/\d+|share\/[rv]\/\w+|groups\/[\w.-]+\/(?:permalink|posts)\/\d+|[\w.-]+\/posts\/[\w-]+)/.test(u.pathname) ||
+      (/^\/(?:watch(?:\/live)?\/?|video\.php)$/.test(u.pathname) && u.searchParams.has("v")) ||
+      u.searchParams.has("story_fbid"),
+  },
+  {
+    hosts: ["twitch.tv"],
+    test: (u) =>
+      u.hostname.startsWith("clips.") ? u.pathname.length > 1 || u.searchParams.has("clip")
+      : u.hostname.startsWith("player.") ? ["video", "channel", "clip"].some((p) => u.searchParams.has(p))
+      : /^\/(?:videos\/\d+|\w+\/(?:clip|v)\/[\w-]+|(?!(?:directory|search|settings|subscriptions|inventory|wallet|drops|downloads|jobs|p|turbo|prime|store|friends|messages|following|videos)\/?$)\w+\/?$)/.test(u.pathname),
+  },
+  { hosts: ["x.com", "twitter.com"], test: (u) => /^\/(?:(?:\w+|i(?:\/web)?)\/status\/\d+|i\/(?:broadcasts|spaces)\/\w+)/.test(u.pathname) },
+  { hosts: ["reddit.com"], test: (u) => /^\/(?:(?:r|u|user)\/[\w-]+\/)?(?:comments|s)\/\w+/.test(u.pathname) },
+  {
+    hosts: ["bilibili.com"],
+    test: (u) =>
+      /^\/(?:video\/(?:BV\w+|av\d+)|bangumi\/play\/ep\d+)/i.test(u.pathname) ||
+      (u.hostname.startsWith("player.") && (u.searchParams.has("bvid") || u.searchParams.has("aid"))) ||
+      (u.hostname.startsWith("live.") && /^\/\d+/.test(u.pathname)),
+  },
+  { hosts: ["rumble.com"], test: (u) => /^\/(?:v[\w-]+\.html|embed\/[\w.-]+)/.test(u.pathname) },
+  {
+    hosts: ["soundcloud.com"],
+    test: (u) =>
+      u.hostname.startsWith("w.")
+        ? /\/tracks\//.test(u.searchParams.get("url") ?? "")
+        : /^\/(?!(?:discover|stream|feed|you|search|charts|tags|settings)\/)[\w-]+\/(?!(?:sets|likes|tracks|albums|reposts|popular-tracks|followers|following|comments|spotlight|toptracks)\/?$)[\w-]+\/?$/.test(u.pathname),
+  },
+  { hosts: ["bandcamp.com"], test: (u) => /^\/track\/|\/track=\d+/.test(u.pathname) },
+  {
+    hosts: ["kick.com"],
+    test: (u) =>
+      u.searchParams.has("clip") ||
+      /^\/(?:video\/[\w-]+|[\w-]+\/(?:videos|clips)\/[\w-]+|(?!(?:video|videos|categories|category|search|browse|following|auth)\/?$)[\w-]+\/?$)/.test(u.pathname),
+  },
+];
 /** False for pages known to list many videos, where the button must not send the page itself. */
 function isSingleVideoPage(url) {
   const u = parseUrl(url);
   if (!u) return false;
-  if (hostMatches(u.hostname, YOUTUBE_HOSTS)) return isYoutubeVideo(u);
-  return true;
+  const rule = SINGLE_PAGES.find((r) => hostMatches(u.hostname, r.hosts));
+  return rule ? rule.test(u) : true;
+}
+/** A link to one video of a site yt-dlp downloads from. */
+function isVideoLink(url) {
+  return isExtractorPage(url) && isSingleVideoPage(url);
+}
+/** How the app fetches a link: a video's page (yt-dlp), a playlist, or the file itself. */
+function linkKind(url) {
+  if (isVideoLink(url)) return "page";
+  return MANIFEST_EXT.test(parseUrl(url)?.pathname ?? "") ? "stream" : "direct";
 }
 function message(key, fallback) {
   try {
@@ -103,22 +165,31 @@ async function settings() {
 const SYNC_EVERY_MS = 5000;
 let lastSync = 0;
 let syncing = null;
+// Whether the last try reached the app (false: not installed, or its host fails).
+let appReachable = true;
 
-/** Copies the app's file types and force key; without the app, keeps the last ones. */
-function syncWithApp() {
-  if (syncing || Date.now() - lastSync < SYNC_EVERY_MS) return syncing ?? Promise.resolve();
+/** Copies the app's file types and force key; without the app, keeps the last ones. `force` skips the wait. */
+function syncWithApp(force = false) {
+  if (syncing || (!force && Date.now() - lastSync < SYNC_EVERY_MS)) return syncing ?? Promise.resolve();
   lastSync = Date.now();
   syncing = (async () => {
+    let reply;
     try {
-      const reply = await api.runtime.sendNativeMessage(HOST, { type: "settings" });
-      if (reply?.type === "settings" && Array.isArray(reply.fileTypes)) {
-        await api.storage.local.set({
+      reply = await api.runtime.sendNativeMessage(HOST, { type: "settings" });
+      appReachable = true;
+    } catch {
+      appReachable = false;
+      return;
+    }
+    if (reply?.type === "settings" && Array.isArray(reply.fileTypes)) {
+      await api.storage.local
+        .set({
           fileTypes: reply.fileTypes,
           forceKey: reply.forceKey ?? "none",
           excludedSites: Array.isArray(reply.excludedSites) ? reply.excludedSites : [],
-        });
-      }
-    } catch {}
+        })
+        .catch(() => {});
+    }
   })().finally(() => (syncing = null));
   return syncing;
 }
@@ -129,15 +200,20 @@ api.tabs.onActivated.addListener(() => syncWithApp());
 // ------------------------------------------------------------ media sniffing
 // tabId -> [{ url, kind, contentType, size, frameId, ts }]
 const mediaByTab = new Map();
+// tabId -> the address its media belongs to (a new one clears the list).
+const pageByTab = new Map();
 let restored = null;
 
 function restore() {
   restored ??= (async () => {
     try {
-      const { media } = await api.storage.session.get("media");
+      const { media, pages } = await api.storage.session.get(["media", "pages"]);
       for (const [tab, list] of Object.entries(media ?? {})) {
         const current = mediaByTab.get(Number(tab)) ?? [];
         mediaByTab.set(Number(tab), [...list, ...current]);
+      }
+      for (const [tab, url] of Object.entries(pages ?? {})) {
+        if (!pageByTab.has(Number(tab))) pageByTab.set(Number(tab), url);
       }
     } catch {}
   })();
@@ -148,7 +224,9 @@ let persistTimer = 0;
 function persist() {
   clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
-    api.storage.session?.set({ media: Object.fromEntries(mediaByTab) }).catch(() => {});
+    api.storage.session
+      ?.set({ media: Object.fromEntries(mediaByTab), pages: Object.fromEntries(pageByTab) })
+      .catch(() => {});
   }, 400);
 }
 
@@ -186,6 +264,15 @@ function classify(details) {
   return { url: details.url, kind: "direct", contentType, size };
 }
 
+/** Under the folder of a manifest: a segment of that stream (fMP4), not a file of its own. */
+function underManifest(url, manifestUrl) {
+  const u = parseUrl(url);
+  const m = parseUrl(manifestUrl);
+  if (!u || !m || u.origin !== m.origin) return false;
+  const folder = m.pathname.slice(0, m.pathname.lastIndexOf("/") + 1);
+  return folder.length > 1 && u.pathname.startsWith(folder);
+}
+
 async function record(tabId, frameId, candidate) {
   await restore();
   const list = mediaByTab.get(tabId) ?? [];
@@ -193,8 +280,14 @@ async function record(tabId, frameId, candidate) {
   if (existing) {
     existing.size = candidate.size ?? existing.size;
   } else {
+    if (candidate.kind === "direct" && list.some((c) => c.kind === "stream" && underManifest(candidate.url, c.url))) return;
     list.push({ ...candidate, frameId, ts: Date.now() });
-    if (list.length > MAX_PER_TAB) list.shift();
+    // Full: the oldest file goes, then the oldest stream (the first manifest
+    // is usually the master playlist).
+    if (list.length > MAX_PER_TAB) {
+      const file = list.findIndex((c) => c.kind === "direct");
+      list.splice(file >= 0 ? file : 0, 1);
+    }
   }
   mediaByTab.set(tabId, list);
   persist();
@@ -205,21 +298,32 @@ api.webRequest.onHeadersReceived.addListener(
   (details) => {
     if (isBlocked(details.initiator ?? details.documentUrl)) return;
     const candidate = classify(details);
-    if (candidate) record(details.tabId, details.frameId, candidate);
+    // documentUrl (Firefox): the frame's address, the referrer this file goes with.
+    if (candidate) record(details.tabId, details.frameId, { ...candidate, frameUrl: details.documentUrl });
   },
   { urls: ["<all_urls>"], types: ["media", "xmlhttprequest", "object", "other"] },
   ["responseHeaders"],
 );
 
-api.tabs.onUpdated.addListener((tabId, change) => {
-  if (change.url) {
-    mediaByTab.delete(tabId);
-    persist();
-    updateBadge(tabId);
-  }
-});
-api.tabs.onRemoved.addListener((tabId) => {
+const withoutHash = (url) => String(url).split("#")[0];
+
+// The stored lists come first: a navigation may wake the worker with empty
+// maps, and saving those would wipe every other tab's media.
+api.tabs.onUpdated.addListener(async (tabId, change) => {
+  if (!change.url) return;
+  await restore();
+  // Only the fragment changed (#t=30, #comments): same page, same player.
+  const before = pageByTab.get(tabId);
+  if (before && withoutHash(before) === withoutHash(change.url)) return;
+  pageByTab.set(tabId, change.url);
   mediaByTab.delete(tabId);
+  persist();
+  updateBadge(tabId);
+});
+api.tabs.onRemoved.addListener(async (tabId) => {
+  await restore();
+  mediaByTab.delete(tabId);
+  pageByTab.delete(tabId);
   persist();
 });
 
@@ -238,7 +342,10 @@ function formatSize(bytes) {
 
 function describe(candidate) {
   const u = parseUrl(candidate.url);
-  const name = decodeURIComponent(u?.pathname.split("/").filter(Boolean).pop() ?? candidate.url);
+  let name = u?.pathname.split("/").filter(Boolean).pop() ?? candidate.url;
+  try {
+    name = decodeURIComponent(name);
+  } catch {} // a malformed escape (%E0%A4%A): the name as it is
   const type =
     candidate.kind === "stream"
       ? /mpd/i.test(candidate.url) || /dash/i.test(candidate.contentType) ? "DASH" : "HLS"
@@ -256,7 +363,7 @@ async function candidatesFor(tabId, frameUrl, tabUrl, linkUrl) {
   await restore();
   const items = [];
   let pageUrl = isExtractorPage(frameUrl) ? frameUrl : tabUrl;
-  if (linkUrl && isExtractorPage(linkUrl) && !isSingleVideoPage(pageUrl)) pageUrl = linkUrl;
+  if (isVideoLink(linkUrl) && !isSingleVideoPage(pageUrl)) pageUrl = linkUrl;
   if (pageUrl && /^https?:/.test(pageUrl) && isSingleVideoPage(pageUrl)) {
     items.push({
       url: pageUrl,
@@ -288,7 +395,7 @@ async function resolveTarget(msg, sender) {
   const tabId = sender.tab?.id;
   const frameUrl = frameUrlOf(msg, sender);
   // A preview playing in a feed: download the video it links to.
-  if (msg.linkUrl && isExtractorPage(msg.linkUrl) && !isSingleVideoPage(frameUrl)) {
+  if (isVideoLink(msg.linkUrl) && !isSingleVideoPage(frameUrl)) {
     return { url: msg.linkUrl, kind: "page", title: msg.linkTitle };
   }
   if (isExtractorPage(frameUrl)) {
@@ -304,25 +411,50 @@ async function resolveTarget(msg, sender) {
   const list = mediaByTab.get(tabId) ?? [];
   const sameFrame = list.filter((c) => c.frameId === sender.frameId);
   const pool = sameFrame.length ? sameFrame : list;
-  // The first manifest of a page is usually the master playlist (all qualities).
-  const stream = pool.filter((c) => c.kind === "stream").sort((a, b) => a.ts - b.ts)[0];
-  if (stream) return stream;
-  const direct = pool.filter((c) => c.kind === "direct").sort((a, b) => (b.size ?? 0) - (a.size ?? 0))[0];
-  if (direct) return direct;
+  // What the player loaded since it last started loading (content.js's
+  // loadedAt); without that time, everything the frame loaded.
+  const since = Number(msg.loadedAt) || 0;
+  const fresh = pool.filter((c) => c.ts >= since);
+  const streams = (l) => l.filter((c) => c.kind === "stream").sort((a, b) => a.ts - b.ts);
+  const largest = (l) => l.filter((c) => c.kind === "direct").sort((a, b) => (b.size ?? 0) - (a.size ?? 0))[0];
+  // The first manifest is usually the master playlist (all qualities); when
+  // nothing came since, the latest one is the closest guess.
+  const found = streams(fresh)[0] ?? largest(fresh) ?? streams(pool).at(-1) ?? largest(pool);
+  if (found) return found;
   // Nothing sniffed (e.g. the video has not started): let yt-dlp try the page.
   return { url: frameUrl, kind: "page" };
 }
 
 // ---------------------------------------------------------- talking to Fisga
-async function cookiesFor(url) {
+/** The cookies the browser sends to `url`, from that store (a container, a private window); none: the default one. */
+async function cookiesFor(url, storeId) {
   try {
-    const cookies = await api.cookies.getAll({ url });
+    const cookies = await api.cookies.getAll(storeId ? { url, storeId } : { url });
     return cookies.map(({ name, value, domain, path, secure, hostOnly, expirationDate }) => ({
       name, value, domain, path, secure, hostOnly, expirationDate,
     }));
   } catch {
     return [];
   }
+}
+
+/** The cookie store of a tab: its container (Firefox) or the incognito one; undefined: the default one. */
+async function cookieStoreOf(tab) {
+  if (tab?.cookieStoreId) return tab.cookieStoreId;
+  if (tab?.id == null || !tab.incognito) return undefined;
+  const stores = await api.cookies.getAllCookieStores().catch(() => []);
+  return stores.find((store) => store.tabIds?.includes(tab.id))?.id;
+}
+
+/** The address of the frame a sniffed file or stream came from: Firefox recorded it, a Chrome frame is asked. */
+async function frameUrlOfCandidate(tab, candidate) {
+  if (candidate.frameUrl) return candidate.frameUrl;
+  if (!candidate.frameId) return tab?.url ?? null;
+  if (tab?.id == null) return null;
+  const [frame] = await api.scripting
+    .executeScript({ target: { tabId: tab.id, frameIds: [candidate.frameId] }, func: () => location.href })
+    .catch(() => []);
+  return frame?.result ?? null;
 }
 
 /** Resolves to { id, pending }: pending = the app is asking the user to confirm. */
@@ -342,10 +474,10 @@ async function sendToApp(payload) {
     throw new Error(text);
   }
   if (reply?.type === "added") return { id: reply.id, pending: Boolean(reply.pending) };
-  throw new Error(reply?.message || "resposta inválida do app");
+  throw new Error(reply?.message || message("badReply", "Invalid answer from the Fisga app."));
 }
 
-async function sendMedia(target, { referrer, pageUrl, title }) {
+async function sendMedia(target, { referrer, pageUrl, title, tab }) {
   return sendToApp({
     url: target.url,
     kind: target.kind,
@@ -353,7 +485,7 @@ async function sendMedia(target, { referrer, pageUrl, title }) {
     pageUrl,
     title,
     userAgent: navigator.userAgent,
-    cookies: await cookiesFor(target.url),
+    cookies: await cookiesFor(target.url, await cookieStoreOf(tab)),
   });
 }
 
@@ -370,10 +502,13 @@ async function downloadMedia(msg, sender) {
   } else {
     target = await resolveTarget(msg, sender);
   }
+  // What another frame loaded goes with that frame's address.
+  const otherFrame = target.frameId != null && target.frameId !== sender.frameId;
   const { id, pending } = await sendMedia(target, {
-    referrer: frameUrlOf(msg, sender),
+    referrer: (otherFrame && (await frameUrlOfCandidate(sender.tab, target))) || frameUrlOf(msg, sender),
     pageUrl: sender.tab?.url || msg.pageUrl,
     title: target.title || (target.url === msg.linkUrl && msg.linkTitle) || msg.title,
+    tab: sender.tab,
   });
   return { ok: true, id, pending };
 }
@@ -434,7 +569,7 @@ async function galleryScan(tabId) {
       frame.result = await api.tabs.sendMessage(tabId, { type: "collect-media" }, { frameId: frame.frameId }).catch(() => null);
     }
   }
-  if (!frames.length && !error) error = "nenhum quadro respondeu";
+  if (!frames.length && !error) error = message("noFrames", "No frame of the page answered.");
 
   await restore();
   const sniffed = mediaByTab.get(tabId) ?? [];
@@ -469,6 +604,8 @@ async function galleryScan(tabId) {
       push({ ...item, frameUrl, frameId: frame.frameId });
     }
   }
+  // The address of each frame, the referrer of what it loaded.
+  const frameUrls = new Map(frames.map((frame) => [frame.frameId, frame.result?.url]));
   for (const candidate of sniffed) {
     const described = describe(candidate);
     const audio = /^audio\//.test(candidate.contentType) || /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac)$/i.test(parseUrl(candidate.url)?.pathname ?? "");
@@ -481,6 +618,7 @@ async function galleryScan(tabId) {
       detail: described.detail,
       size: candidate.size ?? null,
       source: "network",
+      frameUrl: candidate.frameUrl || frameUrls.get(candidate.frameId),
       frameId: candidate.frameId,
     });
   }
@@ -630,10 +768,11 @@ async function galleryDownload(msg) {
   const tab = await api.tabs.get(msg.tabId).catch(() => null);
   const pageUrl = tab?.url || msg.pageUrl;
   const folder = siteFolder(pageUrl);
+  const storeId = await cookieStoreOf(tab);
   const cookies = new Map();
   const cookiesOf = async (url) => {
     const origin = parseUrl(url)?.origin ?? "";
-    if (!cookies.has(origin)) cookies.set(origin, await cookiesFor(url));
+    if (!cookies.has(origin)) cookies.set(origin, await cookiesFor(url, storeId));
     return cookies.get(origin);
   };
   const downloads = [];
@@ -666,7 +805,7 @@ async function galleryDownload(msg) {
       }
       throw new Error(text);
     }
-    if (reply?.type !== "added-batch") throw new Error(reply?.message || "resposta inválida do app");
+    if (reply?.type !== "added-batch") throw new Error(reply?.message || message("badReply", "Invalid answer from the Fisga app."));
     ids.push(...reply.ids);
   }
   return { ok: true, ids, folder };
@@ -678,7 +817,7 @@ function fromExtensionPage(sender) {
 }
 
 async function handle(msg, sender) {
-  if (/^gallery-/.test(msg?.type ?? "") && !fromExtensionPage(sender)) return { ok: false, error: "mensagem desconhecida" };
+  if (/^gallery-/.test(msg?.type ?? "") && !fromExtensionPage(sender)) return { ok: false, error: message("unknownMessage", "Unknown message.") };
   switch (msg?.type) {
     case "gallery-open": {
       const tab = await api.tabs.get(msg.tabId);
@@ -703,7 +842,11 @@ async function handle(msg, sender) {
     }
     case "popup-download": {
       const tab = await api.tabs.get(msg.tabId);
-      const { id, pending } = await sendMedia(msg.item, { referrer: tab.url, pageUrl: tab.url, title: tab.title });
+      await restore();
+      // What a frame loaded goes with that frame's address.
+      const sniffed = (mediaByTab.get(tab.id) ?? []).find((c) => c.url === msg.item?.url);
+      const referrer = (sniffed && (await frameUrlOfCandidate(tab, sniffed))) || tab.url;
+      const { id, pending } = await sendMedia(msg.item, { referrer, pageUrl: tab.url, title: tab.title, tab });
       return { ok: true, id, pending };
     }
     case "force-link":
@@ -712,7 +855,7 @@ async function handle(msg, sender) {
       syncWithApp();
       return ping();
     default:
-      return { ok: false, error: "mensagem desconhecida" };
+      return { ok: false, error: message("unknownMessage", "Unknown message.") };
   }
 }
 
@@ -722,8 +865,6 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // --------------------------------------------------- browser download takeover
-const passThrough = new Set();
-
 function extensionOf(name) {
   const base = (name || "").split(/[\\/]/).pop().split(/[?#]/)[0];
   const dot = base.lastIndexOf(".");
@@ -736,11 +877,11 @@ function isExcluded(url, prefs) {
   return Boolean(u && hostMatches(u.hostname.toLowerCase(), prefs.excludedSites ?? []));
 }
 
+/** The extension of the file's name decides (the user's file types); its type only when the name has none. */
 function shouldIntercept(item, prefs) {
   const allowed = new Set((prefs.fileTypes ?? []).map((type) => String(type).toLowerCase()));
-  const url = item.finalUrl || item.url;
-  const ext = extensionOf(item.filename) || extensionOf(parseUrl(url)?.pathname);
-  if (ext && allowed.has(ext)) return true;
+  const ext = extensionOf(item.filename);
+  if (ext) return allowed.has(ext);
   const mime = (item.mime || "").toLowerCase();
   return /^(video|audio)\//.test(mime) || /^application\/(zip|x-7z|x-rar|vnd\.rar|x-tar|gzip|x-xz|zstd|x-iso9660|x-msdownload|x-debian|x-rpm|x-apple-diskimage|octet-stream)/.test(mime);
 }
@@ -749,32 +890,41 @@ function shouldIntercept(item, prefs) {
 const judged = new Set();
 
 async function takeOver(item) {
-  const url = item.finalUrl || item.url;
-  if (judged.has(item.id) || !/^https?:/i.test(url)) return;
+  if (judged.has(item.id) || !/^https?:/i.test(item.finalUrl || item.url)) return;
   judged.add(item.id);
-  if (passThrough.delete(url) || item.byExtensionId === api.runtime.id) return;
-  await syncWithApp();
+  // Private windows' downloads (and their cookies) stay with the browser.
+  if (item.byExtensionId === api.runtime.id || item.incognito) return;
+  // Without the app (not installed) the browser keeps its downloads; after a
+  // failed try the app is asked again now.
+  await syncWithApp(!appReachable);
+  if (!appReachable) return;
   const prefs = await settings();
   if (!prefs.intercept || item.state !== "in_progress") return;
-  // The site of the file, or of the page it came from.
-  if (isExcluded(url, prefs) || isExcluded(item.referrer, prefs)) return;
-  if (!shouldIntercept(item, prefs)) {
-    // Chrome names the file (Content-Disposition) after creating the item: the
-    // name may have come while waiting, or gets its own look in onChanged.
+  // Chrome names the file (Content-Disposition) after creating the item: the
+  // name may have come while waiting, else it gets its own look in onChanged.
+  if (!item.filename) {
     const [named] = await api.downloads.search({ id: item.id }).catch(() => []);
-    if (!named || !shouldIntercept(named, prefs)) {
-      if (!extensionOf(named?.filename)) judged.delete(item.id);
+    if (!named?.filename) {
+      judged.delete(item.id);
       return;
     }
     item = named;
   }
+  const url = item.finalUrl || item.url;
+  // The site of the file, or of the page it came from.
+  if (isExcluded(url, prefs) || isExcluded(item.referrer, prefs) || !shouldIntercept(item, prefs)) return;
 
+  // The browser holds the download while the app is asked, and goes on with
+  // it if the app refuses. One that already finished stays with the browser:
+  // pause() refuses it (Chrome's cancel() would not), and one still finishing
+  // does not pause.
   try {
-    await api.downloads.cancel(item.id);
+    await api.downloads.pause(item.id);
   } catch {
-    return; // already finished or not cancellable: leave it to the browser
+    return;
   }
-  api.downloads.erase({ id: item.id }).catch(() => {});
+  const [held] = await api.downloads.search({ id: item.id }).catch(() => []);
+  if (!held || held.state === "complete" || (held.state === "in_progress" && !held.paused)) return;
   try {
     await sendToApp({
       url,
@@ -782,13 +932,18 @@ async function takeOver(item) {
       referrer: item.referrer || undefined,
       fileName: extensionOf(item.filename) ? item.filename.split(/[\\/]/).pop() : undefined,
       userAgent: navigator.userAgent,
-      cookies: await cookiesFor(url),
+      // The download's cookie store (a Firefox container).
+      cookies: await cookiesFor(url, item.cookieStoreId),
     });
   } catch (err) {
-    console.warn("Fisga: devolvendo o download ao navegador:", err);
-    passThrough.add(url);
-    api.downloads.download({ url }).catch(() => passThrough.delete(url));
+    console.warn("Fisga: the download stays with the browser:", err);
+    api.downloads.resume(item.id).catch(() => {});
+    return;
   }
+  await api.downloads.cancel(item.id).catch(() => {});
+  // Finished before the cancel after all: the browser's copy stays listed.
+  const [after] = await api.downloads.search({ id: item.id }).catch(() => []);
+  if (after?.state !== "complete") api.downloads.erase({ id: item.id }).catch(() => {});
 }
 
 api.downloads.onCreated.addListener((item) => takeOver(item));
@@ -803,8 +958,8 @@ api.downloads.onErased.addListener((id) => judged.delete(id));
 /** A link clicked with the force key held: to Fisga, whatever it is. */
 async function forceLink(msg, sender) {
   const url = msg.url;
-  if (!/^https?:/i.test(url ?? "")) throw new Error("link sem endereço http(s)");
-  const kind = isExtractorPage(url) && isSingleVideoPage(url) ? "page" : MANIFEST_EXT.test(parseUrl(url)?.pathname ?? "") ? "stream" : "direct";
+  if (!/^https?:/i.test(url ?? "")) throw new Error(message("notHttpLink", "This link has no http(s) address."));
+  const kind = linkKind(url);
   const { id, pending } = await sendToApp({
     url,
     kind,
@@ -812,7 +967,7 @@ async function forceLink(msg, sender) {
     pageUrl: sender.tab?.url || msg.pageUrl,
     title: kind === "page" ? msg.linkTitle : undefined,
     userAgent: navigator.userAgent,
-    cookies: await cookiesFor(url),
+    cookies: await cookiesFor(url, await cookieStoreOf(sender.tab)),
   });
   return { ok: true, id, pending };
 }
@@ -836,21 +991,24 @@ api.runtime.onInstalled.addListener(async () => {
 async function sendLinks(info, tab, onlySelected) {
   const reply = await api.tabs.sendMessage(tab.id, { type: "collect-links", selection: onlySelected }, { frameId: info.frameId ?? 0 });
   const links = (reply?.links ?? []).filter((url) => !isBlocked(url));
-  if (!links.length) throw new Error("nenhum link na página");
+  if (!links.length) throw new Error(message("noLinks", "No links on the page."));
   const answer = await api.runtime.sendNativeMessage(HOST, { type: "links", pageUrl: info.frameUrl || info.pageUrl || tab.url, links });
-  if (answer?.type !== "shown") throw new Error(answer?.message || "resposta inválida do app");
+  if (answer?.type !== "shown") throw new Error(answer?.message || message("badReply", "Invalid answer from the Fisga app."));
 }
 
 api.contextMenus.onClicked.addListener(async (info, tab) => {
   try {
     if (info.menuItemId === "fisga-link" && info.linkUrl) {
+      // Like the force key: a video's page goes to yt-dlp, not saved as HTML.
+      const kind = linkKind(info.linkUrl);
       await sendToApp({
         url: info.linkUrl,
-        kind: "direct",
-        referrer: info.pageUrl,
+        kind,
+        referrer: info.frameUrl || info.pageUrl,
         pageUrl: tab?.url,
+        title: kind === "page" ? info.linkText || undefined : undefined,
         userAgent: navigator.userAgent,
-        cookies: await cookiesFor(info.linkUrl),
+        cookies: await cookiesFor(info.linkUrl, await cookieStoreOf(tab)),
       });
     } else if (info.menuItemId === "fisga-gallery") {
       await openGallery(tab);
@@ -858,7 +1016,7 @@ api.contextMenus.onClicked.addListener(async (info, tab) => {
       await sendLinks(info, tab, info.menuItemId === "fisga-selected-links");
     } else if (info.menuItemId === "fisga-media") {
       const sender = { tab, url: info.frameUrl || info.pageUrl, frameId: info.frameId ?? 0 };
-      await downloadMedia({ src: info.srcUrl, pageUrl: info.pageUrl, title: tab?.title }, sender);
+      await downloadMedia({ src: info.srcUrl, pageUrl: info.frameUrl || info.pageUrl, title: tab?.title }, sender);
     }
   } catch (err) {
     console.warn("Fisga:", err);

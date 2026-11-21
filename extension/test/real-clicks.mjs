@@ -8,6 +8,10 @@
 // Usage: node extension/test/real-clicks.mjs <extension-dir> <label> [scenario...]
 //   scenarios: search, menu-search, watch, spa (search -> click a video -> button), home,
 //   takeover (a .safetensors download, named only by Content-Disposition), force (Alt+click on a link),
+//   takeover-fallback (app missing, app refusing, a download that finished first: the browser keeps it),
+//   fake-force (a page's synthetic Alt+click sends nothing),
+//   two-players (two blob: players in one frame: each sends its own playlist),
+//   shadow (players inside open and closed shadow roots get the button),
 //   dismiss (the × hides the button; the popup and the next video bring it back),
 //   store (the Chrome Web Store package: nothing on YouTube, the rest still works),
 //   gallery (the media gallery on a local page: what it finds, the originals, what it sends),
@@ -79,6 +83,8 @@ const proc = spawn(
   ],
   { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] },
 );
+// The profile takes hundreds of MB: gone once Chrome closes.
+proc.on("exit", () => rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }));
 const cdp = new CDP(proc.stdio[3], proc.stdio[4]);
 
 async function evaluate(session, expression) {
@@ -87,12 +93,18 @@ async function evaluate(session, expression) {
   return r.result.value;
 }
 
+// globalThis.__fisgaApp = "missing" (not installed), "refuses" (answers
+// downloads with an error) or "slow" (takes 1.5 s to send its settings)
+// changes how the stubbed app behaves.
 const STUB = `(() => {
   globalThis.__fisgaSent ??= [];
   const fake = async (host, msg) => {
     globalThis.__fisgaSent.push(msg);
+    if (globalThis.__fisgaApp === "missing") throw new Error("Specified native messaging host not found.");
+    if (globalThis.__fisgaApp === "slow" && msg.type === "settings") await new Promise((r) => setTimeout(r, 1500));
     if (msg.type === "ping") return { type: "pong", version: "stub", daemon: true };
     if (msg.type === "settings") return { type: "settings", fileTypes: ["zip", "safetensors"], forceKey: "alt" };
+    if (globalThis.__fisgaApp === "refuses") return { type: "error", message: "refused by the stub" };
     if (msg.type === "media-batch") return { type: "added-batch", ids: msg.downloads.map((_, i) => 1000 + i) };
     return { type: "added", id: globalThis.__fisgaSent.length, pending: msg.confirm !== false };
   };
@@ -565,7 +577,9 @@ async function galleryScenario(sw) {
   log(`--- gallery: ${base}`);
   await openPage(base + "/");
   const { sessionId: gallery, targetId } = await openGallery(sw);
-  await sleep(2500); // the originals' checks
+  await sleep(2500);
+  // A tab's cards are checked (originals, sizes) only once the tab shows:
+  // long enough on each for those checks to finish.
   const state = await evaluate(gallery, GALLERY_STATE(2000));
   await evaluate(gallery, "document.querySelector('[data-tab=image]').click()");
   await sleep(300);
@@ -653,18 +667,77 @@ async function galleryWebScenario(sw) {
   return { name: "gallery-web", report };
 }
 
+// Two MediaSource players (blob: addresses), like hls.js: each loads its
+// playlist after its loadstart, and the first one later moves to another video.
+const TWO_PLAYERS = `<!doctype html><body style="font:16px sans-serif;padding:20px">
+<div style="display:flex;gap:40px">
+<video id="a" muted style="width:400px;height:225px;background:#000"></video>
+<video id="b" muted style="width:400px;height:225px;background:#000"></video>
+</div>
+<script>
+  async function load(id, path) {
+    const video = document.getElementById(id);
+    const started = new Promise((r) => video.addEventListener("loadstart", r, { once: true }));
+    video.src = URL.createObjectURL(new MediaSource());
+    await started;
+    await fetch(path);
+  }
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  (async () => {
+    await load("a", "/hls/a/master.m3u8");
+    await wait(1200);
+    await load("b", "/hls/b/master.m3u8");
+    await wait(1200);
+    await load("a", "/hls/c/master.m3u8");
+    window.__ready = true;
+  })();
+</script></body>`;
+
+// Players inside an open and a closed shadow root (custom elements). Their
+// media events never reach the document, and document scans miss them.
+const SHADOW_PLAYERS = `<!doctype html><body style="font:16px sans-serif;padding:20px">
+<div style="display:flex;gap:40px">
+<div id="open-host" style="width:400px;height:225px"></div>
+<div id="closed-host" style="width:400px;height:225px"></div>
+</div>
+<script>
+  for (const [id, mode, src] of [["open-host", "open", "/media/aberto.mp4"], ["closed-host", "closed", "/media/fechado.mp4"]]) {
+    const root = document.getElementById(id).attachShadow({ mode });
+    const video = document.createElement("video");
+    video.src = src;
+    video.muted = true;
+    video.style.cssText = "display:block;width:400px;height:225px;background:#000";
+    root.append(video);
+  }
+</script></body>`;
+
 // A local site for the takeover and the force key: a link like Civitai's,
 // whose address has no extension and whose name only comes in the
 // Content-Disposition of the redirect's target, and a link to a plain page.
 async function localSite() {
   const { createServer } = await import("node:http");
   const server = createServer((req, res) => {
-    if (req.url === "/") {
+    if (req.url === "/two" || req.url === "/shadow") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(req.url === "/two" ? TWO_PLAYERS : SHADOW_PLAYERS);
+    } else if (/^\/media\/\w+\.mp4$/.test(req.url)) {
+      const body = Buffer.alloc(300 * 1024);
+      res.writeHead(200, { "content-type": "video/mp4", "content-length": body.length });
+      res.end(body);
+    } else if (/^\/hls\/\w+\/master\.m3u8$/.test(req.url)) {
+      res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" });
+      res.end("#EXTM3U\n#EXT-X-VERSION:3\n");
+    } else if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(`<!doctype html><body style="font:20px sans-serif;padding:40px">
         <p><a id="model" href="/api/download/models/1">Baixar modelo</a></p>
         <p><a id="page" href="/outra-pagina">Uma página qualquer</a></p>
-        <p><a id="yt" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ">Um vídeo do YouTube</a></p></body>`);
+        <p><a id="yt" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ">Um vídeo do YouTube</a></p>
+        <p><a id="small" href="/small.zip">Um zip pequeno</a></p></body>`);
+    } else if (req.url === "/small.zip") {
+      const body = Buffer.alloc(1024);
+      res.writeHead(200, { "content-type": "application/zip", "content-length": body.length });
+      res.end(body);
     } else if (req.url === "/api/download/models/1") {
       res.writeHead(307, { location: "/storage/a1b2c3?X-Amz-Signature=abc" });
       res.end();
@@ -709,6 +782,48 @@ async function takeoverScenario(sw, base) {
   return { name: "takeover", results: [{ expected: base + "/storage/a1b2c3?X-Amz-Signature=abc", sent: msg, browserDownloads: left }] };
 }
 
+// When Fisga cannot take a download, the browser's own goes on: without the
+// app it is not touched, when the app refuses it is resumed (not fetched
+// again with a plain GET), and one that finished while the extension waited
+// for the app stays with the browser (not erased and fetched again by Fisga).
+async function takeoverFallbackScenario(sw, base) {
+  log(`--- takeover-fallback: ${base}`);
+  const page = await openPage(base + "/");
+  await cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: out, eventsEnabled: true });
+  const latest = `chrome.downloads.search({ orderBy: ["-startTime"], limit: 1 }).then(([d]) => d && {
+    state: d.state, url: d.url, file: d.filename.split(/[\\\\/]/).pop(), error: d.error, bytes: d.bytesReceived, total: d.totalBytes })`;
+  const steps = {};
+  for (const [step, link, app] of [["missing", "model", "missing"], ["refuses", "model", "refuses"], ["fast", "small", "slow"]]) {
+    await evaluate(sw, `globalThis.__fisgaApp = ${JSON.stringify(app)}`);
+    // The app's state as the extension last saw it; for "fast", a sync is due
+    // when the download starts, and the slow app lets it finish meanwhile.
+    if (app === "slow") await sleep(5500);
+    else await evaluate(sw, "syncWithApp(true)");
+    const before = await evaluate(sw, "globalThis.__fisgaSent.length");
+    const box = await linkBox(page, link);
+    await click(page, box.x, box.y);
+    // Time for the extension to act, then for the browser to finish (the
+    // next download of the same name must not collide with this one).
+    await sleep(3500);
+    let browser = await evaluate(sw, latest);
+    for (let i = 0; i < 40 && browser?.state === "in_progress"; i++) {
+      await sleep(500);
+      browser = await evaluate(sw, latest);
+    }
+    const tried = await evaluate(sw, `globalThis.__fisgaSent.slice(${before}).map((m) => m.type)`);
+    steps[step] = { tried, browser };
+  }
+  await evaluate(sw, "delete globalThis.__fisgaApp; syncWithApp(true)");
+  const kept = (s, url, file) => s.browser?.state === "complete" && s.browser.url === url && file.test(s.browser.file);
+  const model = base + "/api/download/models/1";
+  const pass =
+    kept(steps.missing, model, /^lora_estilo.*\.safetensors$/) && !steps.missing.tried.includes("download") &&
+    kept(steps.refuses, model, /^lora_estilo.*\.safetensors$/) && steps.refuses.tried.includes("download") &&
+    kept(steps.fast, base + "/small.zip", /^small.*\.zip$/) && !steps.fast.tried.includes("download");
+  log(JSON.stringify(steps));
+  return { name: "takeover-fallback", pass, steps };
+}
+
 // Alt+click on a link to a page: to Fisga, and the tab stays where it was.
 async function forceScenario(sw, base) {
   log(`--- force: ${base}`);
@@ -729,6 +844,86 @@ async function forceScenario(sw, base) {
   })();
   log(`sent: ${JSON.stringify(msg)}; stayed at ${at}; plain click: ${JSON.stringify(plain)}`);
   return { name: "force", results: [{ expected: base + "/outra-pagina", sent: msg, stayedAt: at, plainClick: plain }] };
+}
+
+// A page faking the force key (a synthetic Alt+click on a link) sends nothing.
+async function fakeForceScenario(sw, base) {
+  log(`--- fake-force: ${base}`);
+  const page = await openPage(base + "/");
+  const before = (await sent(sw)).length;
+  await evaluate(
+    page,
+    `(() => {
+      document.addEventListener("click", (e) => e.preventDefault()); // the page stays where it is
+      const link = document.getElementById("page");
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true, button: 0, view: window }));
+      link.click();
+    })()`,
+  );
+  await sleep(1500);
+  const after = (await sent(sw)).slice(before);
+  const pass = after.length === 0;
+  log(`sent: ${JSON.stringify(after)}`);
+  return { name: "fake-force", pass, sent: after };
+}
+
+/** Hovers the element with this id until the button shows; its box, or null. */
+async function hoverElement(page, id) {
+  const box = await evaluate(page, `(() => { const r = document.getElementById(${JSON.stringify(id)}).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+  await moveTo(page, box.x, box.y);
+  for (let i = 0; i < 10; i++) {
+    await sleep(300);
+    await mouse(page, "mouseMoved", box.x + (i % 2), box.y);
+    if (await buttonShown(page)) return { at: box, button: await overlayBox(page, "main") };
+  }
+  return { at: box, button: null };
+}
+
+/** Clicks the button over each element in turn: what each one sent. */
+async function clickEach(sw, page, players) {
+  const results = [];
+  for (const [id, expected] of players) {
+    const { at, button } = await hoverElement(page, id);
+    if (!button) {
+      results.push({ player: id, expected, error: "button did not appear" });
+      continue;
+    }
+    const before = (await sent(sw)).length;
+    await click(page, button.x, button.y);
+    await sleep(1500);
+    results.push({ player: id, expected, sent: (await sent(sw)).slice(before)[0] ?? null });
+    await moveTo(page, 30, 700, at);
+    await sleep(3000); // the button hides
+  }
+  return results;
+}
+
+// Two blob: players in one frame: each button sends the playlist its own
+// player loaded last (the first player moved on to a third video).
+async function twoPlayersScenario(sw, base) {
+  log(`--- two-players: ${base}/two`);
+  const page = await openPage(base + "/two");
+  for (let i = 0; i < 20 && !(await evaluate(page, "window.__ready === true")); i++) await sleep(250);
+  const results = await clickEach(sw, page, [
+    ["a", base + "/hls/c/master.m3u8"],
+    ["b", base + "/hls/b/master.m3u8"],
+  ]);
+  const pass = results.every((r) => r.sent?.url === r.expected && r.sent?.kind === "stream");
+  log(JSON.stringify(results));
+  return { name: "two-players", pass, results };
+}
+
+// Players inside an open and a closed shadow root get the button too.
+async function shadowScenario(sw, base) {
+  log(`--- shadow: ${base}/shadow`);
+  const page = await openPage(base + "/shadow");
+  const results = await clickEach(sw, page, [
+    ["open-host", base + "/media/aberto.mp4"],
+    ["closed-host", base + "/media/fechado.mp4"],
+  ]);
+  const pass = results.every((r) => r.sent?.url === r.expected);
+  log(JSON.stringify(results));
+  return { name: "shadow", pass, results };
 }
 
 // The Chrome Web Store package (dist-store): on YouTube no button and no
@@ -817,9 +1012,17 @@ try {
         report.push({ name: "probe", url, ms: Date.now() - started, result });
       }
     }
-    if (s === "takeover" || s === "force") {
+    const local = {
+      takeover: takeoverScenario,
+      "takeover-fallback": takeoverFallbackScenario,
+      force: forceScenario,
+      "fake-force": fakeForceScenario,
+      "two-players": twoPlayersScenario,
+      shadow: shadowScenario,
+    };
+    if (local[s]) {
       const { server, base } = await localSite();
-      report.push(await (s === "takeover" ? takeoverScenario : forceScenario)(sw, base));
+      report.push(await local[s](sw, base));
       server.close();
     }
   }

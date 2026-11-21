@@ -11,6 +11,8 @@ rm -rf dist dist-store
 for browser in chrome firefox; do
   mkdir -p "dist/$browser"
   cp -r src/. "dist/$browser/"
+  # No dotfiles (editor or agent state such as .omc/) in the extension or the store zips.
+  find "dist/$browser" -mindepth 1 -name '.*' -prune -exec rm -rf {} +
   cp "manifest.$browser.json" "dist/$browser/manifest.json"
 done
 if command -v zip >/dev/null; then

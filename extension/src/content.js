@@ -34,6 +34,7 @@
   let busy = false;
   let hideTimer = 0;
   let pointer = null;
+  let pointerPath = []; // what the pointer is over, shadow trees included
   let framePending = false;
   let dismissals = []; // { el, key }: videos whose button the user closed
 
@@ -88,7 +89,8 @@
     "click",
     (e) => {
       const keys = forceKey;
-      if (!keys || e.button !== 0 || e.metaKey) return;
+      // Only the user's own clicks: a page could fake one to send any address with the user's cookies.
+      if (!e.isTrusted || !keys || e.button !== 0 || e.metaKey) return;
       if (e.altKey !== keys.alt || e.ctrlKey !== keys.ctrl || e.shiftKey !== keys.shift) return;
       const link = e.composedPath().find((el) => el instanceof HTMLAnchorElement || el instanceof HTMLAreaElement);
       if (!link || !/^https?:/i.test(link.href)) return;
@@ -122,22 +124,54 @@
   if (document.documentElement) startObserving();
   else document.addEventListener("readystatechange", startObserving, { once: true });
 
-  // Media inside open shadow roots or created without being in the DOM tree we
-  // scanned still fires play/loadedmetadata; composedPath() gives the real target.
-  for (const type of ["play", "playing", "loadedmetadata"]) {
-    document.addEventListener(
-      type,
-      (e) => {
-        const el = e.composedPath?.()[0] ?? e.target;
-        if (!(el instanceof HTMLMediaElement)) return;
-        track(el);
-        if (type !== "loadedmetadata" && enabled && eligible(el)) {
-          attach(el);
-          scheduleHide(SHOW_ON_PLAY_MS);
-        }
-      },
-      true,
-    );
+  // When each player last started loading a source (its loadstart): the
+  // background sends the stream loaded since then, not one that another player
+  // of the frame (or the previous video of an embed) loaded before.
+  const loadStarts = new WeakMap();
+
+  // Media the scans missed is found by its events; composedPath() gives the
+  // real target. These events do not leave a shadow root: each shadow root
+  // gets its own listeners (watchRoot).
+  const MEDIA_EVENTS = ["loadstart", "play", "playing", "loadedmetadata"];
+  function onMediaEvent(e) {
+    const el = e.composedPath?.()[0] ?? e.target;
+    if (!(el instanceof HTMLMediaElement)) return;
+    track(el);
+    if (e.type === "loadstart") {
+      loadStarts.set(el, Date.now());
+    } else if (e.type !== "loadedmetadata" && enabled && eligible(el)) {
+      attach(el);
+      scheduleHide(SHOW_ON_PLAY_MS);
+    }
+  }
+  for (const type of MEDIA_EVENTS) document.addEventListener(type, onMediaEvent, true);
+
+  // Players inside shadow roots (open or closed), found through the
+  // elements under the pointer: scanned and watched like the document.
+  const watchedRoots = new WeakSet();
+  function shadowRootOf(el) {
+    try {
+      // Closed roots: chrome.dom in Chrome, openOrClosedShadowRoot in Firefox.
+      return api.dom?.openOrClosedShadowRoot?.(el) ?? el.openOrClosedShadowRoot ?? el.shadowRoot ?? null;
+    } catch {
+      return null;
+    }
+  }
+  function watchRoot(root) {
+    if (watchedRoots.has(root)) return;
+    watchedRoots.add(root);
+    scan(root);
+    observer.observe(root, { childList: true, subtree: true });
+    for (const type of MEDIA_EVENTS) root.addEventListener(type, onMediaEvent, true);
+  }
+  function watchShadowRoots(path) {
+    for (const node of path) {
+      if (node instanceof ShadowRoot) watchRoot(node);
+      else if (node instanceof Element && node !== ui?.host) {
+        const root = shadowRootOf(node);
+        if (root) watchRoot(root);
+      }
+    }
   }
 
   function eligible(el) {
@@ -184,6 +218,7 @@
       pointer = { x: e.clientX, y: e.clientY };
       if (framePending || !enabled) return;
       framePending = true;
+      pointerPath = e.composedPath();
       requestAnimationFrame(onPointerFrame);
     },
     { capture: true, passive: true },
@@ -191,6 +226,8 @@
   function onPointerFrame() {
     framePending = false;
     if (!pointer || !enabled) return;
+    watchShadowRoots(pointerPath);
+    pointerPath = [];
     const el = mediaAt(pointer.x, pointer.y);
     if (el) {
       attach(el);
@@ -413,11 +450,12 @@
   }
 
   // Links that point at a single video. Feed previews (YouTube home, search,
-  // channel pages) play inside or next to a card that links to the video;
-  // without it the button would send the feed itself.
+  // channel pages, Reddit) play inside or next to a card that links to the
+  // video; without it the button would send the feed itself.
   const VIDEO_LINK =
     'a[href*="/watch?v="], a[href*="/shorts/"], a[href*="/live/"], a[href*="youtu.be/"], ' +
-    'a[href*="vimeo.com/"], a[href*="/video/"], a[href*="/videos/"], a[href*="/reel/"], a[href*="/clip/"]';
+    'a[href*="vimeo.com/"], a[href*="/video/"], a[href*="/videos/"], a[href*="/reel/"], a[href*="/clip/"], ' +
+    'a[href*="/comments/"]';
   const MAX_LINK_DEPTH = 14;
 
   function parentOf(node) {
@@ -466,6 +504,7 @@
       linkTitle: link?.title || null,
       title: document.title,
       duration: Number.isFinite(el.duration) ? el.duration : null,
+      loadedAt: loadStarts.get(el) ?? null,
     };
   }
 
@@ -480,7 +519,7 @@
         setState("ok", res.pending ? t("sentConfirm", "Confirme no Fisga") : t("sent", "Enviado"));
       } else {
         setState("err", t("failed", "Erro"));
-        showToast(res?.error || "Erro desconhecido");
+        showToast(res?.error || t("unknownError", "Unknown error."));
       }
     } catch (err) {
       setState("err", t("failed", "Erro"));

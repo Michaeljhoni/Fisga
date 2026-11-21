@@ -64,10 +64,19 @@ async function init() {
       const small = document.createElement("small");
       small.textContent = item.detail;
       button.append(small);
+      // One send at a time; a retry starts clean.
+      let busy = false;
       button.addEventListener("click", async () => {
-        const reply = await api.runtime.sendMessage({ type: "popup-download", tabId: tab.id, item });
+        if (busy) return;
+        busy = true;
+        button.classList.remove("sent", "failed");
+        small.textContent = t("sending");
+        const reply = await api.runtime
+          .sendMessage({ type: "popup-download", tabId: tab.id, item })
+          .catch((err) => ({ ok: false, error: String(err?.message || err) }));
         button.classList.add(reply?.ok ? "sent" : "failed");
         small.textContent = reply?.ok ? `✓ ${t(reply.pending ? "sentConfirm" : "sent")}` : reply?.error ?? t("failed");
+        busy = false;
       });
       li.append(button);
       return li;

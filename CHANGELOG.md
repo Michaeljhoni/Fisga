@@ -2,6 +2,16 @@
 
 Cada versão tem uma seção `## X.Y.Z`; o texto dela vira a descrição da release no GitHub.
 
+## Próxima versão
+
+- **Posts e perfis inteiros, pelo gallery-dl:** na galeria, uma foto do Instagram, TikTok, X,
+  DeviantArt, Flickr, Reddit ou Pinterest vai como o post inteiro: o gallery-dl encontra todas as
+  fotos e vídeos dele (o carrossel do Instagram, a apresentação de fotos do TikTok, os originais), e
+  cada arquivo entra na fila, em `Imagens/<site>`. Na página de um perfil, álbum ou pasta do
+  Pinterest, a galeria oferece o **Perfil inteiro** (ou **Álbum inteiro**). No Windows e no macOS o
+  Fisga baixa o gallery-dl na primeira vez, confere a soma e o mantém em dia; no Linux, instale o
+  pacote `gallery-dl`.
+
 ## 1.4.0
 
 - **Fotos e vídeos da página de uma vez:** no popup da extensão, **Baixar fotos e vídeos da
@@ -12,13 +22,6 @@ Cada versão tem uma seção `## X.Y.Z`; o texto dela vira a descrição da rele
   de feeds e buscas (YouTube, Instagram, TikTok, X...) vêm inteiros, pelo yt-dlp; transmissões
   HLS/DASH mostram a resolução, e as protegidas (DRM) ficam marcadas. Marque as que quiser, ou
   todas: vão para a fila, cada uma na pasta do seu tipo, dentro de uma pasta com o nome do site.
-- **Posts e perfis inteiros, pelo gallery-dl:** na galeria, uma foto do Instagram, TikTok, X,
-  DeviantArt, Flickr, Reddit ou Pinterest vai como o post inteiro: o gallery-dl encontra todas as
-  fotos e vídeos dele (o carrossel do Instagram, a apresentação de fotos do TikTok, os originais), e
-  cada arquivo entra na fila, em `Imagens/<site>`. Na página de um perfil, álbum ou pasta do
-  Pinterest, a galeria oferece o **Perfil inteiro** (ou **Álbum inteiro**). No Windows e no macOS o
-  Fisga baixa o gallery-dl na primeira vez, confere a soma e o mantém em dia; no Linux, instale o
-  pacote `gallery-dl`.
 - **Instalar a extensão no Chrome:** ☰ → **Instalar a extensão no Chrome…** mostra o passo a passo,
   com a pasta certa e botões para copiar (também em Preferências → Navegador e no fim do instalador
   do Windows). A Chrome Web Store não tem a extensão do Fisga.

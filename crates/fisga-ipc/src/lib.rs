@@ -1605,7 +1605,8 @@ pub async fn call(request: &Request) -> anyhow::Result<Response> {
     Connection::open().await?.call(request).await
 }
 
-async fn is_running() -> bool {
+/// `fisgad` answers.
+pub async fn is_running() -> bool {
     matches!(call(&Request::Ping).await, Ok(Response::Pong { .. }))
 }
 

@@ -457,14 +457,27 @@ async fn main() -> anyhow::Result<()> {
         Command::Settings(args) => settings(args).await,
         Command::Schedule(args) => schedule(args).await,
         Command::Update { install } => update(install).await,
-        Command::Stop => match fisga_ipc::call(&Request::Shutdown).await {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                eprintln!("{}", tr!("o daemon não está rodando"));
-                Ok(())
-            }
-        },
+        Command::Stop => stop().await,
     }
+}
+
+/// Asks fisgad to quit and returns once it no longer answers (it pauses the
+/// downloads and saves the list first): an installer that replaces its files
+/// next finds it gone.
+async fn stop() -> anyhow::Result<()> {
+    if fisga_ipc::call(&Request::Shutdown).await.is_err() {
+        eprintln!("{}", tr!("o daemon não está rodando"));
+        return Ok(());
+    }
+    let gone = async {
+        while fisga_ipc::is_running().await {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    if tokio::time::timeout(Duration::from_secs(10), gone).await.is_err() {
+        bail!(tr!("o fisgad não encerrou em 10 segundos"));
+    }
+    Ok(())
 }
 
 fn bytes(n: u64) -> String {
@@ -615,13 +628,13 @@ async fn add(
             }
             State::Paused => {
                 bar.finish_and_clear();
-                println!("⏸ {}", tr!("pausado"));
-                return Ok(());
+                bail!(tr!("o download foi pausado antes de terminar"));
             }
             _ => {}
         }
     }
-    Ok(())
+    bar.finish_and_clear();
+    bail!(tr!("o daemon encerrou a conexão"))
 }
 
 fn parse_force_key(value: &str) -> Result<ForceKey, String> {

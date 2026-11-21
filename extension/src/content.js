@@ -495,7 +495,10 @@
   }
 
   function mediaInfo(el) {
-    const link = videoLink(el);
+    // In a feed: the video's own page, or (X, Instagram, Reddit, Facebook,
+    // where a player has no address of its own) the post it sits in.
+    const post = videoLink(el) ? "" : postLink(el);
+    const link = videoLink(el) || (post ? { url: post, title: "" } : null);
     return {
       src: el.currentSrc || el.src || "",
       mediaType: el instanceof HTMLVideoElement ? "video" : "audio",

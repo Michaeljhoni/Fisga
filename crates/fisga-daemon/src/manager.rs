@@ -54,6 +54,8 @@ struct Job {
     info: DownloadInfo,
     request: AddRequest,
     cancel: Option<CancellationToken>,
+    /// The task that runs it, last started.
+    task: Option<tokio::task::JoinHandle<()>>,
     /// "Baixar agora": start even when its queue is full or outside its hours.
     forced: bool,
     /// The folder follows the category (no folder was chosen by the user), so it
@@ -71,7 +73,7 @@ struct Job {
 impl Job {
     fn new(info: DownloadInfo, request: AddRequest, auto_dir: bool) -> Self {
         let limiter = Arc::new(fisga_core::RateLimiter::new(info.speed_limit));
-        Self { info, request, cancel: None, forced: false, auto_dir, from_queue: false, requeue: false, limiter }
+        Self { info, request, cancel: None, task: None, forced: false, auto_dir, from_queue: false, requeue: false, limiter }
     }
 }
 
@@ -110,6 +112,11 @@ pub struct Manager {
     logins_path: PathBuf,
     store: PathBuf,
     dirty: AtomicBool,
+    /// One save at a time (see `save`).
+    saving: Mutex<()>,
+    /// The final path of each unfinished direct download, from the moment it
+    /// is chosen: no other download takes that name or its `.fisga-part`.
+    paths: Arc<fisga_core::filename::Paths>,
     /// Never locked while `inner` is held: take a copy first.
     settings: Mutex<Settings>,
     settings_path: PathBuf,
@@ -128,6 +135,9 @@ pub struct Manager {
     /// `$FISGA_SOUND_CMD` replaces the sound player (tests).
     sound_command: Option<String>,
 }
+
+/// How long a removed download may take to stop before its files are deleted.
+const STOP_WAIT: Duration = Duration::from_secs(10);
 
 /// Where a download of `category` goes when the user did not pick a folder.
 fn auto_dir(settings: &Settings, category: Category) -> PathBuf {
@@ -231,8 +241,7 @@ fn display_name(request: &AddRequest) -> String {
 impl Manager {
     pub fn load(store: PathBuf, settings_path: PathBuf) -> anyhow::Result<Arc<Self>> {
         let mut inner = Inner { next_id: 1, jobs: BTreeMap::new() };
-        if let Ok(data) = std::fs::read(&store) {
-            let stored: Stored = serde_json::from_slice(&data).context(tr!("downloads.json inválido"))?;
+        if let Some(stored) = load_store(&store) {
             inner.next_id = stored.next_id;
             for StoredJob { mut info, request } in stored.jobs {
                 if info.state == State::Running {
@@ -259,9 +268,16 @@ impl Manager {
             }
         }
         let settings = load_settings(&settings_path);
+        let paths = Arc::new(fisga_core::filename::Paths::default());
         for job in inner.jobs.values_mut() {
             if settings.queue(job.info.queue).is_none() {
                 job.info.queue = MAIN_QUEUE;
+            }
+            // A paused download's partial file stays its own.
+            if let Some(path) = job.info.path.as_ref().filter(|_| job.info.state != State::Completed) {
+                if !paths.take(job.info.id, path) {
+                    tracing::warn!(id = job.info.id, path = %path.display(), "dois downloads com o mesmo arquivo");
+                }
             }
         }
         let power_delay = std::env::var("FISGA_POWER_DELAY").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
@@ -281,6 +297,8 @@ impl Manager {
             logins_path,
             store,
             dirty: AtomicBool::new(false),
+            saving: Mutex::new(()),
+            paths,
             limiter: Arc::new(fisga_core::RateLimiter::new(settings.speed_limit)),
             scheduler: Mutex::new(scheduler::Scheduler::new(&settings, LocalTime::now(), saved)),
             scheduler_path,
@@ -699,16 +717,31 @@ impl Manager {
             job.request.output_dir = job.info.dir.clone();
             if let (Some(conflict), Some(dir)) = (conflict, job.info.dir.clone()) {
                 let name = fisga_core::filename::sanitize(&job.info.name);
+                let path = dir.join(&name);
+                // Never another download's file, nor its partial file.
+                if conflict != Conflict::Rename && !self.paths.take(id, &path) {
+                    bail!(trf!("outro download da lista usa o arquivo {}", name));
+                }
                 let name = match conflict {
-                    Conflict::Rename => fisga_ipc::unique_name(&dir, &name),
+                    Conflict::Rename => {
+                        let free = fisga_core::filename::candidates(&dir, &name)
+                            .find(|path| fisga_ipc::existing(path) == fisga_ipc::Existing::Nothing && self.paths.take(id, path))
+                            .expect("infinite iterator");
+                        free.file_name().unwrap_or_default().to_string_lossy().into_owned()
+                    }
                     Conflict::Overwrite => {
-                        let path = dir.join(&name);
                         to_delete.extend(fisga_ipc::partial_paths(&path));
                         to_delete.push(path);
                         name
                     }
                     // The engine (and yt-dlp) continue a partial file with the same name.
-                    Conflict::Resume => name,
+                    Conflict::Resume => {
+                        // This one, whatever address it came from: the user chose it.
+                        if job.info.kind == SourceKind::Direct {
+                            job.info.path = Some(path);
+                        }
+                        name
+                    }
                 };
                 job.info.name = name.clone();
                 job.request.file_name = Some(name);
@@ -786,8 +819,12 @@ impl Manager {
         let job = self.inner.lock().unwrap().jobs.remove(&id).context(tr!("download não encontrado"))?;
         if let Some(cancel) = &job.cancel {
             cancel.cancel();
-            // Give the engine a moment to flush before files are deleted.
-            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        // The engine saves its control file as it stops: the files go after that.
+        if let Some(task) = job.task {
+            if tokio::time::timeout(STOP_WAIT, task).await.is_err() {
+                tracing::warn!(id, "o download não parou a tempo de ser removido");
+            }
         }
         if delete_file {
             if let Some(path) = &job.info.path {
@@ -796,8 +833,14 @@ impl Manager {
                 }
                 let _ = tokio::fs::remove_file(fisga_core::control::part_path(path)).await;
                 let _ = tokio::fs::remove_file(fisga_core::control::control_path(path)).await;
+                if job.info.kind != SourceKind::Direct {
+                    for partial in ytdlp::partial_files(path) {
+                        let _ = tokio::fs::remove_file(partial).await;
+                    }
+                }
             }
         }
+        self.paths.release(id);
         let _ = self.updates.send(Response::Removed { id });
         self.save();
         self.schedule();
@@ -844,7 +887,7 @@ impl Manager {
             // The file is about to change: an earlier check no longer holds.
             job.info.hash = None;
             let _ = self.updates.send(Response::Update { item: job.info.clone() });
-            tokio::spawn(self.clone().run_job(id, cancel));
+            job.task = Some(tokio::spawn(self.clone().run_job(id, cancel)));
         }
         self.dirty.store(true, Ordering::Relaxed);
     }
@@ -938,6 +981,7 @@ impl Manager {
             connections: request.connections.unwrap_or(settings.connections).clamp(1, 32),
             // Both apply: the global limit for all downloads and this one's own.
             limiters: vec![self.limiter.clone(), limiter],
+            paths: Some((self.paths.clone(), id)),
             ..Default::default()
         };
         let (events_tx, mut events) = mpsc::unbounded_channel();
@@ -1013,6 +1057,9 @@ impl Manager {
         if from_queue && matches!(result, JobResult::Completed(_)) {
             self.scheduler.lock().unwrap().completed(queue);
         }
+        if matches!(result, JobResult::Completed(_)) {
+            self.paths.release(id);
+        }
         self.update(id, |info| {
             info.speed = 0.0;
             info.connections = 0;
@@ -1048,6 +1095,11 @@ impl Manager {
     }
 
     pub fn save(&self) {
+        // One at a time, each with the list as it is when its turn comes: an
+        // older list never replaces a newer one.
+        let _saving = self.saving.lock().unwrap();
+        // Before the copy: a change made meanwhile marks the list again.
+        self.dirty.store(false, Ordering::Relaxed);
         let stored = {
             let inner = self.inner.lock().unwrap();
             Stored {
@@ -1063,8 +1115,10 @@ impl Manager {
                     .collect(),
             }
         };
-        self.dirty.store(false, Ordering::Relaxed);
+        keep_backup(&self.store);
         if let Err(e) = write_json(&self.store, &stored, 0o600) {
+            // The autosave tries again.
+            self.dirty.store(true, Ordering::Relaxed);
             tracing::warn!(error = %e, "não foi possível salvar a lista de downloads");
         }
     }
@@ -1096,17 +1150,80 @@ impl Manager {
     }
 }
 
-/// Atomic write (temporary file + rename).
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// The list as the save before the last one left it.
+fn backup_path(store: &Path) -> PathBuf {
+    with_suffix(store, ".bak")
+}
+
+/// Keeps the list being replaced as `downloads.json.bak` (a hard link: no
+/// copy, and the list is never missing meanwhile).
+fn keep_backup(store: &Path) {
+    if !store.exists() {
+        return;
+    }
+    let backup = backup_path(store);
+    let _ = std::fs::remove_file(&backup);
+    if std::fs::hard_link(store, &backup).is_err() {
+        let _ = std::fs::copy(store, &backup);
+    }
+}
+
+/// The saved list. One that cannot be read is set aside, never overwritten,
+/// and the backup of the save before it is used instead (else nothing):
+/// the daemon starts either way.
+fn load_store(store: &Path) -> Option<Stored> {
+    let data = std::fs::read(store).ok()?;
+    let error = match serde_json::from_slice::<Stored>(&data) {
+        Ok(stored) => return Some(stored),
+        Err(error) => error,
+    };
+    let aside = with_suffix(store, &format!(".invalid-{}", now()));
+    if std::fs::rename(store, &aside).is_err() {
+        let _ = std::fs::write(&aside, &data);
+    }
+    let backup = std::fs::read(backup_path(store)).ok().and_then(|data| serde_json::from_slice::<Stored>(&data).ok());
+    tracing::warn!(
+        %error,
+        aside = %aside.display(),
+        backup = backup.is_some(),
+        "downloads.json ilegível; guardado à parte, a lista volta da cópia anterior (se houver)"
+    );
+    backup
+}
+
+/// Atomic and durable write: a temporary file, on disk before it is renamed
+/// over the old one (and on Unix the folder synced), so a crash or a power
+/// cut leaves the old file or the new one, never an empty or torn one.
 fn write_json(path: &Path, value: &impl Serialize, mode: u32) -> anyhow::Result<()> {
-    use std::io::Write;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    // One temporary file per write: two saves at the same time (the autosave
-    // and an action) must not rename each other's.
+    // One temporary file per write: two files saved at the same time must
+    // not rename each other's.
     static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = WRITES.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_extension(format!("json.{}.{n}.tmp", std::process::id()));
+    let data = serde_json::to_vec_pretty(value)?;
+    if let Err(e) = write_synced(&tmp, &data, mode).and_then(|()| std::fs::rename(&tmp, path)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    #[cfg(unix)]
+    if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        let _ = std::fs::File::open(dir).and_then(|dir| dir.sync_all());
+    }
+    Ok(())
+}
+
+/// A new file holding `data`, on disk when this returns.
+fn write_synced(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
+    use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
     options.create(true).write(true).truncate(true);
     // On Windows the file takes the access of its folder, private to the user.
@@ -1114,10 +1231,9 @@ fn write_json(path: &Path, value: &impl Serialize, mode: u32) -> anyhow::Result<
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, mode);
     #[cfg(not(unix))]
     let _ = mode;
-    let mut file = options.open(&tmp)?;
-    file.write_all(&serde_json::to_vec_pretty(value)?)?;
-    std::fs::rename(tmp, path)?;
-    Ok(())
+    let mut file = options.open(path)?;
+    file.write_all(data)?;
+    file.sync_all()
 }
 
 /// Referer, User-Agent, Cookie and extra headers captured by the browser.
@@ -1270,6 +1386,145 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn another_downloads_file_is_neither_continued_nor_overwritten() {
+        let manager = manager();
+        let dir = manager.settings().download_dir.unwrap().join("Programas");
+        let info = |id| manager.list().into_iter().find(|i| i.id == id).unwrap();
+        let first = add(&manager, true);
+        manager.confirm(first, Answer { conflict: Some(Conflict::Resume), ..Default::default() }).unwrap();
+        assert_eq!(info(first).path, Some(dir.join("file.iso")), "the partial file the user chose");
+
+        let second = add(&manager, true);
+        for conflict in [Conflict::Resume, Conflict::Overwrite] {
+            let answer = Answer { conflict: Some(conflict), ..Default::default() };
+            let error = manager.confirm(second, answer).unwrap_err().to_string();
+            assert!(error.contains("outro download"), "{error}");
+        }
+        manager.confirm(second, Answer { conflict: Some(Conflict::Rename), ..Default::default() }).unwrap();
+        assert_eq!(info(second).name, "file (1).iso", "a name no other download holds");
+    }
+
+    /// Serves `body` at any address, `delay` after the head; one answer per connection.
+    async fn file_server(body: Vec<u8>, delay: Duration) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/vi/x/maxresdefault.jpg", listener.local_addr().unwrap());
+        let body = Arc::new(body);
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let body = body.clone();
+                tokio::spawn(async move {
+                    let _ = socket.read(&mut [0; 4096]).await;
+                    let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    tokio::time::sleep(delay).await;
+                    let _ = socket.write_all(&body).await;
+                });
+            }
+        });
+        url
+    }
+
+    /// Serves `size` bytes with Range support, 16 KiB at a time.
+    async fn range_server(size: usize) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/grande.bin", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut head = vec![0; 4096];
+                    let read = socket.read(&mut head).await.unwrap_or(0);
+                    let head = String::from_utf8_lossy(&head[..read]).to_ascii_lowercase();
+                    let range = head.lines().find_map(|line| line.strip_prefix("range: bytes=")).and_then(|range| {
+                        let (start, end) = range.trim().split_once('-')?;
+                        Some((start.parse::<usize>().ok()?, end.parse::<usize>().unwrap_or(size - 1).min(size - 1)))
+                    });
+                    let (start, end) = range.unwrap_or((0, size - 1));
+                    let reply = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{size}\r\nConnection: close\r\n\r\n",
+                        end + 1 - start
+                    );
+                    if socket.write_all(reply.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let mut left = end + 1 - start;
+                    while left > 0 {
+                        let chunk = left.min(16 * 1024);
+                        if socket.write_all(&vec![b'x'; chunk]).await.is_err() {
+                            return;
+                        }
+                        left -= chunk;
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                });
+            }
+        });
+        url
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_removed_download_leaves_no_files_behind() {
+        let manager = manager();
+        let url = range_server(8 * 1024 * 1024).await;
+        let id = manager.add(AddRequest { url, start: false, ..Default::default() }).unwrap();
+        // So slow that a connection waits seconds for the speed limit.
+        manager.set_speed_limit(id, 16 * 1024).unwrap();
+        manager.resume(id).unwrap();
+        let mut path = None;
+        for _ in 0..100 {
+            path = manager.list().into_iter().find(|i| i.id == id).and_then(|i| i.path);
+            if path.as_ref().is_some_and(|path| fisga_core::control::control_path(path).exists()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let path = path.expect("the download started");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let started = std::time::Instant::now();
+        manager.remove(id, true).await.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        let (part, control) = (fisga_core::control::part_path(&path), fisga_core::control::control_path(&path));
+        assert!(!part.exists() && !control.exists());
+        // Nothing still stopping writes them back.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(!part.exists() && !control.exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn gallery_media_with_the_same_name_get_files_of_their_own() {
+        let manager = manager();
+        let mut downloads = Vec::new();
+        let mut bodies = Vec::new();
+        for n in 0..3u8 {
+            let body = vec![b'a' + n; 50_000];
+            let url = file_server(body.clone(), Duration::from_millis(300)).await;
+            downloads.push(AddRequest { url, subfolder: Some("i.ytimg.com".into()), start: true, ..Default::default() });
+            bodies.push(body);
+        }
+        let ids = manager.add_many(downloads).unwrap();
+        for _ in 0..100 {
+            if ids.iter().all(|&id| manager.state(id) == Some(State::Completed)) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let list = manager.list();
+        let mut paths = Vec::new();
+        for (id, body) in ids.iter().zip(&bodies) {
+            let info = list.iter().find(|i| i.id == *id).unwrap();
+            assert_eq!(info.state, State::Completed, "{info:?}");
+            let path = info.path.clone().unwrap();
+            assert!(std::fs::read(&path).unwrap() == *body, "{path:?} holds another download's data");
+            paths.push(path);
+        }
+        paths.sort();
+        paths.dedup();
+        assert_eq!(paths.len(), 3, "{paths:?}");
+    }
+
+    #[tokio::test]
     async fn quality_must_be_one_of_the_probed_formats() {
         let manager = manager();
         let id = add(&manager, true);
@@ -1333,6 +1588,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn removing_a_site_video_deletes_what_yt_dlp_left() {
+        let manager = manager();
+        let request = AddRequest { url: "https://example.com/v".into(), kind: SourceKind::Page, start: false, ..Default::default() };
+        let id = manager.add(request).unwrap();
+        let dir = manager.settings().download_dir.unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let partials = ["V [abc].mp4.part", "V [abc].f137.mp4.part", "V [abc].f137.mp4.ytdl"].map(|name| dir.join(name));
+        for path in &partials {
+            std::fs::write(path, b"x").unwrap();
+        }
+        std::fs::write(dir.join("Outro.mp4.part"), b"x").unwrap();
+        // As yt-dlp tells it when it starts.
+        manager.update(id, |info| info.path = Some(dir.join("V [abc].mp4")));
+        manager.remove(id, true).await.unwrap();
+        assert!(partials.iter().all(|path| !path.exists()), "{partials:?}");
+        assert!(dir.join("Outro.mp4.part").exists(), "another video's");
+    }
+
+    #[tokio::test]
     async fn cancel_removes_the_pending_download() {
         let manager = manager();
         let id = add(&manager, true);
@@ -1347,6 +1621,34 @@ mod tests {
         manager.save();
         let reloaded = Manager::load(manager.store.clone(), manager.settings_path.clone()).unwrap();
         assert_eq!(reloaded.state(id), Some(State::Pending));
+    }
+
+    #[tokio::test]
+    async fn a_broken_list_is_set_aside_and_the_backup_used() {
+        let manager = manager();
+        let first = add_to(&manager, MAIN_QUEUE, false);
+        // This save keeps the list with `first` alone as the backup.
+        let second = add_to(&manager, MAIN_QUEUE, false);
+        let store = manager.store.clone();
+        let broken = b"{\"next_id\": 3, \"jobs\": [";
+        std::fs::write(&store, broken).unwrap();
+
+        let reloaded = Manager::load(store.clone(), manager.settings_path.clone()).unwrap();
+        assert_eq!(reloaded.state(first), Some(State::Paused));
+        assert_eq!(reloaded.state(second), None, "as the save before the last one left it");
+        let aside: Vec<PathBuf> = std::fs::read_dir(store.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.to_string_lossy().contains("downloads.json.invalid-"))
+            .collect();
+        assert_eq!(aside.len(), 1, "{aside:?}");
+        assert_eq!(std::fs::read(&aside[0]).unwrap(), broken, "kept for whoever wants to look at it");
+
+        // Without a backup the daemon still starts, with an empty list.
+        std::fs::write(&store, b"nada").unwrap();
+        std::fs::remove_file(backup_path(&store)).unwrap();
+        assert!(Manager::load(store, manager.settings_path.clone()).unwrap().list().is_empty());
     }
 
     #[tokio::test]

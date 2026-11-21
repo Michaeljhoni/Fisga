@@ -112,9 +112,6 @@ URL inválida
 esquema não suportado: {}
 = unsupported scheme: {}
 
-downloads.json inválido
-= invalid downloads.json
-
 a pasta de downloads precisa ser um caminho absoluto
 = the downloads folder must be an absolute path
 
@@ -294,3 +291,9 @@ Endereço não atualizado
 
 o download não pausou a tempo; tente de novo
 = the download did not pause in time; try again
+
+outro download da lista usa o arquivo {}
+= another download in the list uses the file {}
+
+outro fisgad já está usando a lista de downloads ({})
+= another fisgad is already using the download list ({})

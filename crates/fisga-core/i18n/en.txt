@@ -114,3 +114,6 @@ conexão abortou: {}
 
 download incompleto
 = incomplete download
+
+outro download já usa o arquivo {}
+= another download already uses the file {}

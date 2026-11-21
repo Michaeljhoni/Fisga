@@ -2,7 +2,7 @@
 //! which keeps site extractors up to date and merges audio/video with ffmpeg.
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,8 +23,17 @@ const PROGRESS_TEMPLATE: &str = "download:FISGAPROG %(progress.downloaded_bytes)
 /// How long the pre-download check (`yt-dlp -J`) may take.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// A file deleted when this is dropped, however the run that uses it ends.
+struct TempFile(PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Netscape cookies.txt, readable only by the user, deleted after the run.
-fn write_cookies_file(name: &str, cookies: &[Cookie]) -> std::io::Result<PathBuf> {
+fn write_cookies_file(name: &str, cookies: &[Cookie]) -> std::io::Result<TempFile> {
     use std::io::Write;
     let path = fisga_ipc::runtime_dir().join(format!("cookies-{name}.txt"));
     let mut options = std::fs::OpenOptions::new();
@@ -33,6 +42,7 @@ fn write_cookies_file(name: &str, cookies: &[Cookie]) -> std::io::Result<PathBuf
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     let mut file = options.open(&path)?;
+    let written = TempFile(path);
     writeln!(file, "# Netscape HTTP Cookie File")?;
     for c in cookies {
         let domain = if !c.host_only && !c.domain.starts_with('.') { format!(".{}", c.domain) } else { c.domain.clone() };
@@ -41,7 +51,39 @@ fn write_cookies_file(name: &str, cookies: &[Cookie]) -> std::io::Result<PathBuf
         let expires = c.expiration_date.map(|e| e as i64).unwrap_or(0);
         writeln!(file, "{domain}\t{subdomains}\t{}\t{secure}\t{expires}\t{}\t{}", c.path, c.name, c.value)?;
     }
-    Ok(path)
+    Ok(written)
+}
+
+/// What yt-dlp leaves while it downloads to `destination`: `name.part` and
+/// `name.ytdl`, each format's (`stem.f137.mp4.part`), their fragments
+/// (`….part-Frag3`) and the merger's `stem.temp.mp4`.
+pub fn partial_files(destination: &Path) -> Vec<PathBuf> {
+    let (Some(dir), Some(name)) = (destination.parent(), destination.file_name().and_then(|n| n.to_str())) else {
+        return Vec::new();
+    };
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            let Some(file) = path.file_name().and_then(|n| n.to_str()) else { return false };
+            let Some(rest) = file.strip_prefix(stem).filter(|rest| rest.starts_with('.')) else { return false };
+            rest.ends_with(".part") || rest.ends_with(".ytdl") || rest.contains(".part-Frag") || rest.starts_with(".temp.")
+        })
+        .collect()
+}
+
+/// Cookies files a fisgad that stopped abruptly left in `dir` (the runtime folder).
+pub fn remove_leftover_cookies(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("cookies-") && name.ends_with(".txt") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn parse_number(value: &str) -> Option<f64> {
@@ -157,6 +199,8 @@ async fn run_once(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel:
         .args(["--max-downloads", "1"])
         .args(["--progress-template", PROGRESS_TEMPLATE])
         .args(["--print", "before_dl:FISGANAME %(title)s"])
+        // Where it goes, before it starts: what it leaves meanwhile is found from it.
+        .args(["--print", "before_dl:FISGADEST %(filename)s"])
         .args(["--print", "after_move:FISGAFILE %(filepath)s"])
         .args(["--concurrent-fragments", "4"]);
     // Per yt-dlp process: with several site videos at once the total is higher.
@@ -173,14 +217,13 @@ async fn run_once(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel:
         .arg("--paths")
         .arg(&dir)
         .args(["--output", &template]);
-    let cookies_file = add_request_options(&mut command, &id.to_string(), request);
+    // Deleted when this run ends, whichever way.
+    let _cookies = add_request_options(&mut command, &id.to_string(), request);
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    // A pause stops ffmpeg too, not yt-dlp alone.
+    crate::shell::Group::prepare(&mut command);
 
-    let result = run_child(manager, id, command, cancel).await;
-    if let Some(path) = cookies_file {
-        let _ = tokio::fs::remove_file(path).await;
-    }
-    result
+    run_child(manager, id, command, cancel).await
 }
 
 /// The proxy setting for yt-dlp. A manual proxy goes in the environment, not
@@ -217,8 +260,9 @@ fn origin_for(request: &AddRequest) -> Option<String> {
     (origin.is_tuple() && origin != media.origin()).then(|| origin.ascii_serialization())
 }
 
-/// Referer, user agent, cookies and the URL itself. Returns the cookies file to delete.
-fn add_request_options(command: &mut Command, name: &str, request: &AddRequest) -> Option<PathBuf> {
+/// Referer, user agent, cookies and the URL itself. Returns the cookies
+/// file, deleted when dropped.
+fn add_request_options(command: &mut Command, name: &str, request: &AddRequest) -> Option<TempFile> {
     if let Some(referrer) = &request.referrer {
         command.args(["--referer", referrer]);
     }
@@ -232,9 +276,9 @@ fn add_request_options(command: &mut Command, name: &str, request: &AddRequest) 
         None
     } else {
         match write_cookies_file(name, &request.cookies) {
-            Ok(path) => {
-                command.arg("--cookies").arg(&path);
-                Some(path)
+            Ok(file) => {
+                command.arg("--cookies").arg(&file.0);
+                Some(file)
             }
             Err(e) => {
                 tracing::warn!(error = %e, "não foi possível gravar os cookies para o yt-dlp");
@@ -355,12 +399,10 @@ pub async fn probe(id: u64, request: &AddRequest, proxy: &fisga_ipc::ProxySettin
     let mut command = crate::tools::yt_dlp();
     command.args(["-J", "--flat-playlist", "--no-playlist", "--no-warnings", "--no-colors"]);
     apply_proxy(&mut command, proxy);
-    let cookies_file = add_request_options(&mut command, &format!("{id}-probe"), request);
+    let cookies = add_request_options(&mut command, &format!("{id}-probe"), request);
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     let output = tokio::time::timeout(PROBE_TIMEOUT, command.output()).await;
-    if let Some(path) = cookies_file {
-        let _ = tokio::fs::remove_file(path).await;
-    }
+    drop(cookies);
     let output = match output {
         Err(_) => return Err(tr!("o yt-dlp demorou demais para responder").into()),
         Ok(Err(e)) => return Err(trf!("não foi possível iniciar o yt-dlp: {}", e)),
@@ -390,6 +432,7 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
         }
         Err(e) => return JobResult::Failed(trf!("não foi possível iniciar o yt-dlp: {}", e)),
     };
+    let mut group = crate::shell::Group::of(&child);
 
     let (lines_tx, mut lines) = mpsc::unbounded_channel::<String>();
     for stream in [
@@ -425,7 +468,7 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
         tokio::select! {
             _ = cancel.cancelled() => {
                 // yt-dlp keeps its .part files and continues them on the next run.
-                let _ = child.kill().await;
+                group.stop(&mut child).await;
                 return JobResult::Paused;
             }
             _ = ticker.tick() => {
@@ -454,6 +497,9 @@ async fn run_child(manager: &Arc<Manager>, id: u64, mut command: Command, cancel
                     if !title.is_empty() && title != "NA" {
                         manager.update(id, |info| info.name = title);
                     }
+                } else if let Some(path) = line.strip_prefix("FISGADEST ").map(str::trim).filter(|p| !p.is_empty() && *p != "NA") {
+                    let path = PathBuf::from(path);
+                    manager.update(id, |info| info.path = Some(path));
                 } else if let Some(path) = line.strip_prefix("FISGAFILE ") {
                     let path = PathBuf::from(path.trim());
                     manager.update(id, |info| info.path = Some(path.clone()));
@@ -505,6 +551,54 @@ mod tests {
         // The audio after the video: counting starts over.
         assert_eq!(rate.sample(at(17_000), 5 * MB), None);
         assert_eq!(rate.sample(at(18_000), 7 * MB), Some(2.0 * MB as f64));
+    }
+
+    #[test]
+    fn what_yt_dlp_leaves_while_downloading() {
+        let dir = std::env::temp_dir().join(format!("fisgad-partials-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let partials = [
+            "Vídeo [abc].mp4.part",
+            "Vídeo [abc].mp4.ytdl",
+            "Vídeo [abc].f137.mp4.part",
+            "Vídeo [abc].f137.mp4.part-Frag3",
+            "Vídeo [abc].temp.mp4",
+        ];
+        let others = ["Vídeo [abc].mp4", "Vídeo [abc].en.vtt", "Vídeo [abc]2.mp4.part", "Outro.mp4.part"];
+        for name in partials.iter().chain(&others) {
+            std::fs::write(dir.join(name), "x").unwrap();
+        }
+        let mut found: Vec<PathBuf> = partial_files(&dir.join("Vídeo [abc].mp4"));
+        found.sort();
+        let mut expected: Vec<PathBuf> = partials.iter().map(|name| dir.join(name)).collect();
+        expected.sort();
+        assert_eq!(found, expected);
+        // Without an extension.
+        std::fs::write(dir.join("LEIAME.part"), "x").unwrap();
+        assert_eq!(partial_files(&dir.join("LEIAME")), [dir.join("LEIAME.part")]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn cookies_files_do_not_stay() {
+        let dir = std::env::temp_dir().join(format!("fisgad-cookies-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("cookies-7.txt");
+        std::fs::write(&file, "x").unwrap();
+        drop(TempFile(file.clone()));
+        assert!(!file.exists(), "gone with the run");
+
+        // What an abrupt stop left: only the cookies go at the next start.
+        for name in ["cookies-1.txt", "cookies-2-probe.txt", "fisgad.sock", "outro.txt"] {
+            std::fs::write(dir.join(name), "x").unwrap();
+        }
+        remove_leftover_cookies(&dir);
+        let mut left: Vec<String> =
+            std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        assert_eq!(left, ["fisgad.sock", "outro.txt"]);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn stream(url: &str, referrer: Option<&str>, page: Option<&str>) -> AddRequest {

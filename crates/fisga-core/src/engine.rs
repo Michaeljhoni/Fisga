@@ -25,7 +25,7 @@ use url::Url;
 
 use crate::control::{self, ControlFile, SegmentState};
 use crate::fileio::write_all_at;
-use crate::probe::{probe, ProbeResult};
+use crate::probe::{probe_within, ProbeResult};
 use crate::{filename, Error, RequestSpec, Result};
 
 /// Bytes buffered per connection before a positional write.
@@ -42,7 +42,7 @@ const TICK: Duration = Duration::from_secs(1);
 /// The longest wait a server's `Retry-After` gets.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(120);
 /// The data is forced to disk, then the control file saved, this often.
-const SAVE_EVERY: Duration = Duration::from_secs(2);
+pub(crate) const SAVE_EVERY: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub struct DownloadOptions {
@@ -60,6 +60,9 @@ pub struct DownloadOptions {
     pub connection_stagger: Duration,
     /// Speed limits, all respected: the global one (every download) and this download's own.
     pub limiters: Vec<Arc<crate::RateLimiter>>,
+    /// The final paths held by the other downloads of the same list, and
+    /// this download's id there.
+    pub paths: Option<(Arc<filename::Paths>, u64)>,
 }
 
 impl Default for DownloadOptions {
@@ -71,6 +74,7 @@ impl Default for DownloadOptions {
             idle_timeout: Duration::from_secs(30),
             connection_stagger: Duration::from_millis(150),
             limiters: Vec::new(),
+            paths: None,
         }
     }
 }
@@ -79,9 +83,10 @@ impl Default for DownloadOptions {
 #[derive(Debug, Clone)]
 pub enum Target {
     /// Pick the name (given or detected) inside `dir`, avoiding collisions, or
-    /// resume an existing `.fisga-part` with that name.
+    /// resume an existing `.fisga-part` with that name left by the same address.
     Dir { dir: PathBuf, file_name: Option<String> },
-    /// Exact final path (used when resuming a known download).
+    /// Exact final path (a known download, or a partial file the user chose
+    /// to continue), whatever address made its `.fisga-part`.
     File(PathBuf),
 }
 
@@ -127,13 +132,10 @@ pub async fn download(
     }
     let probe = tokio::select! {
         _ = cancel.cancelled() => return Err(Error::Cancelled),
-        p = probe(client, spec) => p?,
+        p = probe_within(client, spec, opts.idle_timeout) => p?,
     };
-    // The data comes from the redirect's target: credentials only if it is the same host.
-    let followed = spec.for_final_url(&probe.final_url);
-    let spec = &followed;
 
-    let final_path = resolve_target(target, &probe.file_name);
+    let final_path = resolve_target(target, &probe.file_name, &spec.url, opts.paths.as_ref())?;
     if let Some(parent) = final_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -147,30 +149,61 @@ pub async fn download(
 
     if probe.total == Some(0) {
         tokio::fs::write(&final_path, b"").await?;
+        let _ = tokio::fs::remove_file(control::part_path(&final_path)).await;
         return Ok(Outcome::Completed(final_path));
     }
     if segmented {
         segmented_download(client, spec, &probe, final_path, opts, events, cancel).await
     } else {
-        single_stream(client, spec, &probe, final_path, opts, events, cancel).await
+        // The data comes from the redirect's target: credentials only if it is the same host.
+        let followed = spec.for_final_url(&probe.final_url);
+        single_stream(client, &followed, &probe, final_path, opts, events, cancel).await
     }
 }
 
 /// The file's final path: the one given, or in the folder with the name
-/// given (else the server's), keeping an unfinished `.fisga-part` of it to
-/// resume, else a name not taken yet.
-pub(crate) fn resolve_target(target: Target, detected_name: &str) -> PathBuf {
+/// given (else the server's). There it continues an unfinished `.fisga-part`
+/// that this same address left, else takes a name that no file, partial file
+/// or other download (`paths`) has, creating its `.fisga-part` right away so
+/// that nothing else takes it meanwhile.
+pub(crate) fn resolve_target(
+    target: Target,
+    detected_name: &str,
+    url: &str,
+    paths: Option<&(Arc<filename::Paths>, u64)>,
+) -> Result<PathBuf> {
+    let take = |path: &Path| paths.map_or(true, |(paths, id)| paths.take(*id, path));
     match target {
-        Target::File(path) => path,
+        Target::File(path) => match take(&path) {
+            true => Ok(path),
+            false => Err(Error::Other(trf!("outro download já usa o arquivo {}", path.display()))),
+        },
         Target::Dir { dir, file_name } => {
             let name = file_name.as_deref().map(filename::sanitize).unwrap_or_else(|| detected_name.to_string());
-            let candidate = dir.join(&name);
-            control::adopt_legacy(&candidate);
-            if control::part_path(&candidate).exists() {
-                candidate
-            } else {
-                filename::unique_path(&dir, &name)
+            std::fs::create_dir_all(&dir)?;
+            for candidate in filename::candidates(&dir, &name) {
+                if !take(&candidate) {
+                    continue;
+                }
+                control::adopt_legacy(&candidate);
+                let part = control::part_path(&candidate);
+                if part.exists() {
+                    let saved = control::load(&control::control_path(&candidate));
+                    if saved.is_some_and(|saved| saved.url == url) {
+                        return Ok(candidate);
+                    }
+                    continue;
+                }
+                if candidate.exists() {
+                    continue;
+                }
+                match OpenOptions::new().write(true).create_new(true).open(&part) {
+                    Ok(_) => return Ok(candidate),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(e.into()),
+                }
             }
+            unreachable!("infinite iterator")
         }
     }
 }
@@ -226,15 +259,52 @@ async fn single_stream(
     events: mpsc::UnboundedSender<EngineEvent>,
     cancel: CancellationToken,
 ) -> Result<Outcome> {
+    let part = control::part_path(&final_path);
+    // A broken connection is tried again as a segment is, but from the
+    // start: without Range support nothing else can be asked for.
+    let mut failures = 0u32;
+    loop {
+        match stream_once(client, spec, probe, &part, opts, &events, &cancel).await {
+            Ok(true) => return Ok(Outcome::Completed(finalize(&part, final_path).await?)),
+            Ok(false) => break,
+            Err(e) if e.is_permanent() || failures >= opts.max_retries => return Err(e),
+            Err(e) => {
+                failures += 1;
+                tracing::warn!(attempt = failures, error = %e, "a conexão única falhou; recomeçando do início");
+                if !sleep_or_cancel(&cancel, backoff(failures)).await {
+                    break;
+                }
+            }
+        }
+    }
+    // Paused: what arrived is of no use to the next attempt.
+    let _ = tokio::fs::remove_file(&part).await;
+    Ok(Outcome::Paused(final_path))
+}
+
+/// One attempt of the single connection, from the start of the file: true
+/// when it came whole, false when the download was paused.
+async fn stream_once(
+    client: &Client,
+    spec: &RequestSpec,
+    probe: &ProbeResult,
+    part: &Path,
+    opts: &DownloadOptions,
+    events: &mpsc::UnboundedSender<EngineEvent>,
+    cancel: &CancellationToken,
+) -> Result<bool> {
     use tokio::io::AsyncWriteExt;
 
-    let part = control::part_path(&final_path);
-    let resp = spec.apply(client.get(probe.final_url.clone())).send().await?;
+    let send = spec.apply(client.get(probe.final_url.clone())).send();
+    let resp = tokio::select! {
+        _ = cancel.cancelled() => return Ok(false),
+        resp = tokio::time::timeout(opts.idle_timeout, send) => resp.map_err(|_| Error::Timeout)??,
+    };
     if !resp.status().is_success() {
         return Err(Error::Status(resp.status()));
     }
     let total = resp.content_length().or(probe.total);
-    let mut file = tokio::fs::File::create(&part).await?;
+    let mut file = tokio::fs::File::create(part).await?;
     let mut stream = resp.bytes_stream();
     let mut downloaded = 0u64;
     let mut meter = SpeedMeter::new(0);
@@ -242,11 +312,7 @@ async fn single_stream(
 
     loop {
         let next = tokio::select! {
-            _ = cancel.cancelled() => {
-                drop(file);
-                let _ = tokio::fs::remove_file(&part).await;
-                return Ok(Outcome::Paused(final_path));
-            }
+            _ = cancel.cancelled() => return Ok(false),
             // Giving up here means starting over: wait much longer.
             next = tokio::time::timeout(opts.idle_timeout.saturating_mul(10), stream.next()) => next,
         };
@@ -257,8 +323,8 @@ async fn single_stream(
             Ok(Some(Ok(chunk))) => {
                 file.write_all(&chunk).await?;
                 downloaded += chunk.len() as u64;
-                for limiter in &opts.limiters {
-                    limiter.consume(chunk.len()).await;
+                if !limit(&opts.limiters, chunk.len(), cancel).await {
+                    return Ok(false);
                 }
             }
         }
@@ -289,7 +355,7 @@ async fn single_stream(
         active_connections: 0,
         segments: Vec::new(),
     }));
-    Ok(Outcome::Completed(finalize(&part, final_path).await?))
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -345,10 +411,23 @@ enum Exit {
     Left,
 }
 
+/// Where the data comes from: the redirect's target, with its headers.
+#[derive(Clone)]
+struct Source {
+    url: Url,
+    spec: RequestSpec,
+    /// How many targets were found after the first one.
+    generation: u32,
+}
+
 struct Ctx {
     client: Client,
-    spec: RequestSpec,
-    url: Url,
+    /// The address asked for, with all its headers: a new redirect target comes from it.
+    origin: RequestSpec,
+    source: Mutex<Source>,
+    /// One look for a new redirect target at a time.
+    renewing: tokio::sync::Mutex<()>,
+    total: u64,
     etag: Option<String>,
     file: Arc<File>,
     segments: Mutex<Vec<Segment>>,
@@ -521,16 +600,56 @@ impl Ctx {
         Ok(())
     }
 
+    fn generation(&self) -> u32 {
+        self.source.lock().unwrap().generation
+    }
+
+    /// Signed links expire: the redirect's target then refuses (401, 403,
+    /// 410) what it served before. The address asked for gives a new one,
+    /// taken when it serves the same file (size and ETag). True when there
+    /// is a new target to try, found by this connection or another one.
+    async fn renew(&self, seen: u32) -> bool {
+        let _one = self.renewing.lock().await;
+        let current = self.source.lock().unwrap().clone();
+        if current.generation != seen {
+            return true;
+        }
+        // Not redirected: the address itself refuses.
+        if Url::parse(&self.origin.url).is_ok_and(|origin| origin == current.url) {
+            return false;
+        }
+        let probe = tokio::select! {
+            _ = self.cancel.cancelled() => return false,
+            probe = probe_within(&self.client, &self.origin, self.idle_timeout) => probe,
+        };
+        match probe {
+            Ok(probe)
+                if probe.ranges
+                    && probe.total == Some(self.total)
+                    && (self.etag.is_none() || probe.etag == self.etag)
+                    && probe.final_url != current.url =>
+            {
+                tracing::info!("o destino do redirecionamento expirou; continuando por um novo");
+                let spec = self.origin.for_final_url(&probe.final_url);
+                *self.source.lock().unwrap() = Source { url: probe.final_url, spec, generation: seen + 1 };
+                true
+            }
+            Ok(_) => false,
+            Err(e) => {
+                tracing::warn!(error = %e, "não foi possível obter um novo destino do redirecionamento");
+                false
+            }
+        }
+    }
+
     /// Downloads the rest of segment `index` with one HTTP request.
     async fn fetch_segment(&self, index: usize) -> Result<()> {
         let (from, end) = self.bounds(index);
         if from > end || self.gone(index, from) {
             return Ok(());
         }
-        let mut request = self
-            .spec
-            .apply(self.client.get(self.url.clone()))
-            .header(RANGE, format!("bytes={from}-{end}"));
+        let Source { url, spec, .. } = self.source.lock().unwrap().clone();
+        let mut request = spec.apply(self.client.get(url)).header(RANGE, format!("bytes={from}-{end}"));
         if let Some(etag) = &self.etag {
             request = request.header(IF_RANGE, etag.as_str());
         }
@@ -547,7 +666,7 @@ impl Ctx {
                         return Ok(());
                     }
                     if asked.elapsed() >= self.idle_timeout {
-                        return Err(Error::Other(tr!("tempo esgotado esperando a resposta do servidor").into()));
+                        return Err(Error::Timeout);
                     }
                 }
             }
@@ -560,16 +679,12 @@ impl Ctx {
             }
             status => return Err(Error::Status(status)),
         }
-        let range_start = resp
-            .headers()
-            .get(CONTENT_RANGE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("bytes "))
-            .and_then(|v| v.split('-').next())
-            .and_then(|v| v.trim().parse::<u64>().ok());
-        if range_start.is_some_and(|s| s != from) {
+        let range = resp.headers().get(CONTENT_RANGE).and_then(|v| v.to_str().ok()).and_then(content_range);
+        if range.is_some_and(|(start, _)| start != from) {
             return Err(Error::Other(tr!("Content-Range diferente do pedido").into()));
         }
+        // Some servers send at most so much per request: less than asked for.
+        let short_end = range.map(|(_, last)| last).filter(|last| *last < end);
         self.streaming(index);
 
         let mut stream = resp.bytes_stream();
@@ -592,7 +707,10 @@ impl Ctx {
                 }
                 Ok(None) => {
                     self.flush(index, &mut buf, &mut offset).await?;
-                    return if self.gone(index, offset) {
+                    // A short answer that came whole is no failure: the rest
+                    // is asked for next, right away.
+                    let whole = short_end.is_some_and(|last| offset == last + 1);
+                    return if whole || self.gone(index, offset) {
                         Ok(())
                     } else {
                         Err(Error::Other(tr!("conexão encerrada antes do fim do segmento").into()))
@@ -617,8 +735,9 @@ impl Ctx {
             if limited {
                 self.hold(index, true);
             }
-            for limiter in &self.limiters {
-                limiter.consume(chunk.len()).await;
+            if !limit(&self.limiters, chunk.len(), &self.cancel).await {
+                self.flush(index, &mut buf, &mut offset).await?;
+                return Err(Error::Cancelled);
             }
             if limited {
                 self.hold(index, false);
@@ -637,6 +756,13 @@ impl Ctx {
     }
 }
 
+/// The first and last bytes of `bytes 0-1023/4096`.
+fn content_range(value: &str) -> Option<(u64, u64)> {
+    let (first, last) = value.strip_prefix("bytes ")?.split('/').next()?.split_once('-')?;
+    let (first, last) = (first.trim().parse().ok()?, last.trim().parse().ok()?);
+    (first <= last).then_some((first, last))
+}
+
 /// `Retry-After` in seconds (the HTTP-date form is rare on file servers).
 fn retry_after(headers: &HeaderMap) -> Option<Duration> {
     headers.get(RETRY_AFTER)?.to_str().ok()?.trim().parse().ok().map(Duration::from_secs)
@@ -647,11 +773,28 @@ fn backoff(failures: u32) -> Duration {
     Duration::from_secs((2 * u64::from(failures)).min(30))
 }
 
+/// What a signed link answers once it expired.
+fn expired(error: &Error) -> bool {
+    matches!(error, Error::Status(status) if matches!(status.as_u16(), 401 | 403 | 410))
+}
+
 async fn sleep_or_cancel(cancel: &CancellationToken, duration: Duration) -> bool {
     tokio::select! {
         _ = cancel.cancelled() => false,
         _ = tokio::time::sleep(duration) => true,
     }
+}
+
+/// Waits as the speed limits say for `bytes` just received; false when the
+/// download is paused meanwhile (a low limit can mean a long wait).
+pub(crate) async fn limit(limiters: &[Arc<crate::RateLimiter>], bytes: usize, cancel: &CancellationToken) -> bool {
+    for limiter in limiters {
+        tokio::select! {
+            _ = cancel.cancelled() => return false,
+            _ = limiter.consume(bytes) => {}
+        }
+    }
+    true
 }
 
 async fn worker(ctx: Arc<Ctx>, delay: Duration) -> Result<()> {
@@ -684,6 +827,7 @@ async fn work(ctx: &Ctx, delay: Duration) -> Result<Exit> {
         let mut failures = 0u32;
         loop {
             let before = ctx.bounds(index).0;
+            let generation = ctx.generation();
             let e = match ctx.fetch_segment(index).await {
                 Ok(()) => break,
                 Err(_) if ctx.cancel.is_cancelled() => {
@@ -698,11 +842,13 @@ async fn work(ctx: &Ctx, delay: Duration) -> Result<Exit> {
             }
             failures += 1;
             tracing::warn!(segment = index, attempt = failures, error = %e, "segmento falhou");
-            if e.is_permanent() || failures > ctx.max_retries {
+            let renewed = expired(&e) && ctx.renew(generation).await;
+            if (e.is_permanent() && !renewed) || failures > ctx.max_retries {
                 ctx.release(index);
                 return Err(e);
             }
             let wait = match &e {
+                _ if renewed => Duration::ZERO,
                 Error::Throttled { retry_after, .. } => {
                     // The server wants fewer connections: this one leaves, unless it is the last.
                     if ctx.leave() {
@@ -743,9 +889,11 @@ async fn persist(ctx: &Ctx, path: &Path, mut control: ControlFile) {
     }
 }
 
+/// `origin`: the address asked for, with all its headers (the data comes
+/// from the redirect's target, `probe.final_url`).
 async fn segmented_download(
     client: &Client,
-    spec: &RequestSpec,
+    origin: &RequestSpec,
     probe: &ProbeResult,
     final_path: PathBuf,
     opts: &DownloadOptions,
@@ -774,8 +922,14 @@ async fn segmented_download(
     let connections = opts.connections.max(1);
     let ctx = Arc::new(Ctx {
         client: client.clone(),
-        spec: spec.clone(),
-        url: probe.final_url.clone(),
+        origin: origin.clone(),
+        source: Mutex::new(Source {
+            url: probe.final_url.clone(),
+            spec: origin.for_final_url(&probe.final_url),
+            generation: 0,
+        }),
+        renewing: tokio::sync::Mutex::new(()),
+        total,
         etag: probe.etag.clone(),
         file: Arc::new(file),
         segments: Mutex::new(states.into_iter().map(|state| Segment::new(state, false)).collect()),
@@ -791,7 +945,7 @@ async fn segmented_download(
 
     let control = ControlFile {
         version: control::VERSION,
-        url: spec.url.clone(),
+        url: origin.url.clone(),
         total,
         etag: probe.etag.clone(),
         segments: Vec::new(),
@@ -876,10 +1030,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fisga-claim-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = File::create(dir.join("x")).unwrap();
+        let url = Url::parse("http://localhost/").unwrap();
         Ctx {
             client: Client::new(),
-            spec: RequestSpec::new("http://localhost/"),
-            url: Url::parse("http://localhost/").unwrap(),
+            origin: RequestSpec::new(url.as_str()),
+            source: Mutex::new(Source { url: url.clone(), spec: RequestSpec::new(url.as_str()), generation: 0 }),
+            renewing: tokio::sync::Mutex::new(()),
+            total: 0,
             etag: None,
             file: Arc::new(file),
             segments: Mutex::new(
@@ -1003,6 +1160,58 @@ mod tests {
         assert!(ctx.leave());
         assert!(!ctx.leave(), "the last one keeps trying");
         assert_eq!(ctx.workers.load(Ordering::SeqCst), 1);
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fisga-target-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// An unfinished download of `url` at `path`.
+    fn leave_partial(path: &Path, url: &str) {
+        std::fs::write(control::part_path(path), b"x").unwrap();
+        let saved = ControlFile { version: control::VERSION, url: url.into(), total: 1, etag: None, segments: Vec::new() };
+        control::save(&control::control_path(path), &saved).unwrap();
+    }
+
+    #[test]
+    fn a_folder_target_continues_only_its_own_partial_file() {
+        let dir = scratch("own");
+        let target = || Target::Dir { dir: dir.clone(), file_name: Some("a.jpg".into()) };
+        let first = resolve_target(target(), "x", "http://a/1", None).unwrap();
+        assert_eq!(first, dir.join("a.jpg"));
+        assert!(control::part_path(&first).exists(), "taken on disk right away");
+        assert_eq!(resolve_target(target(), "x", "http://a/2", None).unwrap(), dir.join("a (1).jpg"));
+        leave_partial(&first, "http://a/1");
+        assert_eq!(resolve_target(target(), "x", "http://a/1", None).unwrap(), first, "the same address continues");
+        assert_eq!(resolve_target(target(), "x", "http://a/3", None).unwrap(), dir.join("a (2).jpg"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_name_held_by_another_download_is_skipped() {
+        let dir = scratch("held");
+        let paths = Arc::new(filename::Paths::default());
+        let theirs = dir.join("a.jpg");
+        assert!(paths.take(1, &theirs));
+        std::fs::create_dir_all(&dir).unwrap();
+        leave_partial(&theirs, "http://a/1");
+        // Not even the same address takes over a partial file another download holds.
+        let mine = (paths.clone(), 2);
+        let target = Target::Dir { dir: dir.clone(), file_name: Some("a.jpg".into()) };
+        assert_eq!(resolve_target(target, "x", "http://a/1", Some(&mine)).unwrap(), dir.join("a (1).jpg"));
+        assert!(!paths.take(3, &dir.join("a (1).jpg")), "now download 2's");
+        assert!(resolve_target(Target::File(theirs), "x", "http://a/1", Some(&mine)).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn content_ranges() {
+        assert_eq!(content_range("bytes 0-1023/4096"), Some((0, 1023)));
+        assert_eq!(content_range("bytes 100-199/*"), Some((100, 199)));
+        assert_eq!(content_range("bytes */4096"), None);
+        assert_eq!(content_range("bytes 9-1/20"), None);
     }
 
     #[test]

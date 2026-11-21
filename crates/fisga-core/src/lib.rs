@@ -100,6 +100,8 @@ pub enum Error {
     Throttled { status: reqwest::StatusCode, retry_after: Option<Duration> },
     /// A 200 to a Range request: with `If-Range`, the file changed on the server.
     RangeIgnored,
+    /// The server did not answer in time (it may later: worth retrying).
+    Timeout,
     Cancelled,
     Other(String),
 }
@@ -115,6 +117,7 @@ impl std::fmt::Display for Error {
             Error::RangeIgnored => f.write_str(tr!(
                 "o servidor ignorou o Range: o arquivo mudou no servidor ou ele não aceita mais retomar"
             )),
+            Error::Timeout => f.write_str(tr!("tempo esgotado esperando a resposta do servidor")),
             Error::Cancelled => f.write_str(tr!("download cancelado")),
             Error::Other(text) => f.write_str(text),
         }

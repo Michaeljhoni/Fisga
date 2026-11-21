@@ -15,6 +15,7 @@ mod update;
 mod ytdlp;
 
 use std::io::IsTerminal;
+use std::path::Path;
 use std::sync::Arc;
 
 use fisga_ipc::transport::{BoxStream, Listener, WriteHalf};
@@ -50,12 +51,32 @@ async fn main() -> anyhow::Result<()> {
     fisga_ipc::init_language();
     init_logging();
 
+    if fisga_ipc::transport::connect().await.is_ok() {
+        tracing::info!("fisgad já está rodando");
+        return Ok(());
+    }
+    let store = dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("fisga").join("downloads.json");
+    // Taken before the socket: a second fisgad must not replace the first one's.
+    let _lock = match lock_store(&store) {
+        Ok(Some(lock)) => Some(lock),
+        Ok(None) => {
+            let message = trf!("outro fisgad já está usando a lista de downloads ({})", store.display());
+            tracing::error!("{message}");
+            anyhow::bail!(message);
+        }
+        // A file system without locks: as before, the socket alone keeps one fisgad.
+        Err(e) => {
+            tracing::warn!(error = %e, "não foi possível travar a lista de downloads");
+            None
+        }
+    };
     let Some(mut listener) = Listener::bind().await? else {
         tracing::info!("fisgad já está rodando");
         return Ok(());
     };
+    // The only fisgad from here on: no yt-dlp of another one reads them.
+    ytdlp::remove_leftover_cookies(&fisga_ipc::runtime_dir());
 
-    let store = dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("fisga").join("downloads.json");
     let settings = fisga_ipc::settings_path();
     let manager = Manager::load(store, settings)?;
     let gui = Gui::from_env();
@@ -108,6 +129,43 @@ async fn main() -> anyhow::Result<()> {
     let _ = restart;
     Ok(())
 }
+
+/// Holds `downloads.json.lock` while the returned file lives, so that two
+/// fisgad never run the same list: one whose socket the other did not see,
+/// or two starting at once. `Ok(None)`: another fisgad holds it.
+fn lock_store(store: &Path) -> std::io::Result<Option<std::fs::File>> {
+    let path = store.with_extension("json.lock");
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    // Nobody else may open it while this handle lives.
+    #[cfg(windows)]
+    std::os::windows::fs::OpenOptionsExt::share_mode(&mut options, 0);
+    let file = match options.open(&path) {
+        Ok(file) => file,
+        #[cfg(windows)]
+        Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        // SAFETY: flock on the descriptor `file` owns; the lock goes when it is closed.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let error = std::io::Error::last_os_error();
+            return match error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+                true => Ok(None),
+                false => Err(error),
+            };
+        }
+    }
+    Ok(Some(file))
+}
+
+#[cfg(windows)]
+const ERROR_SHARING_VIOLATION: i32 = 32;
 
 /// Resolves when the system asks the daemon to stop: SIGTERM or SIGINT.
 #[cfg(unix)]
@@ -276,7 +334,8 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, updater: Arc<Updater
                     }
                 }
                 // What was waiting for a GUI (it may have been launched for it).
-                for waiting in confirmer.then(|| gui.take_inbox()).unwrap_or_default() {
+                let inbox = if confirmer { gui.take_inbox() } else { Default::default() };
+                for waiting in inbox {
                     if write(&mut writer, &waiting).await.is_err() {
                         return;
                     }
@@ -307,6 +366,21 @@ fn result(r: anyhow::Result<()>) -> Response {
     match r {
         Ok(()) => Response::Ok,
         Err(e) => Response::Error { message: e.to_string() },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn one_daemon_per_download_list() {
+        let dir = std::env::temp_dir().join(format!("fisgad-lock-{}", std::process::id()));
+        let store = dir.join("downloads.json");
+        let first = super::lock_store(&store).unwrap();
+        assert!(first.is_some());
+        assert!(super::lock_store(&store).unwrap().is_none(), "taken");
+        drop(first);
+        assert!(super::lock_store(&store).unwrap().is_some(), "free again");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
 

@@ -15,7 +15,8 @@ use tokio_util::sync::CancellationToken;
 use fisga_i18n::{tr, trf};
 use url::Url;
 
-use crate::engine::{finalize, resolve_target, SpeedMeter};
+use crate::control::{ControlFile, SegmentState};
+use crate::engine::{finalize, limit, resolve_target, SpeedMeter, SAVE_EVERY};
 use crate::probe::ProbeResult;
 use crate::{control, filename, DownloadOptions, EngineEvent, Error, Outcome, Progress, RequestSpec, Result, Target};
 
@@ -45,13 +46,14 @@ impl Address {
         if path.is_empty() || path.ends_with('/') {
             return Err(Error::Other(tr!("o endereço FTP é de uma pasta, não de um arquivo").into()));
         }
-        if path.contains(['\r', '\n']) {
-            return Err(Error::Other(tr!("endereço FTP inválido").into()));
-        }
         let (user, password) = match url.username() {
             "" => ("anonymous".to_string(), "fisga@".to_string()),
             user => (decode(user), decode(url.password().unwrap_or_default())),
         };
+        // Each goes into a command line: a line break would add commands of its own.
+        if [&path, &user, &password].iter().any(|text| text.contains(['\r', '\n', '\0'])) {
+            return Err(Error::Other(tr!("endereço FTP inválido").into()));
+        }
         let name = filename::from_url(url).unwrap_or_else(|| "download".to_string());
         Ok(Address {
             host: host.trim_start_matches('[').trim_end_matches(']').to_string(),
@@ -224,6 +226,54 @@ pub async fn probe(spec: &RequestSpec) -> Result<ProbeResult> {
     Ok(ProbeResult { final_url: url, total, ranges: total.is_some(), file_name: address.name, content_type: None, etag: None })
 }
 
+/// Where an earlier attempt stopped. A control file (this engine's, or the
+/// HTTP engine's, whose connections write all over a preallocated part)
+/// says how far the part is complete from its start; a part without one is
+/// an older attempt of this engine's, written in order. Never past the file.
+fn resume_offset(final_path: &std::path::Path, total: Option<u64>) -> u64 {
+    let Some(total) = total else { return 0 };
+    let kept = std::fs::metadata(control::part_path(final_path)).map_or(0, |m| m.len());
+    let control_file = control::control_path(final_path);
+    let done = match control::load(&control_file) {
+        Some(saved) if saved.total == total => control::done_prefix(&saved.segments),
+        // Another file's, or unreadable.
+        Some(_) => 0,
+        None if control_file.exists() => 0,
+        None => kept,
+    };
+    if kept > total {
+        0
+    } else {
+        done.min(kept)
+    }
+}
+
+/// Records that the part holds `done` bytes in order from its start, so this
+/// engine and the HTTP one can continue it. Without a size there is nothing
+/// to continue: an old control file goes away, never to claim more than the
+/// part holds.
+async fn save_progress(final_path: &std::path::Path, url: &str, total: Option<u64>, done: u64) {
+    let path = control::control_path(final_path);
+    let record = total.filter(|total| *total > 0).map(|total| ControlFile {
+        version: control::VERSION,
+        url: url.to_string(),
+        total,
+        etag: None,
+        segments: vec![SegmentState { start: 0, end: total - 1, done }],
+    });
+    let saved = tokio::task::spawn_blocking(move || match record {
+        Some(record) => control::save(&path, &record),
+        None => match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        },
+    })
+    .await;
+    if !matches!(saved, Ok(Ok(()))) {
+        tracing::warn!(path = %final_path.display(), "não foi possível salvar o arquivo de controle");
+    }
+}
+
 pub async fn download(
     spec: &RequestSpec,
     target: Target,
@@ -244,14 +294,12 @@ pub async fn download(
         connected = connect => connected?,
     };
 
-    let final_path = resolve_target(target, &address.name);
+    let final_path = resolve_target(target, &address.name, &spec.url, opts.paths.as_ref())?;
     if let Some(parent) = final_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
     let part = control::part_path(&final_path);
-    // What an earlier attempt left, unless it is already more than the file.
-    let kept = tokio::fs::metadata(&part).await.map(|m| m.len()).unwrap_or(0);
-    let mut offset = if total.is_some_and(|total| kept <= total) { kept } else { 0 };
+    let mut offset = resume_offset(&final_path, total);
     let _ = events.send(EngineEvent::Started { path: final_path.clone(), total, resumable: total.is_some() });
     if total == Some(0) {
         control.quit().await;
@@ -270,6 +318,8 @@ pub async fn download(
         return Err(retrieve.error(tr!("ao pedir o arquivo")));
     }
 
+    // Before the part is cut at `offset`: from now on it holds only that much.
+    save_progress(&final_path, &spec.url, total, offset).await;
     let mut file = tokio::fs::OpenOptions::new().create(true).write(true).truncate(offset == 0).open(&part).await?;
     if offset > 0 {
         file.set_len(offset).await?;
@@ -278,6 +328,7 @@ pub async fn download(
     let mut downloaded = offset;
     let mut meter = SpeedMeter::new(downloaded);
     let mut last_report = Instant::now();
+    let mut last_save = Instant::now();
     let mut buffer = vec![0u8; CHUNK];
     let paused = loop {
         let read = tokio::select! {
@@ -293,8 +344,8 @@ pub async fn download(
         }
         file.write_all(&buffer[..n]).await?;
         downloaded += n as u64;
-        for limiter in &opts.limiters {
-            limiter.consume(n).await;
+        if !limit(&opts.limiters, n, &cancel).await {
+            break true;
         }
         if last_report.elapsed() >= Duration::from_millis(500) {
             last_report = Instant::now();
@@ -302,11 +353,19 @@ pub async fn download(
             let progress = Progress { downloaded, total, speed, active_connections: 1, segments: Vec::new() };
             let _ = events.send(EngineEvent::Progress(progress));
         }
+        if last_save.elapsed() >= SAVE_EVERY {
+            last_save = Instant::now();
+            // On disk first: the record never claims bytes a power cut lost.
+            file.flush().await?;
+            file.sync_data().await?;
+            save_progress(&final_path, &spec.url, total, downloaded).await;
+        }
     };
     file.flush().await?;
     file.sync_all().await?;
     drop(file);
     drop(data);
+    save_progress(&final_path, &spec.url, total, downloaded).await;
     if paused {
         // What arrived stays for `REST` next time.
         tokio::spawn(control.quit());
@@ -348,6 +407,10 @@ mod tests {
         assert_eq!(login.path, "/home/ana/a.zip", "%2F: from the root");
         assert!(at("ftp://ftp.exemplo.com/pub/").is_err(), "a folder");
         assert!(at("ftp://ftp.exemplo.com/a%0D%0ADELE%20b").is_err(), "no commands smuggled in the path");
+        assert!(at("ftp://ana%0D%0ADELE%20b:x@ftp.exemplo.com/a.zip").is_err(), "nor in the user");
+        assert!(at("ftp://ana:x%0ADELE%20b@ftp.exemplo.com/a.zip").is_err(), "nor in the password");
+        assert!(at("ftp://ana:x%00y@ftp.exemplo.com/a.zip").is_err());
+        assert!(at("ftp://ftp.exemplo.com/a%00.zip").is_err());
         assert!(is_ftp("FTP://x/a") && !is_ftp("https://x/a"));
     }
 
@@ -360,13 +423,15 @@ mod tests {
     }
 
     /// A tiny FTP server for one file, serving each session in turn. `epsv`:
-    /// it knows EPSV (else only PASV). Returns its address and the commands seen.
-    async fn server(content: Vec<u8>, epsv: bool) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    /// it knows EPSV (else only PASV); `cut`: the first transfer stops after
+    /// that many bytes (0: none). Returns its address and the commands seen.
+    async fn server(content: Vec<u8>, epsv: bool, cut: usize) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let log = seen.clone();
         tokio::spawn(async move {
+            let mut cut = cut;
             while let Ok((socket, _)) = listener.accept().await {
                 let (reader, mut writer) = socket.into_split();
                 let mut lines = BufReader::new(reader).lines();
@@ -400,7 +465,11 @@ mod tests {
                         "RETR" => {
                             writer.write_all(b"150 abrindo\r\n").await.unwrap();
                             let (mut socket, _) = data.take().unwrap().accept().await.unwrap();
-                            socket.write_all(&content[rest..]).await.unwrap();
+                            let end = match std::mem::take(&mut cut) {
+                                0 => content.len(),
+                                cut => (rest + cut).min(content.len()),
+                            };
+                            socket.write_all(&content[rest..end]).await.unwrap();
                             drop(socket);
                             rest = 0;
                             "226 enviado\r\n".to_string()
@@ -437,7 +506,7 @@ mod tests {
     #[tokio::test]
     async fn downloads_a_file() {
         for epsv in [true, false] {
-            let (base, seen) = server(content(), epsv).await;
+            let (base, seen) = server(content(), epsv, 0).await;
             let probe = probe(&RequestSpec::new(format!("{base}/pub/a.bin"))).await.unwrap();
             assert_eq!((probe.total, probe.ranges, probe.file_name.as_str()), (Some(300_000), true, "a.bin"));
             let dir = scratch(&format!("whole-{epsv}"));
@@ -450,20 +519,102 @@ mod tests {
         }
     }
 
+    /// What an earlier attempt at `url` left in `dir`: `done` bytes of `a.bin`.
+    fn earlier_attempt(dir: &std::path::Path, url: &str, done: usize) {
+        let path = dir.join("a.bin");
+        std::fs::write(control::part_path(&path), &content()[..done]).unwrap();
+        let segments = vec![control::SegmentState { start: 0, end: 299_999, done: done as u64 }];
+        let saved = control::ControlFile { version: control::VERSION, url: url.into(), total: 300_000, etag: None, segments };
+        control::save(&control::control_path(&path), &saved).unwrap();
+    }
+
     #[tokio::test]
     async fn resumes_where_it_stopped() {
-        let (base, seen) = server(content(), true).await;
+        let (base, seen) = server(content(), true, 0).await;
         let dir = scratch("resume");
-        std::fs::write(dir.join("a.bin.fisga-part"), &content()[..100_000]).unwrap();
-        let Outcome::Completed(path) = fetch(&format!("{base}/pub/a.bin"), &dir).await.unwrap() else { panic!() };
+        let url = format!("{base}/pub/a.bin");
+        earlier_attempt(&dir, &url, 100_000);
+        let Outcome::Completed(path) = fetch(&url, &dir).await.unwrap() else { panic!() };
+        assert_eq!(path, dir.join("a.bin"));
         assert_eq!(std::fs::read(&path).unwrap(), content());
         assert!(seen.lock().unwrap().contains(&"REST 100000".to_string()));
+        assert!(!control::control_path(&path).exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_transfer_cut_short_continues_where_it_stopped() {
+        let (base, seen) = server(content(), true, 120_000).await;
+        let dir = scratch("cut");
+        let url = format!("{base}/pub/a.bin");
+        let error = fetch(&url, &dir).await.unwrap_err().to_string();
+        assert!(error.contains("120000"), "{error}");
+        let saved = control::load(&control::control_path(&dir.join("a.bin"))).unwrap();
+        assert_eq!(control::done_prefix(&saved.segments), 120_000);
+        let Outcome::Completed(path) = fetch(&url, &dir).await.unwrap() else { panic!() };
+        assert_eq!(std::fs::read(&path).unwrap(), content());
+        assert!(seen.lock().unwrap().contains(&"REST 120000".to_string()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn continues_an_http_download_from_its_complete_start() {
+        let (base, seen) = server(content(), true, 0).await;
+        let dir = scratch("from-http");
+        let url = format!("{base}/pub/a.bin");
+        let path = dir.join("a.bin");
+        // The HTTP engine's part: as big as the file, with holes of zeros.
+        let mut part = content();
+        part[100_000..200_000].fill(0);
+        part[250_000..].fill(0);
+        std::fs::write(control::part_path(&path), &part).unwrap();
+        let segments = vec![
+            SegmentState { start: 0, end: 99_999, done: 100_000 },
+            SegmentState { start: 100_000, end: 199_999, done: 0 },
+            SegmentState { start: 200_000, end: 299_999, done: 50_000 },
+        ];
+        let saved = ControlFile { version: control::VERSION, url: url.clone(), total: 300_000, etag: None, segments };
+        control::save(&control::control_path(&path), &saved).unwrap();
+        let Outcome::Completed(done) = fetch(&url, &dir).await.unwrap() else { panic!() };
+        assert_eq!(done, path);
+        assert!(std::fs::read(&path).unwrap() == content(), "holes of zeros left in the file");
+        assert!(seen.lock().unwrap().contains(&"REST 100000".to_string()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn where_an_earlier_attempt_stopped() {
+        let dir = scratch("offset");
+        let path = dir.join("a.bin");
+        assert_eq!(resume_offset(&path, Some(300_000)), 0, "nothing yet");
+        std::fs::write(control::part_path(&path), &content()[..1000]).unwrap();
+        assert_eq!(resume_offset(&path, Some(300_000)), 1000, "an older attempt of this engine's");
+        assert_eq!(resume_offset(&path, Some(500)), 0, "more than the file");
+        assert_eq!(resume_offset(&path, None), 0);
+        std::fs::write(control::control_path(&path), b"{").unwrap();
+        assert_eq!(resume_offset(&path, Some(300_000)), 0, "a control file that cannot be read");
+        earlier_attempt(&dir, "ftp://x/a.bin", 600);
+        assert_eq!(resume_offset(&path, Some(300_000)), 600);
+        assert_eq!(resume_offset(&path, Some(299_999)), 0, "another file's");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_partial_file_of_another_address_is_left_alone() {
+        let (base, seen) = server(content(), true, 0).await;
+        let dir = scratch("other");
+        earlier_attempt(&dir, "ftp://outro.exemplo.com/a.bin", 100_000);
+        let Outcome::Completed(path) = fetch(&format!("{base}/pub/a.bin"), &dir).await.unwrap() else { panic!() };
+        assert_eq!(path, dir.join("a (1).bin"));
+        assert_eq!(std::fs::read(&path).unwrap(), content());
+        assert_eq!(std::fs::read(dir.join("a.bin.fisga-part")).unwrap(), &content()[..100_000]);
+        assert!(!seen.lock().unwrap().iter().any(|command| command.starts_with("REST")));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
     async fn says_what_went_wrong() {
-        let (base, _) = server(content(), true).await;
+        let (base, _) = server(content(), true, 0).await;
         let dir = scratch("errors");
         let missing = fetch(&format!("{base}/pub/outro.bin"), &dir).await.unwrap_err().to_string();
         assert!(missing.contains("não existe"), "{missing}");

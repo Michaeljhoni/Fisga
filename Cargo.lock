@@ -603,6 +603,7 @@ dependencies = [
  "fisga-core",
  "fisga-i18n",
  "fisga-ipc",
+ "libc",
  "reqwest",
  "ring",
  "serde",
@@ -612,6 +613,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

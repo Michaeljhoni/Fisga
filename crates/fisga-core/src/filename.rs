@@ -82,6 +82,11 @@ pub fn sanitize(name: &str) -> String {
         .collect();
     let trimmed = cleaned.trim().trim_matches('.').trim();
     let mut out = String::new();
+    // Windows opens a device for these names, with any extension: the file
+    // could not be created there, nor copied there later.
+    if is_device_name(trimmed) {
+        out.push('_');
+    }
     for c in trimmed.chars() {
         if out.len() + c.len_utf8() > 200 {
             break;
@@ -92,6 +97,16 @@ pub fn sanitize(name: &str) -> String {
         "download".to_string()
     } else {
         out
+    }
+}
+
+/// CON, PRN, AUX, NUL, COM1-9 and LPT1-9, in any case, before the first dot.
+fn is_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
+    match stem.as_bytes() {
+        b"CON" | b"PRN" | b"AUX" | b"NUL" => true,
+        [b'C', b'O', b'M', digit] | [b'L', b'P', b'T', digit] => (b'1'..=b'9').contains(digit),
+        _ => false,
     }
 }
 
@@ -167,6 +182,25 @@ mod tests {
         assert_eq!(sanitize("../etc/passwd"), "_etc_passwd");
         assert_eq!(sanitize("  "), "download");
         assert_eq!(sanitize("a\nb.mp4"), "a_b.mp4");
+    }
+
+    #[test]
+    fn windows_device_names_are_not_used() {
+        for (name, safe) in [
+            ("CON", "_CON"),
+            ("nul.txt", "_nul.txt"),
+            ("Aux.tar.gz", "_Aux.tar.gz"),
+            ("com1.jpg", "_com1.jpg"),
+            ("LPT9", "_LPT9"),
+            ("prn .txt", "_prn .txt"),
+            ("com10.jpg", "com10.jpg"),
+            ("com0", "com0"),
+            ("console.log", "console.log"),
+            ("lpt.txt", "lpt.txt"),
+            ("my con.txt", "my con.txt"),
+        ] {
+            assert_eq!(sanitize(name), safe, "{name}");
+        }
     }
 
     #[test]

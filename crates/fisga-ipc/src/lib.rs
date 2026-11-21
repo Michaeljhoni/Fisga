@@ -1610,14 +1610,20 @@ pub async fn is_running() -> bool {
     matches!(call(&Request::Ping).await, Ok(Response::Pong { .. }))
 }
 
-/// Path of a sibling executable (installed next to the current one), falling
-/// back to a `$PATH` lookup.
+/// Path of a sibling executable: installed next to the current one, or else
+/// found in `$PATH`; the bare name (for the system's own lookup) when not found.
 pub fn sibling_executable(name: &str) -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .map(|exe| exe.with_file_name(format!("{name}{}", std::env::consts::EXE_SUFFIX)))
-        .filter(|path| path.exists())
-        .unwrap_or_else(|| PathBuf::from(name))
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    find_executable(name, std::env::current_exe().ok(), &path).unwrap_or_else(|| PathBuf::from(name))
+}
+
+/// The program `name` next to `exe`, or else in a folder of `path`: a file,
+/// never a folder, nor one in the current folder (a relative entry).
+fn find_executable(name: &str, exe: Option<PathBuf>, path: &std::ffi::OsStr) -> Option<PathBuf> {
+    let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    let beside = exe.map(|exe| exe.with_file_name(&file));
+    let in_path = std::env::split_paths(path).filter(|dir| dir.is_absolute()).map(|dir| dir.join(&file));
+    beside.into_iter().chain(in_path).find(|candidate| candidate.is_file())
 }
 
 /// Starts `fisgad` in its own session if it is not running, and waits for its socket.
@@ -2037,6 +2043,25 @@ mod tests {
         assert!(parse_url_list("nada aqui").is_empty());
         let request: Request = serde_json::from_str(r#"{"type":"add_batch","urls":["https://e.com/a"]}"#).unwrap();
         assert!(matches!(request, Request::AddBatch { start: true, queue: None, .. }));
+    }
+
+    #[test]
+    fn executables_next_to_this_one_or_in_path() {
+        let root = std::env::temp_dir().join(format!("fisga-exe-{}", std::process::id()));
+        let (app, bin, other) = (root.join("app"), root.join("bin"), root.join("other"));
+        let file = format!("fisga-teste{}", std::env::consts::EXE_SUFFIX);
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(other.join(&file)).unwrap();
+        std::fs::write(bin.join(&file), b"").unwrap();
+        let path = std::env::join_paths([PathBuf::from("relativa"), other.clone(), bin.clone()]).unwrap();
+        let found = |exe: Option<PathBuf>, path: &std::ffi::OsStr| find_executable("fisga-teste", exe, path);
+        assert_eq!(found(None, &path), Some(bin.join(&file)), "a folder with the name is not the program");
+        assert_eq!(found(Some(app.join("fisga")), &path), Some(bin.join(&file)));
+        std::fs::write(app.join(&file), b"").unwrap();
+        assert_eq!(found(Some(app.join("fisga")), &path), Some(app.join(&file)), "next to this one first");
+        assert_eq!(found(None, std::ffi::OsStr::new("relativa")), None, "never from the current folder");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

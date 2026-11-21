@@ -122,12 +122,8 @@ fn write_manifest(dir: &Path, manifest: &serde_json::Value) -> anyhow::Result<Pa
 }
 
 pub fn install(extra_chrome_ids: &[String], uninstall: bool) -> anyhow::Result<()> {
-    let host = fisga_ipc::sibling_executable("fisga-native-host");
-    let host = host
-        .canonicalize()
-        .with_context(|| trf!("fisga-native-host não encontrado ({}); instale-o junto com o fisga", host.display()))?;
-    let host = plain_path(host);
-
+    // Removing the registrations needs no host (it may be gone already).
+    let host = if uninstall { PathBuf::new() } else { native_host()? };
     let (chrome_manifest, firefox_manifest) = manifests(&host, extra_chrome_ids);
     register(&chrome_manifest, &firefox_manifest, uninstall)?;
     if !uninstall {
@@ -135,6 +131,14 @@ pub fn install(extra_chrome_ids: &[String], uninstall: bool) -> anyhow::Result<(
         println!("{}", tr!("Recarregue a extensão no navegador para ela encontrar o app."));
     }
     Ok(())
+}
+
+/// `fisga-native-host` next to this `fisga`, or else in `$PATH`; never one in
+/// the current folder, which the browsers would then run.
+fn native_host() -> anyhow::Result<PathBuf> {
+    let host = fisga_ipc::sibling_executable("fisga-native-host");
+    anyhow::ensure!(host.is_absolute(), tr!("fisga-native-host não encontrado ao lado do fisga nem no PATH; instale-o junto com o fisga"));
+    Ok(plain_path(host.canonicalize()?))
 }
 
 /// Windows' `canonicalize` gives `\\?\C:\...`, which browsers do not take as

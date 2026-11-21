@@ -45,6 +45,24 @@ pub struct ControlFile {
 
 pub const VERSION: u32 = 1;
 
+/// How far the file is complete from its start, up to the first byte not
+/// downloaded yet: what a single connection (FTP) can continue from.
+pub fn done_prefix(segments: &[SegmentState]) -> u64 {
+    let mut sorted = segments.to_vec();
+    sorted.sort_by_key(|segment| segment.start);
+    let mut prefix = 0;
+    for segment in sorted {
+        if segment.start > prefix {
+            break;
+        }
+        prefix = prefix.max(segment.pos());
+        if segment.remaining() > 0 {
+            break;
+        }
+    }
+    prefix
+}
+
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut os = path.as_os_str().to_owned();
     os.push(suffix);
@@ -95,4 +113,23 @@ pub fn save(path: &Path, control: &ControlFile) -> io::Result<()> {
         let _ = std::fs::File::open(dir).and_then(|dir| dir.sync_all());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn segment(start: u64, end: u64, done: u64) -> SegmentState {
+        SegmentState { start, end, done }
+    }
+
+    #[test]
+    fn complete_from_the_start_up_to_the_first_gap() {
+        assert_eq!(done_prefix(&[]), 0);
+        assert_eq!(done_prefix(&[segment(0, 99, 100), segment(100, 199, 50)]), 150);
+        assert_eq!(done_prefix(&[segment(100, 199, 100), segment(0, 99, 100)]), 200, "in any order");
+        assert_eq!(done_prefix(&[segment(0, 99, 10), segment(100, 199, 100)]), 10);
+        assert_eq!(done_prefix(&[segment(0, 99, 100), segment(150, 199, 50)]), 100, "a hole");
+        assert_eq!(done_prefix(&[segment(50, 99, 50)]), 0);
+    }
 }

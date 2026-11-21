@@ -42,7 +42,7 @@ const TICK: Duration = Duration::from_secs(1);
 /// The longest wait a server's `Retry-After` gets.
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(120);
 /// The data is forced to disk, then the control file saved, this often.
-const SAVE_EVERY: Duration = Duration::from_secs(2);
+pub(crate) const SAVE_EVERY: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone)]
 pub struct DownloadOptions {

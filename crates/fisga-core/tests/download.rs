@@ -282,6 +282,77 @@ async fn busy_server_gets_fewer_connections() {
     assert!(refused <= 10, "{refused} requests refused");
 }
 
+/// `/start` redirects to `/file/<n>`, a signed link: after `expire_after`
+/// answers it expires (403) and `/start` gives the next one. Returns the
+/// address and how many times `/start` was asked.
+async fn expiring_server(data: Arc<Vec<u8>>, expire_after: usize) -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/start", listener.local_addr().unwrap());
+    let starts = Arc::new(AtomicUsize::new(0));
+    let counter = starts.clone();
+    let (link, answers) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let (data, starts, link, answers) = (data.clone(), counter.clone(), link.clone(), answers.clone());
+            tokio::spawn(async move {
+                let mut head = vec![0; 4096];
+                let read = socket.read(&mut head).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&head[..read]).to_ascii_lowercase();
+                let path = head.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let current = link.load(Ordering::SeqCst);
+                if path == "/start" {
+                    starts.fetch_add(1, Ordering::SeqCst);
+                    let reply = format!("HTTP/1.1 302 Found\r\nLocation: /file/{current}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    let _ = socket.write_all(reply.as_bytes()).await;
+                    return;
+                }
+                if path != format!("/file/{current}") {
+                    let _ = socket.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                    return;
+                }
+                if answers.fetch_add(1, Ordering::SeqCst) + 1 == expire_after {
+                    link.fetch_add(1, Ordering::SeqCst);
+                }
+                let (start, end) = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("range: bytes="))
+                    .and_then(|range| {
+                        let (start, end) = range.trim().split_once('-')?;
+                        Some((start.parse::<usize>().ok()?, end.parse::<usize>().ok()?.min(data.len() - 1)))
+                    })
+                    .unwrap_or((0, data.len() - 1));
+                let reply = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nContent-Disposition: attachment; filename=\"expira.bin\"\r\nConnection: close\r\n\r\n",
+                    end + 1 - start,
+                    data.len()
+                );
+                let _ = socket.write_all(reply.as_bytes()).await;
+                for chunk in data[start..=end].chunks(16 * 1024) {
+                    if socket.write_all(chunk).await.is_err() {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            });
+        }
+    });
+    (url, starts)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_expired_redirect_target_is_asked_for_again() {
+    let data = test_data(4 * 1024 * 1024);
+    // The probe and two segments, then the link expires.
+    let (url, starts) = expiring_server(data.clone(), 3).await;
+    let dir = temp_dir("expiring");
+
+    let (result, _) = run(&url, Target::Dir { dir: dir.clone(), file_name: None }, 4, CancellationToken::new()).await;
+    let Outcome::Completed(path) = result.unwrap() else { panic!("not completed") };
+    assert_eq!(path, dir.join("expira.bin"));
+    assert_eq!(std::fs::read(&path).unwrap(), *data);
+    assert!(starts.load(Ordering::SeqCst) >= 2, "a new link came from the address asked for");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn empty_file_is_downloaded() {
     // An empty file has no byte 0: 416 with `bytes */0` to the probe's range.

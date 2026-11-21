@@ -134,9 +134,6 @@ pub async fn download(
         _ = cancel.cancelled() => return Err(Error::Cancelled),
         p = probe_within(client, spec, opts.idle_timeout) => p?,
     };
-    // The data comes from the redirect's target: credentials only if it is the same host.
-    let followed = spec.for_final_url(&probe.final_url);
-    let spec = &followed;
 
     let final_path = resolve_target(target, &probe.file_name, &spec.url, opts.paths.as_ref())?;
     if let Some(parent) = final_path.parent() {
@@ -158,7 +155,9 @@ pub async fn download(
     if segmented {
         segmented_download(client, spec, &probe, final_path, opts, events, cancel).await
     } else {
-        single_stream(client, spec, &probe, final_path, opts, events, cancel).await
+        // The data comes from the redirect's target: credentials only if it is the same host.
+        let followed = spec.for_final_url(&probe.final_url);
+        single_stream(client, &followed, &probe, final_path, opts, events, cancel).await
     }
 }
 
@@ -388,10 +387,23 @@ enum Exit {
     Left,
 }
 
+/// Where the data comes from: the redirect's target, with its headers.
+#[derive(Clone)]
+struct Source {
+    url: Url,
+    spec: RequestSpec,
+    /// How many targets were found after the first one.
+    generation: u32,
+}
+
 struct Ctx {
     client: Client,
-    spec: RequestSpec,
-    url: Url,
+    /// The address asked for, with all its headers: a new redirect target comes from it.
+    origin: RequestSpec,
+    source: Mutex<Source>,
+    /// One look for a new redirect target at a time.
+    renewing: tokio::sync::Mutex<()>,
+    total: u64,
     etag: Option<String>,
     file: Arc<File>,
     segments: Mutex<Vec<Segment>>,
@@ -564,16 +576,56 @@ impl Ctx {
         Ok(())
     }
 
+    fn generation(&self) -> u32 {
+        self.source.lock().unwrap().generation
+    }
+
+    /// Signed links expire: the redirect's target then refuses (401, 403,
+    /// 410) what it served before. The address asked for gives a new one,
+    /// taken when it serves the same file (size and ETag). True when there
+    /// is a new target to try, found by this connection or another one.
+    async fn renew(&self, seen: u32) -> bool {
+        let _one = self.renewing.lock().await;
+        let current = self.source.lock().unwrap().clone();
+        if current.generation != seen {
+            return true;
+        }
+        // Not redirected: the address itself refuses.
+        if Url::parse(&self.origin.url).is_ok_and(|origin| origin == current.url) {
+            return false;
+        }
+        let probe = tokio::select! {
+            _ = self.cancel.cancelled() => return false,
+            probe = probe_within(&self.client, &self.origin, self.idle_timeout) => probe,
+        };
+        match probe {
+            Ok(probe)
+                if probe.ranges
+                    && probe.total == Some(self.total)
+                    && (self.etag.is_none() || probe.etag == self.etag)
+                    && probe.final_url != current.url =>
+            {
+                tracing::info!("o destino do redirecionamento expirou; continuando por um novo");
+                let spec = self.origin.for_final_url(&probe.final_url);
+                *self.source.lock().unwrap() = Source { url: probe.final_url, spec, generation: seen + 1 };
+                true
+            }
+            Ok(_) => false,
+            Err(e) => {
+                tracing::warn!(error = %e, "não foi possível obter um novo destino do redirecionamento");
+                false
+            }
+        }
+    }
+
     /// Downloads the rest of segment `index` with one HTTP request.
     async fn fetch_segment(&self, index: usize) -> Result<()> {
         let (from, end) = self.bounds(index);
         if from > end || self.gone(index, from) {
             return Ok(());
         }
-        let mut request = self
-            .spec
-            .apply(self.client.get(self.url.clone()))
-            .header(RANGE, format!("bytes={from}-{end}"));
+        let Source { url, spec, .. } = self.source.lock().unwrap().clone();
+        let mut request = spec.apply(self.client.get(url)).header(RANGE, format!("bytes={from}-{end}"));
         if let Some(etag) = &self.etag {
             request = request.header(IF_RANGE, etag.as_str());
         }
@@ -691,6 +743,11 @@ fn backoff(failures: u32) -> Duration {
     Duration::from_secs((2 * u64::from(failures)).min(30))
 }
 
+/// What a signed link answers once it expired.
+fn expired(error: &Error) -> bool {
+    matches!(error, Error::Status(status) if matches!(status.as_u16(), 401 | 403 | 410))
+}
+
 async fn sleep_or_cancel(cancel: &CancellationToken, duration: Duration) -> bool {
     tokio::select! {
         _ = cancel.cancelled() => false,
@@ -740,6 +797,7 @@ async fn work(ctx: &Ctx, delay: Duration) -> Result<Exit> {
         let mut failures = 0u32;
         loop {
             let before = ctx.bounds(index).0;
+            let generation = ctx.generation();
             let e = match ctx.fetch_segment(index).await {
                 Ok(()) => break,
                 Err(_) if ctx.cancel.is_cancelled() => {
@@ -754,11 +812,13 @@ async fn work(ctx: &Ctx, delay: Duration) -> Result<Exit> {
             }
             failures += 1;
             tracing::warn!(segment = index, attempt = failures, error = %e, "segmento falhou");
-            if e.is_permanent() || failures > ctx.max_retries {
+            let renewed = expired(&e) && ctx.renew(generation).await;
+            if (e.is_permanent() && !renewed) || failures > ctx.max_retries {
                 ctx.release(index);
                 return Err(e);
             }
             let wait = match &e {
+                _ if renewed => Duration::ZERO,
                 Error::Throttled { retry_after, .. } => {
                     // The server wants fewer connections: this one leaves, unless it is the last.
                     if ctx.leave() {
@@ -799,9 +859,11 @@ async fn persist(ctx: &Ctx, path: &Path, mut control: ControlFile) {
     }
 }
 
+/// `origin`: the address asked for, with all its headers (the data comes
+/// from the redirect's target, `probe.final_url`).
 async fn segmented_download(
     client: &Client,
-    spec: &RequestSpec,
+    origin: &RequestSpec,
     probe: &ProbeResult,
     final_path: PathBuf,
     opts: &DownloadOptions,
@@ -830,8 +892,14 @@ async fn segmented_download(
     let connections = opts.connections.max(1);
     let ctx = Arc::new(Ctx {
         client: client.clone(),
-        spec: spec.clone(),
-        url: probe.final_url.clone(),
+        origin: origin.clone(),
+        source: Mutex::new(Source {
+            url: probe.final_url.clone(),
+            spec: origin.for_final_url(&probe.final_url),
+            generation: 0,
+        }),
+        renewing: tokio::sync::Mutex::new(()),
+        total,
         etag: probe.etag.clone(),
         file: Arc::new(file),
         segments: Mutex::new(states.into_iter().map(|state| Segment::new(state, false)).collect()),
@@ -847,7 +915,7 @@ async fn segmented_download(
 
     let control = ControlFile {
         version: control::VERSION,
-        url: spec.url.clone(),
+        url: origin.url.clone(),
         total,
         etag: probe.etag.clone(),
         segments: Vec::new(),
@@ -932,10 +1000,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fisga-claim-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = File::create(dir.join("x")).unwrap();
+        let url = Url::parse("http://localhost/").unwrap();
         Ctx {
             client: Client::new(),
-            spec: RequestSpec::new("http://localhost/"),
-            url: Url::parse("http://localhost/").unwrap(),
+            origin: RequestSpec::new(url.as_str()),
+            source: Mutex::new(Source { url: url.clone(), spec: RequestSpec::new(url.as_str()), generation: 0 }),
+            renewing: tokio::sync::Mutex::new(()),
+            total: 0,
             etag: None,
             file: Arc::new(file),
             segments: Mutex::new(

@@ -345,6 +345,26 @@ test("a download Chrome names later is judged by that name", async () => {
   assert.deepEqual(downloadsSent(bg).map((m) => m.fileName), ["model.zip"]);
 });
 
+// ------------------------------------------------------ the sniffed list
+test("a malformed escape in an address keeps the list", async () => {
+  const bg = load();
+  await sniff(bg, { url: "https://cdn.example/v/%E0%A4%A.mp4", type: "video/mp4", length: MB });
+  await sniff(bg, { url: "https://cdn.example/v/ok%20file.mp4", type: "video/mp4", length: MB });
+  const items = plain(await bg.run("candidatesFor")(1, "https://site.example/", "https://site.example/"));
+  assert.deepEqual(items.filter((i) => i.kind === "direct").map((i) => i.label).sort(), ["%E0%A4%A.mp4", "ok file.mp4"]);
+});
+
+test("a stream's segments and a full list do not push the master playlist out", async () => {
+  const bg = load();
+  await sniff(bg, { url: "https://cdn.example/live/master.m3u8", type: HLS });
+  for (let i = 0; i < 70; i++) await sniff(bg, { url: `https://cdn.example/live/720p/seg-${i}.mp4`, type: "video/mp4", length: MB });
+  for (let i = 0; i < 70; i++) await sniff(bg, { url: `https://other.example/clips/${i}.mp4`, type: "video/mp4", length: MB });
+  const list = plain(bg.run("mediaByTab.get(1)"));
+  assert.equal(list.length, 60);
+  assert.equal(list[0].url, "https://cdn.example/live/master.m3u8");
+  assert.ok(!list.some((c) => c.url.includes("/live/720p/")), "no segments");
+});
+
 // --------------------------------------------------- frames and cookies
 test("what a frame loaded goes with the frame's address (popup)", async () => {
   const tab = { id: 1, url: "https://news.example/article" };

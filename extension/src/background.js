@@ -264,6 +264,15 @@ function classify(details) {
   return { url: details.url, kind: "direct", contentType, size };
 }
 
+/** Under the folder of a manifest: a segment of that stream (fMP4), not a file of its own. */
+function underManifest(url, manifestUrl) {
+  const u = parseUrl(url);
+  const m = parseUrl(manifestUrl);
+  if (!u || !m || u.origin !== m.origin) return false;
+  const folder = m.pathname.slice(0, m.pathname.lastIndexOf("/") + 1);
+  return folder.length > 1 && u.pathname.startsWith(folder);
+}
+
 async function record(tabId, frameId, candidate) {
   await restore();
   const list = mediaByTab.get(tabId) ?? [];
@@ -271,8 +280,14 @@ async function record(tabId, frameId, candidate) {
   if (existing) {
     existing.size = candidate.size ?? existing.size;
   } else {
+    if (candidate.kind === "direct" && list.some((c) => c.kind === "stream" && underManifest(candidate.url, c.url))) return;
     list.push({ ...candidate, frameId, ts: Date.now() });
-    if (list.length > MAX_PER_TAB) list.shift();
+    // Full: the oldest file goes, then the oldest stream (the first manifest
+    // is usually the master playlist).
+    if (list.length > MAX_PER_TAB) {
+      const file = list.findIndex((c) => c.kind === "direct");
+      list.splice(file >= 0 ? file : 0, 1);
+    }
   }
   mediaByTab.set(tabId, list);
   persist();
@@ -327,7 +342,10 @@ function formatSize(bytes) {
 
 function describe(candidate) {
   const u = parseUrl(candidate.url);
-  const name = decodeURIComponent(u?.pathname.split("/").filter(Boolean).pop() ?? candidate.url);
+  let name = u?.pathname.split("/").filter(Boolean).pop() ?? candidate.url;
+  try {
+    name = decodeURIComponent(name);
+  } catch {} // a malformed escape (%E0%A4%A): the name as it is
   const type =
     candidate.kind === "stream"
       ? /mpd/i.test(candidate.url) || /dash/i.test(candidate.contentType) ? "DASH" : "HLS"

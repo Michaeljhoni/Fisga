@@ -54,6 +54,8 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("fisgad já está rodando");
         return Ok(());
     };
+    // The only fisgad from here on: no yt-dlp of another one reads them.
+    ytdlp::remove_leftover_cookies(&fisga_ipc::runtime_dir());
 
     let store = dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("fisga").join("downloads.json");
     let settings = fisga_ipc::settings_path();

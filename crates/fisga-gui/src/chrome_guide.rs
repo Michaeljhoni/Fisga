@@ -71,15 +71,21 @@ fn buttons(list: &[&gtk::Button]) -> gtk::Widget {
     row.upcast()
 }
 
+/// A long path broken only after its separators: a break inside a folder name
+/// shows a hyphen that is not in it. The zero-width spaces are only shown; the
+/// button copies the path itself.
+fn breakable(path: &str) -> String {
+    path.replace('/', "/\u{200b}").replace('\\', "\\\u{200b}")
+}
+
 /// The folder to pick, with buttons to copy it and to open it.
 fn folder_widget(dir: PathBuf) -> gtk::Widget {
     let path = dir.display().to_string();
     let label = gtk::Label::builder()
-        .label(&path)
-        .selectable(true)
+        .label(breakable(&path))
         .xalign(0.0)
         .wrap(true)
-        .wrap_mode(pango::WrapMode::Char)
+        .wrap_mode(pango::WrapMode::WordChar)
         .max_width_chars(62)
         .build();
     label.add_css_class("monospace");
@@ -194,5 +200,11 @@ mod tests {
         // A build without it (cargo run).
         assert_eq!(extension_dir_near(&root.join("target/debug/fisga-gui")), None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn long_paths_break_after_separators() {
+        assert_eq!(breakable("/usr/share/fisga").replace('\u{200b}', ""), "/usr/share/fisga");
+        assert_eq!(breakable(r"C:\Fisga\share").matches('\u{200b}').count(), 2);
     }
 }

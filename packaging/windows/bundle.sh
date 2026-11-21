@@ -11,6 +11,10 @@ rm -rf "$out"
 mkdir -p "$out/bin"
 
 cp target/release/{fisga,fisgad,fisga-gui,fisga-native-host}.exe "$out/bin/"
+# GLib launches its D-Bus session bus with gdbus.exe: without one, the GUI is
+# never single-instance, and opening Fisga while it sits in the tray starts a
+# second one. Copied before the ldd step, which brings its DLLs too.
+cp "$prefix/bin/gdbus.exe" "$out/bin/"
 
 # Image loaders (the icons are SVG) with their list, which names them relative
 # to the install folder.

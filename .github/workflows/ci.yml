@@ -104,7 +104,9 @@ jobs:
           unzip -p "fisga-chrome-$version.zip" manifest.json \
             | python3 -c 'import json, sys; m = json.load(sys.stdin); assert "key" not in m, "key in the store manifest"; assert "*://*.youtube.com/*" in m["content_scripts"][0]["exclude_matches"], "content script on YouTube"'
           unzip -p "fisga-chrome-$version.zip" background.js | grep -q '^const BLOCKED_HOSTS = \["youtube.com",'
-          grep -qx 'const BLOCKED_HOSTS = \[\];' ../dist/chrome/background.js ../dist/firefox/background.js
+          # One grep per file: with both in one, a match in either would do.
+          grep -qx 'const BLOCKED_HOSTS = \[\];' ../dist/chrome/background.js
+          grep -qx 'const BLOCKED_HOSTS = \[\];' ../dist/firefox/background.js
           unzip -p "fisga-firefox-$version.zip" manifest.json | python3 -m json.tool > /dev/null
 
       - name: addons.mozilla.org linter

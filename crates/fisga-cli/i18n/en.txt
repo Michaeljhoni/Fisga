@@ -361,6 +361,9 @@ diga para onde: --queue-id N, --up, --down, --top ou --bottom
 o daemon não está rodando
 = the daemon is not running
 
+o fisgad não encerrou em 10 segundos
+= fisgad did not stop within 10 seconds
+
 (retomável)
 = (resumable)
 
@@ -396,6 +399,9 @@ falhou
 
 pausado
 = paused
+
+o download foi pausado antes de terminar
+= the download was paused before it finished
 
 use nenhuma, alt, ctrl+alt, shift+alt ou ctrl+shift
 = use none, alt, ctrl+alt, shift+alt or ctrl+shift
@@ -625,8 +631,8 @@ instalado
 criar {}
 = creating {}
 
-fisga-native-host não encontrado ({}); instale-o junto com o fisga
-= fisga-native-host not found ({}); install it along with fisga
+fisga-native-host não encontrado ao lado do fisga nem no PATH; instale-o junto com o fisga
+= fisga-native-host not found next to fisga nor in PATH; install it along with fisga
 
 Recarregue a extensão no navegador para ela encontrar o app.
 = Reload the extension in the browser so it finds the app.

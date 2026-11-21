@@ -418,23 +418,40 @@ impl BrowserSettings {
         types
     }
 
-    /// `"https://Banco.com.br/conta, *.exemplo.com"` → `["banco.com.br",
-    /// "exemplo.com"]`: the hosts, lowercase, each once.
+    /// `"https://Banco.com.br/conta, *.exemplo.com nas [::1]:8080 münchen.de"` →
+    /// `["banco.com.br", "exemplo.com", "nas", "[::1]", "xn--mnchen-3ya.de"]`:
+    /// the hosts as browsers write them (lowercase, IDNA's ASCII), each once.
     pub fn parse_sites(text: &str) -> Vec<String> {
         let mut sites: Vec<String> = Vec::new();
         for word in text.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
-            let host = word.split_once("://").map_or(word, |(_, rest)| rest);
-            let host = host.split(['/', '?', '#']).next().unwrap_or_default();
-            let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
-            let host = host.split(':').next().unwrap_or_default();
-            let host = host.trim_start_matches("*.").trim_matches('.').to_ascii_lowercase();
-            let valid = host.contains('.') || host == "localhost";
-            let valid = valid && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
-            if valid && !sites.contains(&host) {
-                sites.push(host);
+            if let Some(host) = Self::site_host(word) {
+                if !sites.contains(&host) {
+                    sites.push(host);
+                }
             }
         }
         sites
+    }
+
+    /// The host of one site of the list, if it is one.
+    fn site_host(word: &str) -> Option<String> {
+        let host = word.split_once("://").map_or(word, |(_, rest)| rest);
+        let host = host.split(['/', '?', '#']).next().unwrap_or_default();
+        let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+        let host = match host.parse::<std::net::Ipv6Addr>() {
+            // Without brackets, the colons are the address's, not a port's.
+            Ok(ip) => return Some(url::Host::<String>::Ipv6(ip).to_string()),
+            Err(_) if host.starts_with('[') => host.split_inclusive(']').next().unwrap_or_default(),
+            Err(_) => host.split(':').next().unwrap_or_default(),
+        };
+        match url::Host::parse(host.trim_start_matches("*.").trim_matches('.')).ok()? {
+            url::Host::Domain(name) => {
+                let label = |label: &str| !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                let valid = name.split('.').all(label);
+                valid.then_some(name)
+            }
+            ip => Some(ip.to_string()),
+        }
     }
 
     /// `url` is on one of the excluded sites (or a subdomain of one).
@@ -514,7 +531,7 @@ pub struct ProxySettings {
 }
 
 /// Hides the password of `user:password@host`.
-fn redact_url(text: &str) -> String {
+pub fn redact_url(text: &str) -> String {
     match url::Url::parse(text) {
         Ok(mut url) if url.password().is_some() => {
             let _ = url.set_password(Some("***"));
@@ -707,6 +724,7 @@ impl Settings {
         self.max_parallel = self.max_parallel.clamp(1, 20);
         self.connections = self.connections.clamp(1, 32);
         self.browser.file_types = BrowserSettings::parse_file_types(&self.browser.file_types.join(" "));
+        self.browser.excluded_sites = BrowserSettings::parse_sites(&self.browser.excluded_sites.join(" "));
         sanitize_days(&mut self.schedule.days);
         let mut seen = vec![MAIN_QUEUE];
         self.queues.retain(|queue| {
@@ -1073,7 +1091,7 @@ pub fn file_map(segments: impl IntoIterator<Item = (u64, u64, u64)>, total: u64)
         return Vec::new();
     }
     let bounds = |part: usize| total * part as u64 / MAP_PARTS as u64;
-    let mut done = vec![0u64; MAP_PARTS];
+    let mut done = [0u64; MAP_PARTS];
     for (start, end, written) in segments {
         let (from, to) = (start, (start + written).min(end + 1));
         for (part, sum) in done.iter_mut().enumerate() {
@@ -1605,18 +1623,25 @@ pub async fn call(request: &Request) -> anyhow::Result<Response> {
     Connection::open().await?.call(request).await
 }
 
-async fn is_running() -> bool {
+/// `fisgad` answers.
+pub async fn is_running() -> bool {
     matches!(call(&Request::Ping).await, Ok(Response::Pong { .. }))
 }
 
-/// Path of a sibling executable (installed next to the current one), falling
-/// back to a `$PATH` lookup.
+/// Path of a sibling executable: installed next to the current one, or else
+/// found in `$PATH`; the bare name (for the system's own lookup) when not found.
 pub fn sibling_executable(name: &str) -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .map(|exe| exe.with_file_name(format!("{name}{}", std::env::consts::EXE_SUFFIX)))
-        .filter(|path| path.exists())
-        .unwrap_or_else(|| PathBuf::from(name))
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    find_executable(name, std::env::current_exe().ok(), &path).unwrap_or_else(|| PathBuf::from(name))
+}
+
+/// The program `name` next to `exe`, or else in a folder of `path`: a file,
+/// never a folder, nor one in the current folder (a relative entry).
+fn find_executable(name: &str, exe: Option<PathBuf>, path: &std::ffi::OsStr) -> Option<PathBuf> {
+    let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    let beside = exe.map(|exe| exe.with_file_name(&file));
+    let in_path = std::env::split_paths(path).filter(|dir| dir.is_absolute()).map(|dir| dir.join(&file));
+    beside.into_iter().chain(in_path).find(|candidate| candidate.is_file())
 }
 
 /// Starts `fisgad` in its own session if it is not running, and waits for its socket.
@@ -1828,18 +1853,30 @@ mod tests {
 
     #[test]
     fn excluded_sites() {
-        let sites = BrowserSettings::parse_sites("https://Banco.com.br/conta, *.exemplo.com;intranet.local:8080 banco.com.br lixo localhost");
+        let sites = BrowserSettings::parse_sites("https://Banco.com.br/conta, *.exemplo.com;intranet.local:8080 banco.com.br lixo! localhost");
         assert_eq!(sites, ["banco.com.br", "exemplo.com", "intranet.local", "localhost"]);
-        let browser = BrowserSettings { excluded_sites: sites, ..Default::default() };
+        // A computer of the network by its name, IP addresses, a name with accents.
+        let sites = BrowserSettings::parse_sites("nas NAS:5000 http://[FE80::1]:8080/x ::1 192.168.0.10 München.de * a..b [::1");
+        assert_eq!(sites, ["nas", "[fe80::1]", "[::1]", "192.168.0.10", "xn--mnchen-3ya.de"]);
+        let browser = BrowserSettings {
+            excluded_sites: BrowserSettings::parse_sites("banco.com.br *.exemplo.com nas [::1] münchen.de"),
+            ..Default::default()
+        };
         assert!(browser.excludes("https://banco.com.br/extrato.pdf"));
         assert!(browser.excludes("https://www.banco.com.br/a.zip"));
         assert!(browser.excludes("http://arquivos.exemplo.com/a.iso"));
         assert!(!browser.excludes("https://outrobanco.com.br/a.zip"), "a site is matched whole");
         assert!(!browser.excludes("https://exemplo.com.br/a.zip"));
         assert!(!browser.excludes("não é endereço"));
+        assert!(browser.excludes("http://nas/filmes/a.mkv"));
+        assert!(browser.excludes("http://[::1]:8080/a.iso"));
+        assert!(browser.excludes("https://www.münchen.de/a.zip"));
         // Settings from before the list.
         let settings: Settings = serde_json::from_str(r#"{"browser":{"fileTypes":["iso"]}}"#).unwrap();
         assert!(settings.browser.excluded_sites.is_empty());
+        // Stored by hand or by an older version: written as the list writes them.
+        let settings: Settings = serde_json::from_str(r#"{"browser":{"excludedSites":["Banco.com.br","lixo!","münchen.de"]}}"#).unwrap();
+        assert_eq!(settings.sanitized().browser.excluded_sites, ["banco.com.br", "xn--mnchen-3ya.de"]);
     }
 
     #[test]
@@ -2036,6 +2073,25 @@ mod tests {
         assert!(parse_url_list("nada aqui").is_empty());
         let request: Request = serde_json::from_str(r#"{"type":"add_batch","urls":["https://e.com/a"]}"#).unwrap();
         assert!(matches!(request, Request::AddBatch { start: true, queue: None, .. }));
+    }
+
+    #[test]
+    fn executables_next_to_this_one_or_in_path() {
+        let root = std::env::temp_dir().join(format!("fisga-exe-{}", std::process::id()));
+        let (app, bin, other) = (root.join("app"), root.join("bin"), root.join("other"));
+        let file = format!("fisga-teste{}", std::env::consts::EXE_SUFFIX);
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(other.join(&file)).unwrap();
+        std::fs::write(bin.join(&file), b"").unwrap();
+        let path = std::env::join_paths([PathBuf::from("relativa"), other.clone(), bin.clone()]).unwrap();
+        let found = |exe: Option<PathBuf>, path: &std::ffi::OsStr| find_executable("fisga-teste", exe, path);
+        assert_eq!(found(None, &path), Some(bin.join(&file)), "a folder with the name is not the program");
+        assert_eq!(found(Some(app.join("fisga")), &path), Some(bin.join(&file)));
+        std::fs::write(app.join(&file), b"").unwrap();
+        assert_eq!(found(Some(app.join("fisga")), &path), Some(app.join(&file)), "next to this one first");
+        assert_eq!(found(None, std::ffi::OsStr::new("relativa")), None, "never from the current folder");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

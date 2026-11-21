@@ -121,5 +121,11 @@ o fisgad não respondeu após ser iniciado
 o fisgad está ocupado
 = fisgad is busy
 
+o pipe do fisgad pertence a outro usuário
+= fisgad's pipe belongs to another user
+
+{} não é uma pasta só deste usuário (dono e permissão 700)
+= {} is not a folder of this user alone (owner and mode 700)
+
 Fila principal
 = Main queue

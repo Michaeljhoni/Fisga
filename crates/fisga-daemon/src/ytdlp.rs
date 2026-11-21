@@ -23,8 +23,17 @@ const PROGRESS_TEMPLATE: &str = "download:FISGAPROG %(progress.downloaded_bytes)
 /// How long the pre-download check (`yt-dlp -J`) may take.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// The proxy variables of the environment, which yt-dlp, ffmpeg and gallery-dl read.
+pub(crate) const PROXY_VARIABLES: [&str; 6] = ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"];
+
 /// A file deleted when this is dropped, however the run that uses it ends.
-struct TempFile(PathBuf);
+pub(crate) struct TempFile(PathBuf);
+
+impl TempFile {
+    pub(crate) fn path(&self) -> &Path {
+        &self.0
+    }
+}
 
 impl Drop for TempFile {
     fn drop(&mut self) {
@@ -32,8 +41,9 @@ impl Drop for TempFile {
     }
 }
 
-/// Netscape cookies.txt, readable only by the user, deleted after the run.
-fn write_cookies_file(name: &str, cookies: &[Cookie]) -> std::io::Result<TempFile> {
+/// Netscape cookies.txt, readable only by the user, deleted after the run
+/// (yt-dlp's and gallery-dl's `--cookies`).
+pub(crate) fn write_cookies_file(name: &str, cookies: &[Cookie]) -> std::io::Result<TempFile> {
     use std::io::Write;
     let path = fisga_ipc::runtime_dir().join(format!("cookies-{name}.txt"));
     let mut options = std::fs::OpenOptions::new();
@@ -235,12 +245,12 @@ fn apply_proxy(command: &mut Command, proxy: &fisga_ipc::ProxySettings) {
         Some(url) if url.is_empty() => {
             // ffmpeg (HLS, merging) reads the environment, not --proxy.
             command.args(["--proxy", ""]);
-            for name in ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {
+            for name in PROXY_VARIABLES {
                 command.env_remove(name);
             }
         }
         Some(url) => {
-            for name in ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {
+            for name in PROXY_VARIABLES {
                 command.env(name, &url);
             }
             command.env_remove("no_proxy").env_remove("NO_PROXY");

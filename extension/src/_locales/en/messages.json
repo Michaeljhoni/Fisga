@@ -68,5 +68,13 @@
   "gallerySent": {"message": "✓ $COUNT$ queued in Fisga, in the “$FOLDER$” folder.", "placeholders": {"count": {"content": "$1"}, "folder": {"content": "$2"}}},
   "galleryScanFailed": {"message": "Could not read the page: $ERROR$", "placeholders": {"error": {"content": "$1"}}},
   "galleryDrm": {"message": "Protected (DRM)"},
-  "gallerySkipped": {"message": "$COUNT$ left out (repeated, protected or not found).", "placeholders": {"count": {"content": "$1"}}}
+  "gallerySkipped": {"message": "$COUNT$ left out (repeated, protected or not found).", "placeholders": {"count": {"content": "$1"}}},
+  "galleryWholePost": {"message": "Whole post"},
+  "galleryWholeAlbum": {"message": "Whole album"},
+  "galleryWholeProfile": {"message": "Whole profile"},
+  "galleryPostDetail": {"message": "Every photo and video of the post, through gallery-dl"},
+  "galleryAlbumDetail": {"message": "Every photo of the album, through gallery-dl"},
+  "galleryProfileDetail": {"message": "Everything the profile posted, through gallery-dl (up to 5000 files)"},
+  "galleryPostsSent": {"message": "gallery-dl looks up the files of each post and profile, and they join the queue one by one."},
+  "galleryNeedsGalleryDl": {"message": "Whole posts (every photo of a carousel, the originals) and profiles from this site need gallery-dl. Install it (on Arch: pacman -S gallery-dl) and click Refresh."}
 }

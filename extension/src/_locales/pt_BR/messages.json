@@ -68,5 +68,13 @@
   "gallerySent": {"message": "✓ $COUNT$ na fila do Fisga, na pasta “$FOLDER$”.", "placeholders": {"count": {"content": "$1"}, "folder": {"content": "$2"}}},
   "galleryScanFailed": {"message": "Não foi possível ler a página: $ERROR$", "placeholders": {"error": {"content": "$1"}}},
   "galleryDrm": {"message": "Protegido (DRM)"},
-  "gallerySkipped": {"message": "$COUNT$ ficaram de fora (repetidas, protegidas ou não encontradas).", "placeholders": {"count": {"content": "$1"}}}
+  "gallerySkipped": {"message": "$COUNT$ ficaram de fora (repetidas, protegidas ou não encontradas).", "placeholders": {"count": {"content": "$1"}}},
+  "galleryWholePost": {"message": "Post inteiro"},
+  "galleryWholeAlbum": {"message": "Álbum inteiro"},
+  "galleryWholeProfile": {"message": "Perfil inteiro"},
+  "galleryPostDetail": {"message": "Todas as fotos e vídeos do post, pelo gallery-dl"},
+  "galleryAlbumDetail": {"message": "Todas as fotos do álbum, pelo gallery-dl"},
+  "galleryProfileDetail": {"message": "Tudo o que o perfil postou, pelo gallery-dl (até 5000 arquivos)"},
+  "galleryPostsSent": {"message": "O gallery-dl procura os arquivos de cada post e perfil, e eles entram na fila um a um."},
+  "galleryNeedsGalleryDl": {"message": "Posts inteiros (todas as fotos de um carrossel, os originais) e perfis deste site precisam do gallery-dl. Instale-o (no Arch: pacman -S gallery-dl) e clique em Atualizar."}
 }

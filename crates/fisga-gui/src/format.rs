@@ -112,6 +112,7 @@ pub fn badge(info: &DownloadInfo) -> String {
     match (extension, info.kind) {
         (Some(ext), _) => ext.to_uppercase(),
         (None, SourceKind::Direct) => tr!("ARQUIVO").into(),
+        (None, SourceKind::Gallery) => tr!("GALERIA").into(),
         (None, _) => tr!("VÍDEO").into(),
     }
 }

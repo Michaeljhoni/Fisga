@@ -516,7 +516,7 @@ async function downloadMedia(msg, sender) {
 async function ping() {
   try {
     const reply = await api.runtime.sendNativeMessage(HOST, { type: "ping" });
-    return { ok: reply?.type === "pong", version: reply?.version, daemon: reply?.daemon };
+    return { ok: reply?.type === "pong", version: reply?.version, daemon: reply?.daemon, galleryDl: Boolean(reply?.galleryDl) };
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };
   }
@@ -531,6 +531,93 @@ async function ping() {
 function siteFolder(url) {
   const host = parseUrl(url)?.hostname ?? "";
   return host.replace(/^www\d*\./, "") || "site";
+}
+
+// Posts, albums and profiles of social and art sites, whose photos a page
+// does not hold whole (a carousel shows one at a time, a feed thumbnails,
+// a slideshow is a video): the app lists their files with gallery-dl, when
+// it has it, and each one goes to the queue. Words of their paths that are
+// the sites' own pages, not users.
+const NOT_USERS = {
+  instagram: "about accounts api challenge developer direct emails explore graphql legal locations oauth p privacy reel reels session settings stories terms topics tv web",
+  x: "account bookmarks communities compose explore hashtag home i intent jobs lists login logout messages notifications privacy search settings share signup tos",
+  deviantart: "about core-membership daily-deviations developers forum groups join search settings shop status tag team topic users watch",
+  pinterest: "_ about business categories explore ideas login logout news_hub pin search settings shopping today",
+};
+const notUser = (site, word) => NOT_USERS[site].split(" ").includes(word.toLowerCase());
+
+/**
+ * What gallery-dl can take at `url`: { url, whole, name }, `whole` being
+ * "post" (every photo of one post), "album" (a board, an album) or "profile"
+ * (everything a user posted), and `url` the address gallery-dl knows it by.
+ * Null for any other page.
+ */
+function galleryTarget(url) {
+  const u = parseUrl(url ?? "");
+  if (!u || !/^https?:$/.test(u.protocol)) return null;
+  const host = u.hostname.toLowerCase();
+  const p = u.pathname.split("/").filter(Boolean);
+  const name = /^[\w.-]+$/;
+  const at = (n) => p[n] ?? "";
+  if (hostMatches(host, ["instagram.com"])) {
+    const post = at(0) === "p" ? at(1) : at(1) === "p" ? at(2) : "";
+    if (/^[\w-]+$/.test(post)) return { url: `https://www.instagram.com/p/${post}/`, whole: "post", name: "" };
+    const user = at(0);
+    if (/^[\w.]+$/.test(user) && !notUser("instagram", user) && (p.length === 1 || (p.length === 2 && ["tagged", "reels"].includes(at(1))))) {
+      return { url: `https://www.instagram.com/${user}/`, whole: "profile", name: `@${user}` };
+    }
+    return null;
+  }
+  if (hostMatches(host, ["tiktok.com"])) {
+    const user = /^@([\w.-]+)$/.exec(at(0))?.[1];
+    if (!user) return null;
+    if (at(1) === "photo" && /^\d+$/.test(at(2))) return { url: `https://www.tiktok.com/@${user}/photo/${at(2)}`, whole: "post", name: "" };
+    return p.length === 1 ? { url: `https://www.tiktok.com/@${user}`, whole: "profile", name: `@${user}` } : null;
+  }
+  if (hostMatches(host, ["x.com", "twitter.com"])) {
+    const user = at(0);
+    if (!/^\w{1,15}$/.test(user) || notUser("x", user)) return null;
+    if (at(1) === "status" && /^\d+$/.test(at(2))) return { url: `https://x.com/${user}/status/${at(2)}`, whole: "post", name: "" };
+    return p.length === 1 || (p.length === 2 && at(1) === "media") ? { url: `https://x.com/${user}/media`, whole: "profile", name: `@${user}` } : null;
+  }
+  if (hostMatches(host, ["deviantart.com"])) {
+    const user = at(0);
+    if (!/^[\w-]+$/.test(user) || notUser("deviantart", user)) return null;
+    if (at(1) === "art" && name.test(at(2))) return { url: `https://www.deviantart.com/${user}/art/${at(2)}`, whole: "post", name: "" };
+    if (at(1) === "gallery" && /^\d+$/.test(at(2))) {
+      return { url: `https://www.deviantart.com/${user}/gallery/${at(2)}${name.test(at(3)) ? `/${at(3)}` : ""}`, whole: "album", name: user };
+    }
+    return p.length === 1 || (at(1) === "gallery" && p.length <= 3) ? { url: `https://www.deviantart.com/${user}/gallery`, whole: "profile", name: user } : null;
+  }
+  if (hostMatches(host, ["flickr.com"])) {
+    const user = at(1);
+    if (at(0) !== "photos" || !/^[\w@-]+$/.test(user) || user === "tags") return null;
+    if (/^\d+$/.test(at(2))) return { url: `https://www.flickr.com/photos/${user}/${at(2)}/`, whole: "post", name: "" };
+    if (["albums", "sets"].includes(at(2)) && /^\d+$/.test(at(3))) return { url: `https://www.flickr.com/photos/${user}/albums/${at(3)}`, whole: "album", name: user };
+    return p.length === 2 || (p.length === 3 && /^page\d+$/.test(at(2))) ? { url: `https://www.flickr.com/photos/${user}/`, whole: "profile", name: user } : null;
+  }
+  if (hostMatches(host, ["reddit.com"])) {
+    if (at(0) === "r" && /^\w+$/.test(at(1)) && at(2) === "comments" && /^\w+$/.test(at(3))) {
+      return { url: `https://www.reddit.com/r/${at(1)}/comments/${at(3)}/`, whole: "post", name: "" };
+    }
+    if (["gallery", "comments"].includes(at(0)) && /^\w+$/.test(at(1))) return { url: `https://www.reddit.com/${at(0)}/${at(1)}/`, whole: "post", name: "" };
+    if (["u", "user"].includes(at(0)) && /^[\w-]+$/.test(at(1)) && (p.length === 2 || (p.length === 3 && at(2) === "submitted"))) {
+      return { url: `https://www.reddit.com/user/${at(1)}/submitted/`, whole: "profile", name: `u/${at(1)}` };
+    }
+    return null;
+  }
+  // pinterest.com and its countries' (br.pinterest.com, pinterest.co.uk, pinterest.com.mx...).
+  if (/(^|\.)pinterest\.(?:com|[a-z]{2})(?:\.[a-z]{2})?$/.test(host)) {
+    if (at(0) === "pin") return /^[\w-]+$/.test(at(1)) ? { url: `https://${host}/pin/${at(1)}/`, whole: "post", name: "" } : null;
+    const user = at(0);
+    if (!name.test(user) || notUser("pinterest", user)) return null;
+    const tab = ["_saved", "_created", "pins"].includes(at(1));
+    if (p.length === 2 && name.test(at(1)) && !tab) {
+      return { url: `https://${host}/${user}/${at(1)}/`, whole: "album", name: `${user}/${at(1)}` };
+    }
+    return p.length === 1 || (p.length === 2 && tab) ? { url: `https://${host}/${user}/`, whole: "profile", name: user } : null;
+  }
+  return null;
 }
 
 /** Opens the gallery of `tab` next to it. */
@@ -622,10 +709,28 @@ async function galleryScan(tabId) {
       frameId: candidate.frameId,
     });
   }
+  // Posts gallery-dl can take: a photo that links to one (a feed's, a
+  // grid's) or, linking nowhere, sits in the post the page is. The page
+  // itself, a post, an album or a profile, is one more item when the app has
+  // gallery-dl (unless the page is already listed, as a post's video).
+  const here = galleryTarget(tab.url);
+  for (const item of items) {
+    if (item.type !== "image") continue;
+    const post = item.postLink ? galleryTarget(item.postLink) : here;
+    if (post?.whole === "post") item.post = post.url;
+    delete item.postLink;
+  }
+  const app = here || items.some((item) => item.post) ? await ping() : {};
+  const galleryDl = Boolean(app.ok && app.galleryDl);
+  if (here && galleryDl && !seen.has(here.url)) {
+    const cover = here.whole === "post" ? items.find((item) => item.type === "image" && item.source === "meta")?.url : "";
+    items.unshift({ type: "image", kind: "gallery", url: here.url, whole: here.whole, name: here.name || tab.title || here.url, thumb: cover || "", source: "gallery-dl" });
+  }
   // A Firefox container or a private window: the address checks cannot use
   // its cookies, so a refused check proves nothing there.
   const ownStore = Boolean(tab.incognito || (tab.cookieStoreId && !/^(firefox-default|0)$/.test(tab.cookieStoreId)));
-  return { ok: true, error, page: { url: tab.url, title: tab.title, folder: siteFolder(tab.url), ownStore }, items };
+  const galleryHint = Boolean((here || items.some((item) => item.post)) && !galleryDl);
+  return { ok: true, error, page: { url: tab.url, title: tab.title, folder: siteFolder(tab.url), ownStore, galleryDl, galleryHint }, items };
 }
 
 /** Width and height from the first bytes of a JPEG, PNG, GIF, WebP, AVIF/HEIF or BMP. */
@@ -849,7 +954,9 @@ async function galleryDownload(msg) {
   const downloads = [];
   for (const item of msg.items ?? []) {
     if (!/^(https?|ftp):/i.test(item.url ?? "") || isBlocked(item.url)) continue;
-    const kind = item.kind === "page" || item.kind === "stream" ? item.kind : "direct";
+    const kind = ["page", "stream", "gallery"].includes(item.kind) ? item.kind : "direct";
+    // gallery-dl gets only the posts and profiles it is known to take, as it knows them.
+    if (kind === "gallery" && galleryTarget(item.url)?.url !== item.url) continue;
     downloads.push({
       url: item.url,
       kind,

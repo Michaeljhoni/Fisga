@@ -43,7 +43,8 @@ navegador ──Native Messaging──▶ fisga-native-host ──Unix socket─
 Requisitos: Rust e GTK4 ≥ 4.12 com os cabeçalhos (Arch: `sudo pacman -S rust gtk4`; Debian 13/Ubuntu
 24.04: `libgtk-4-dev` + [rustup](https://rustup.rs); Fedora: `gtk4-devel`).
 Opcionais: `yt-dlp`, `ffmpeg` e `deno` (vídeos de sites; o YouTube precisa de um runtime de
-JavaScript), `libnotify` (notificações), `wl-clipboard` (capturar links copiados no Wayland).
+JavaScript), `gallery-dl` (posts e perfis inteiros na galeria da extensão), `libnotify`
+(notificações), `wl-clipboard` (capturar links copiados no Wayland).
 
 ```bash
 scripts/install-dev.sh
@@ -284,6 +285,13 @@ SHA-256, usando o proxy das Preferências. Um programa que já esteja no PATH n�
 precisa acompanhar os sites: ao pedir um vídeo, o Fisga procura uma versão nova, no máximo uma vez por
 dia. Sem pedir vídeos, nada disso acontece. Desinstalar o Fisga no Windows apaga essa pasta.
 
+O gallery-dl (posts e perfis inteiros da galeria) vem do mesmo jeito, para a mesma pasta, no primeiro
+post ou perfil mandado pela galeria, e também é atualizado no máximo uma vez por dia: no Windows, das
+releases do projeto no Codeberg, conferido com o `SHA256SUMS` delas; no macOS, das compilações diárias
+que o autor do gallery-dl publica no GitHub (as releases não têm macOS), conferidas com a SHA-256 que
+o GitHub guarda de cada arquivo. No Linux, instale o pacote `gallery-dl` (no Arch, `pacman -S
+gallery-dl`).
+
 ### Versões novas do Fisga
 
 Uma vez por dia, o Fisga olha no GitHub qual é a última versão publicada (a primeira olhada é dois
@@ -352,6 +360,18 @@ O que a galeria procura é o arquivo de verdade, não a miniatura:
   X, Twitch, Dailymotion, Bilibili...): numa página com vários (busca, canal, feed), cada vídeo
   aparece com a sua miniatura e é baixado inteiro pelo yt-dlp, não a miniatura. Na Wikipedia, os
   vídeos e áudios vêm do arquivo original.
+- **Posts e perfis (gallery-dl):** no Instagram, TikTok, X, DeviantArt, Flickr, Reddit e Pinterest a
+  página mostra uma foto de cada vez (o carrossel), miniaturas (o feed) ou uma apresentação; o
+  gallery-dl sabe chegar a todos os arquivos. As fotos desses sites ganham o selo **Post inteiro**:
+  marcada uma, vai o post todo (várias fotos do mesmo post contam uma vez). Na página de um post,
+  perfil, álbum ou pasta do Pinterest, o primeiro cartão é ele mesmo: **Post inteiro**, **Perfil
+  inteiro** ou **Álbum inteiro** (até 5000 arquivos; perfis e álbuns não entram no **Selecionar
+  todas**). No Fisga, o post aparece na lista enquanto o gallery-dl procura os arquivos, com quantos
+  já achou; depois dá lugar a eles, cada um um download comum em `Imagens/<site>` (vídeos em
+  `Vídeos/<site>`). O que já está na pasta ou na lista não vem de novo: mandar o mesmo perfil outro
+  dia traz só o que é novo. O gallery-dl usa os cookies do site (o seu login) num arquivo temporário,
+  apagado quando ele termina; se o site pedir login, entre na conta no navegador e mande de novo. Sem
+  o gallery-dl (Linux sem o pacote), as fotos vão como antes e a galeria avisa como instalá-lo.
 
 Role a página antes de abrir a galeria (ou depois, e clique em **Atualizar**): muitos sites só
 carregam as fotos que aparecem na tela.

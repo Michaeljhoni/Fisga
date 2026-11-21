@@ -14,6 +14,7 @@ pkgbase = fisga-git
 	optdepends = yt-dlp: videos from sites (YouTube and others)
 	optdepends = ffmpeg: merge audio and video from sites
 	optdepends = deno: YouTube, which needs a JavaScript runtime
+	optdepends = gallery-dl: whole posts and profiles of social and art sites in the media gallery
 	optdepends = libnotify: notifications
 	optdepends = wl-clipboard: catch copied links on Wayland
 	optdepends = clamav: scan downloads with an antivirus

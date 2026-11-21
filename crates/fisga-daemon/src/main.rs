@@ -6,6 +6,7 @@
 static I18N: fisga_i18n::Table = fisga_i18n::Table::new(include_str!("../i18n/en.txt"));
 
 mod clipboard;
+mod gallery;
 mod gui;
 mod manager;
 mod notify;

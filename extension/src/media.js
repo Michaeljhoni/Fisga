@@ -70,8 +70,19 @@
   }
   /** The address to download: the one checked, else the one the page gave. */
   const addressOf = (item) => item.best || item.url;
+  /** A photo of a post (a carousel's, a feed's) that goes as its whole post, by gallery-dl in the app. */
+  const viaPost = (item) => Boolean(page?.galleryDl && item.kind !== "gallery" && item.type === "image" && item.post);
+  /** What goes to the app for a card: its post, or its file. */
+  const sentAs = (item) => (viaPost(item) ? item.post : addressOf(item));
+  /** A whole album or profile: maybe thousands of files, so picked one by one, never with others. */
+  const isWhole = (item) => item.kind === "gallery" && item.whole !== "post";
+  function wholeLabel(item) {
+    if (item.whole === "profile") return t("galleryWholeProfile");
+    return item.whole === "album" ? t("galleryWholeAlbum") : t("galleryWholePost");
+  }
 
   function format(item) {
+    if (item.kind === "gallery") return wholeLabel(item);
     if (item.kind === "page") return item.generic ? t("galleryGeneric") : t("galleryViaPage");
     if (item.kind === "stream") {
       const kind = /\.mpd(\?|$)/i.test(item.url) || /dash/i.test(item.detail || "") ? "DASH" : "HLS";
@@ -111,16 +122,19 @@
     const dims = item.width && item.height ? `${item.width}×${item.height}` : "";
     // What the network showed (streams) already says its type, size and host.
     const detail =
-      item.source === "network" && item.detail
-        ? item.detail
-        : [dims, formatSize(item.size), host(addressOf(item))].filter(Boolean).join(" · ");
+      item.kind === "gallery"
+        ? item.whole === "profile" ? t("galleryProfileDetail") : item.whole === "album" ? t("galleryAlbumDetail") : t("galleryPostDetail")
+        : item.source === "network" && item.detail
+          ? item.detail
+          : [dims, formatSize(item.size), host(addressOf(item))].filter(Boolean).join(" · ");
     el.querySelector(".name").textContent = name;
     el.querySelector(".detail").textContent = detail;
-    el.title = addressOf(item);
+    el.title = sentAs(item);
     const badges = el.querySelector(".badges");
     badges.replaceChildren();
     const kind = format(item);
-    if (kind) badges.append(node("span", "badge", kind));
+    if (kind) badges.append(node("span", item.kind === "gallery" ? "badge post" : "badge", kind));
+    if (viaPost(item)) badges.append(node("span", "badge post", t("galleryWholePost")));
     const duration = formatDuration(item.duration);
     if (duration) badges.append(node("span", "badge", duration));
     if (item.drm) badges.append(node("span", "badge drm", t("galleryDrm")));
@@ -238,7 +252,10 @@
     if (range && anchor && list.includes(anchor)) {
       const [a, b] = [list.indexOf(anchor), list.indexOf(item)].sort((x, y) => x - y);
       const on = selected.has(anchor.url);
-      for (const other of list.slice(a, b + 1)) on ? selected.add(other.url) : selected.delete(other.url);
+      for (const other of list.slice(a, b + 1)) {
+        if (isWhole(other) && other !== item) continue;
+        on ? selected.add(other.url) : selected.delete(other.url);
+      }
     } else {
       selected.has(item.url) ? selected.delete(item.url) : selected.add(item.url);
       anchor = item;
@@ -248,7 +265,7 @@
     updateBar();
   }
   $("select-all").addEventListener("click", () => {
-    for (const item of shown()) if (!item.drm) selected.add(item.url);
+    for (const item of shown()) if (!item.drm && !isWhole(item)) selected.add(item.url);
     render();
   });
   $("select-none").addEventListener("click", () => {
@@ -298,7 +315,8 @@
    */
   async function probe(item, light) {
     if (item.kind === "stream") return probeStream(item);
-    if (item.kind !== "direct") return;
+    // A post's photo: gallery-dl finds its files, whatever this thumbnail is.
+    if (item.kind !== "direct" || viaPost(item)) return;
     const list = item.candidates?.length ? item.candidates : [item.url];
     let refused = 0;
     let asked = 0;
@@ -393,7 +411,9 @@
     result.className = "result";
     // The originals (and the real files behind links) of what was picked
     // before it showed on screen, and the protection of the streams.
-    const checks = chosen.filter((item) => item.kind === "stream" || (item.kind === "direct" && (item.type === "image" || item.verify)));
+    const checks = chosen.filter(
+      (item) => !viaPost(item) && (item.kind === "stream" || (item.kind === "direct" && (item.type === "image" || item.verify))),
+    );
     let done = 0;
     result.textContent = t("galleryChecking", 0, checks.length);
     await Promise.all(
@@ -404,11 +424,17 @@
         }),
       ),
     );
-    // Each file once: two thumbnails may lead to the same original.
+    // Each file once: two thumbnails may lead to the same original. Each
+    // post once too: its photos are all in it.
     const unique = new Map();
-    for (const item of chosen) if (!item.dead && !item.drm && !unique.has(addressOf(item))) unique.set(addressOf(item), item);
+    let left = 0;
+    for (const item of chosen) {
+      if (item.dead || item.drm) left++;
+      else if (!unique.has(sentAs(item))) unique.set(sentAs(item), item);
+      else if (!viaPost(item) && item.kind !== "gallery") left++;
+    }
     const live = [...unique.values()];
-    const left = chosen.length - live.length;
+    const posts = live.some((item) => item.kind === "gallery" || viaPost(item));
     for (const item of chosen) if (item.dead || item.drm) selected.delete(item.url);
     let res;
     try {
@@ -417,8 +443,8 @@
         tabId,
         pageUrl: page?.url,
         items: live.map((item) => ({
-          url: addressOf(item),
-          kind: item.kind,
+          url: sentAs(item),
+          kind: viaPost(item) ? "gallery" : item.kind,
           type: item.type,
           name: item.name,
           frameUrl: item.frameUrl,
@@ -430,13 +456,14 @@
     // What the app took is queued, even when a later part failed.
     const taken = new Set(res?.sent ?? []);
     for (const item of chosen) {
-      if (taken.has(addressOf(item))) {
+      if (taken.has(sentAs(item))) {
         item.sent = true;
         selected.delete(item.url);
       }
     }
     if (res?.ok) {
-      result.textContent = t("gallerySent", res.ids.length, res.folder) + (left ? " " + t("gallerySkipped", left) : "");
+      result.textContent =
+        t("gallerySent", res.ids.length, res.folder) + (left ? " " + t("gallerySkipped", left) : "") + (posts ? " " + t("galleryPostsSent") : "");
       result.className = "result ok";
     } else {
       result.textContent = res?.error || t("galleryFailed");
@@ -467,6 +494,9 @@
     }
     page = res.page;
     $("page").textContent = [page.title, host(page.url)].filter(Boolean).join(" — ");
+    // Posts and profiles of this site need gallery-dl, which the app lacks (Linux).
+    $("hint").textContent = t("galleryNeedsGalleryDl");
+    $("hint").hidden = !page.galleryHint;
     if (res.error && !res.items.length) {
       $("status").textContent = t("galleryScanFailed", res.error);
       items = [];
@@ -488,7 +518,7 @@
     items = res.items.map((fresh) => {
       const old = before.get(fresh.url);
       if (!old) return { ...fresh };
-      for (const key of ["thumb", "name", "frameUrl", "frameId", "duration", "detail", "source", "candidates", "verify", "generic"]) {
+      for (const key of ["thumb", "name", "frameUrl", "frameId", "duration", "detail", "source", "candidates", "verify", "generic", "post", "whole"]) {
         if (fresh[key] !== undefined) old[key] = fresh[key];
       }
       if (!old.checked && !old.original) {

@@ -34,6 +34,24 @@ SMALL="$BASE/files/10485760.bin"
 LARGE="$BASE/files/104857600.bin"
 # Fisga's latest release, as GitHub's API would describe it.
 export FISGA_RELEASES_URL="$BASE/release/latest"
+# Stand-in for gallery-dl, first on the PATH (fisgad and the native host find
+# it there): what it prints (--print) for an Instagram post with three photos,
+# files of the test server. It keeps its arguments and the cookies file it got.
+mkdir -p "$SANDBOX/bin" "$SANDBOX/gallery-dl"
+cat > "$SANDBOX/bin/gallery-dl" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > '$SANDBOX/gallery-dl/args'
+while [ \$# -gt 0 ]; do
+  [ "\$1" = --cookies ] && cp "\$2" '$SANDBOX/gallery-dl/cookies.txt'
+  shift
+done
+echo '[instagram][info] carousel of 3' >&2
+for n in 1 2 3; do
+  printf 'FISGAFILE\t"%s/files/%d.bin?stp=dst-jpg"\t"foto_%d"\t"jpg"\n' '$BASE' \$((65536 * n)) \$n
+done
+STUB
+chmod +x "$SANDBOX/bin/gallery-dl"
+export PATH="$SANDBOX/bin:$PATH"
 
 cleanup() { "$BIN/fisga" stop >/dev/null 2>&1 || true; kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$SANDBOX"; }
 trap cleanup EXIT
@@ -393,6 +411,29 @@ test "$(stat -c %s "$HOME/Downloads/Músicas/www.exemplo.com.br/2097152.bin")" -
 cmp "$HOME/Downloads/Imagens/www.exemplo.com.br/1048576.bin" "$HOME/Downloads/Imagens/www.exemplo.com.br/1048576 (1).bin"
 echo "media in their folders, the repeated name kept apart"
 host '{"type":"media-batch","downloads":[{"url":"javascript:alert(1)"}]}' | grep '"type":"error"'
+
+step "the media gallery: an Instagram post's photos, listed by gallery-dl, each in the queue"
+host '{"type":"ping"}' | grep '"galleryDl":true'
+post='{"url":"https://www.instagram.com/p/C1a2b3/","kind":"gallery","category":"image","subfolder":"instagram.com","title":"Post de @fulano","pageUrl":"https://www.instagram.com/fulano/","userAgent":"Mozilla/5.0 (X11; Linux x86_64)","cookies":[{"name":"sessionid","value":"segredo","domain":".instagram.com","path":"/","secure":true,"hostOnly":false}]}'
+reply="$(host "{\"type\":\"media-batch\",\"downloads\":[$post]}")"
+echo "$reply"
+gallery="$(echo "$reply" | grep -o '"ids":\[[0-9]*' | grep -o '[0-9]*$')"
+test -n "$gallery"
+# The post leaves the list once its photos are in it.
+for _ in $(seq 1 60); do [ -z "$(state_of "$gallery")" ] && break; sleep 1; done
+if [ -n "$(state_of "$gallery")" ]; then echo "the post is still listed"; "$BIN/fisga" list; exit 1; fi
+photos="$HOME/Downloads/Imagens/instagram.com"
+for n in 1 2 3; do
+  for _ in $(seq 1 60); do [ -f "$photos/foto_$n.jpg" ] && break; sleep 1; done
+  test "$(stat -c %s "$photos/foto_$n.jpg")" -eq $((65536 * n))
+done
+ls -la "$photos"
+grep -x -- "--print" "$SANDBOX/gallery-dl/args"
+grep -x "https://www.instagram.com/p/C1a2b3/" "$SANDBOX/gallery-dl/args"
+grep -x "Mozilla/5.0 (X11; Linux x86_64)" "$SANDBOX/gallery-dl/args"
+grep -qF "$(printf '.instagram.com\tTRUE\t/\tTRUE\t0\tsessionid\tsegredo')" "$SANDBOX/gallery-dl/cookies.txt"
+if ls "$XDG_RUNTIME_DIR"/fisga/cookies-* 2>/dev/null; then echo "a cookies file stayed"; exit 1; fi
+echo "every photo of the post in Imagens/instagram.com; gallery-dl had the login, and it is gone"
 
 step "a new version of Fisga: told, installed by the system's packages"
 "$BIN/fisga" update | tee "$SANDBOX/update.out"

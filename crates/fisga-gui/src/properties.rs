@@ -18,6 +18,7 @@ fn lines(info: &DownloadInfo, queues: &[Queue]) -> Vec<(&'static str, String)> {
         SourceKind::Direct => tr!("Link direto"),
         SourceKind::Page => tr!("Vídeo de site (pelo yt-dlp)"),
         SourceKind::Stream => tr!("Transmissão (HLS/DASH)"),
+        SourceKind::Gallery => tr!("Post ou perfil de site (pelo gallery-dl)"),
     };
     let file = match (&info.path, &info.dir) {
         (Some(path), _) => path.display().to_string(),

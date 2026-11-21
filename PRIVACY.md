@@ -30,6 +30,12 @@ o Deno das páginas de cada projeto no GitHub, e procura uma versão nova do yt-
 por dia em que você baixar vídeos. Essas conexões não levam nenhum dado seu além do que qualquer
 download leva (o endereço IP, por exemplo).
 
+Do mesmo jeito, ao mandar o primeiro post ou perfil pela galeria da extensão, o aplicativo baixa o
+gallery-dl (no Windows, da página do projeto no Codeberg; no macOS, das compilações do autor no
+GitHub) e procura uma versão nova dele no máximo uma vez por dia. O gallery-dl roda no seu
+computador e recebe os cookies do site do post (o seu login nele) num arquivo temporário, apagado
+quando ele termina; só fala com esse site.
+
 ## Versões novas
 
 Uma vez por dia, o aplicativo pergunta à API do GitHub qual é a última versão publicada do Fisga
@@ -68,7 +74,11 @@ The extension's preferences stay in the browser's local storage.
 On Windows and macOS, the first video you ask for makes the application fetch yt-dlp, ffmpeg and Deno
 from each project's GitHub pages, and it looks for a new yt-dlp at most once a day when you download
 videos. These connections carry nothing about you beyond what any download does (your IP address,
-for example).
+for example). Likewise, the first post or profile sent from the extension's gallery makes it fetch
+gallery-dl (on Windows from the project's Codeberg page, on macOS from its author's builds on GitHub),
+and it looks for a new one at most once a day. gallery-dl runs on your computer and gets the cookies
+of the post's site (your login there) in a temporary file deleted when it ends; it only talks to that
+site.
 
 Once a day the application asks GitHub's API which is Fisga's latest published version
 (`api.github.com/repos/Michaeljhoni/Fisga/releases/latest`). The request carries only what any request

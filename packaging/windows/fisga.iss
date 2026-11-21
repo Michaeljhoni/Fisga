@@ -79,7 +79,8 @@ Filename: "{app}\bin\fisga-gui.exe"; Description: "{cm:LaunchProgram,Fisga}"; Fl
 Filename: "{app}\bin\fisga-gui.exe"; Flags: nowait; Check: Relaunch
 
 [UninstallDelete]
-; The video programs Fisga fetched (see tools.rs in the daemon), and its updates.
+; The programs Fisga fetched (yt-dlp, ffmpeg, Deno, gallery-dl: see tools.rs in
+; the daemon), and its updates.
 Type: filesandordirs; Name: "{localappdata}\fisga\tools"
 Type: filesandordirs; Name: "{localappdata}\fisga\update"
 ; The daemon's pipe name (fisga-ipc's runtime_dir) and the browsers' manifests

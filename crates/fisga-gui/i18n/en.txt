@@ -1055,3 +1055,9 @@ Deixe o modo do desenvolvedor ligado e a pasta onde está: sem eles, o navegador
 
 {} de {} pedidos falharam
 = {} of {} requests failed
+
+Post ou perfil de site (pelo gallery-dl)
+= Post or profile of a site (through gallery-dl)
+
+GALERIA
+= GALLERY

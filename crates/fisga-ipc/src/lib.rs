@@ -38,6 +38,10 @@ pub enum SourceKind {
     Stream,
     /// A web page whose media must be extracted (YouTube, Vimeo...), via yt-dlp.
     Page,
+    /// A post, profile or board of a social or art site (Instagram, X,
+    /// DeviantArt...) whose files gallery-dl lists: each one then becomes a
+    /// download of its own, and this one leaves the list.
+    Gallery,
 }
 
 /// A browser cookie, as returned by `cookies.getAll()` in the extension.
@@ -256,7 +260,7 @@ impl Category {
     }
 
     /// From the file name; videos from sites (yt-dlp) are videos unless the
-    /// name says otherwise (e.g. an audio-only `.m4a`).
+    /// name says otherwise (e.g. an audio-only `.m4a`), and galleries photos.
     pub fn detect(name: &str, kind: SourceKind) -> Category {
         let lower = name.to_ascii_lowercase();
         // Compound extensions first: "x.tar.gz" is an archive, not "gz" only.
@@ -266,6 +270,7 @@ impl Category {
         let category = name.rsplit_once('.').map(|(_, ext)| Category::from_extension(ext)).unwrap_or_default();
         match (category, kind) {
             (Category::Other, SourceKind::Page | SourceKind::Stream) => Category::Video,
+            (Category::Other, SourceKind::Gallery) => Category::Image,
             (category, _) => category,
         }
     }
@@ -1847,6 +1852,8 @@ mod tests {
         // Site videos: video unless the name says audio.
         assert_eq!(Category::detect("Meu vídeo", SourceKind::Page), Category::Video);
         assert_eq!(Category::detect("podcast.m4a", SourceKind::Page), Category::Music);
+        assert_eq!(Category::detect("Post de @fulano", SourceKind::Gallery), Category::Image);
+        assert_eq!(Category::detect("reel.mp4", SourceKind::Gallery), Category::Video);
         assert_eq!(Category::Other.folder(), None);
         assert_eq!(Category::Program.folder(), Some("Programas"));
     }

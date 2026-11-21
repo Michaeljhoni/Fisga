@@ -427,3 +427,146 @@ test("the link menu sends a video's page to yt-dlp, not its HTML", async () => {
     ],
   );
 });
+
+// ------------------------------------------------------------- gallery-dl
+test("the posts, albums and profiles gallery-dl takes, site by site", () => {
+  const bg = load();
+  const target = (url) => plain(bg.run(`galleryTarget(${JSON.stringify(url)})`));
+  const is = (url, whole, canonical) => assert.deepEqual([target(url)?.whole, target(url)?.url], [whole, canonical], url);
+  is("https://www.instagram.com/p/C1a2b3_-x/", "post", "https://www.instagram.com/p/C1a2b3_-x/");
+  is("https://instagram.com/fulano.de.tal/p/C1a2b3/?img_index=2", "post", "https://www.instagram.com/p/C1a2b3/");
+  is("https://www.instagram.com/fulano.de.tal/", "profile", "https://www.instagram.com/fulano.de.tal/");
+  is("https://www.instagram.com/fulano/tagged/", "profile", "https://www.instagram.com/fulano/");
+  is("https://www.tiktok.com/@fulano/photo/7234567890123456789", "post", "https://www.tiktok.com/@fulano/photo/7234567890123456789");
+  is("https://www.tiktok.com/@fulano", "profile", "https://www.tiktok.com/@fulano");
+  is("https://twitter.com/fulano/status/1234567890/photo/2", "post", "https://x.com/fulano/status/1234567890");
+  is("https://x.com/fulano", "profile", "https://x.com/fulano/media");
+  is("https://www.deviantart.com/artista/art/Dragao-Azul-987654321", "post", "https://www.deviantart.com/artista/art/Dragao-Azul-987654321");
+  is("https://www.deviantart.com/artista/gallery/12345/esbocos", "album", "https://www.deviantart.com/artista/gallery/12345/esbocos");
+  is("https://www.deviantart.com/artista", "profile", "https://www.deviantart.com/artista/gallery");
+  is("https://www.flickr.com/photos/123456@N07/53012345678/in/photostream/", "post", "https://www.flickr.com/photos/123456@N07/53012345678/");
+  is("https://flickr.com/photos/fulano/albums/72177720312345678", "album", "https://www.flickr.com/photos/fulano/albums/72177720312345678");
+  is("https://www.flickr.com/photos/fulano/", "profile", "https://www.flickr.com/photos/fulano/");
+  is("https://old.reddit.com/r/pics/comments/abc123/um_titulo/", "post", "https://www.reddit.com/r/pics/comments/abc123/");
+  is("https://www.reddit.com/gallery/abc123", "post", "https://www.reddit.com/gallery/abc123/");
+  is("https://www.reddit.com/user/fulano/", "profile", "https://www.reddit.com/user/fulano/submitted/");
+  is("https://br.pinterest.com/pin/123456789012345678/", "post", "https://br.pinterest.com/pin/123456789012345678/");
+  is("https://www.pinterest.co.uk/fulana/receitas/", "album", "https://www.pinterest.co.uk/fulana/receitas/");
+  is("https://www.pinterest.com/fulana/_saved/", "profile", "https://www.pinterest.com/fulana/");
+  for (const url of [
+    "https://www.instagram.com/",
+    "https://www.instagram.com/explore/",
+    "https://www.instagram.com/reel/C1a2b3/", // a video: yt-dlp's
+    "https://www.instagram.com/stories/fulano/123/",
+    "https://www.tiktok.com/@fulano/video/7234567890123456789",
+    "https://www.tiktok.com/foryou",
+    "https://x.com/home",
+    "https://x.com/search?q=gatos",
+    "https://x.com/i/bookmarks",
+    "https://www.deviantart.com/search?q=dragao",
+    "https://www.flickr.com/photos/tags/praia",
+    "https://www.reddit.com/r/pics/",
+    "https://www.pinterest.com/search/pins/?q=bolo",
+    "https://www.pinterest.com/ideas/",
+    "https://notinstagram.com/p/C1a2b3/",
+    "https://example.com/p/C1a2b3/",
+    "ftp://www.instagram.com/p/C1a2b3/",
+    "",
+  ]) {
+    assert.equal(target(url), null, url);
+  }
+});
+
+/** The app: answers the ping (with or without gallery-dl) and takes media batches. */
+function app(galleryDl) {
+  return (msg) =>
+    msg.type === "ping"
+      ? { type: "pong", version: "1.4.0", daemon: true, galleryDl }
+      : msg.type === "media-batch"
+        ? { type: "added-batch", ids: msg.downloads.map((_, i) => 10 + i) }
+        : { type: "settings", fileTypes: [] };
+}
+const FROM_GALLERY = { url: "chrome-extension://fisga-test/media.html?tab=1" };
+const PROFILE = "https://www.instagram.com/fulano/";
+const PROFILE_PAGE = {
+  url: PROFILE,
+  title: "Fulano (@fulano)",
+  items: [
+    // The grid: each thumbnail links to its post.
+    { type: "image", kind: "direct", url: "https://scontent.cdninstagram.com/a_s640x640.jpg", postLink: "https://www.instagram.com/p/AAA111/" },
+    { type: "image", kind: "direct", url: "https://scontent.cdninstagram.com/b_s640x640.jpg", postLink: "https://www.instagram.com/fulano/p/BBB222/" },
+    // The avatar links to the profile: not a post, it stays a photo.
+    { type: "image", kind: "direct", url: "https://scontent.cdninstagram.com/avatar.jpg", postLink: PROFILE },
+    { type: "image", kind: "direct", url: "https://scontent.cdninstagram.com/og.jpg", source: "meta" },
+  ],
+};
+
+test("with gallery-dl, a profile is one more item and its grid's photos are their posts", async () => {
+  const bg = load({ native: app(true), tabs: { 1: { id: 1, url: PROFILE, title: "Fulano (@fulano)" } }, frames: { 0: PROFILE_PAGE } });
+  const res = plain(await bg.run("handle")({ type: "gallery-scan", tabId: 1 }, FROM_GALLERY));
+  assert.equal(res.page.galleryDl, true);
+  assert.equal(res.page.galleryHint, false);
+  const [first, ...rest] = res.items;
+  assert.deepEqual([first.kind, first.whole, first.url, first.name], ["gallery", "profile", PROFILE, "@fulano"]);
+  assert.deepEqual(
+    rest.map((item) => item.post ?? null),
+    ["https://www.instagram.com/p/AAA111/", "https://www.instagram.com/p/BBB222/", null, null],
+  );
+  assert.ok(rest.every((item) => !("postLink" in item)), "the links stay in the background");
+});
+
+test("on a post's page its photos are the post; without gallery-dl, a hint instead", async () => {
+  const post = "https://www.instagram.com/p/AAA111/";
+  const page = {
+    url: post,
+    title: "Fulano no Instagram",
+    items: [
+      { type: "image", kind: "direct", url: "https://scontent.cdninstagram.com/1.jpg" },
+      { type: "image", kind: "direct", url: "https://scontent.cdninstagram.com/og.jpg", source: "meta" },
+    ],
+  };
+  const tabs = { 1: { id: 1, url: post, title: "Fulano no Instagram" } };
+  const scan = async (galleryDl) =>
+    plain(await load({ native: app(galleryDl), tabs, frames: { 0: page } }).run("handle")({ type: "gallery-scan", tabId: 1 }, FROM_GALLERY));
+  const withIt = await scan(true);
+  assert.deepEqual(
+    withIt.items.map((item) => [item.kind, item.post ?? item.url]),
+    [["gallery", post], ["direct", post], ["direct", post]],
+  );
+  assert.equal(withIt.items[0].thumb, "https://scontent.cdninstagram.com/og.jpg", "the page's picture");
+  assert.equal(withIt.items[0].name, "Fulano no Instagram");
+  const without = await scan(false);
+  assert.deepEqual([without.page.galleryDl, without.page.galleryHint], [false, true]);
+  assert.ok(!without.items.some((item) => item.kind === "gallery"));
+  // Elsewhere the app is not asked.
+  const other = load({ native: app(true), frames: { 0: { url: "https://example.com/", items: [] } } });
+  await other.run("handle")({ type: "gallery-scan", tabId: 1 }, FROM_GALLERY);
+  assert.ok(!other.sent.some((msg) => msg.type === "ping"));
+});
+
+test("a post goes to the app for gallery-dl, into the site's folder, with the site's cookies", async () => {
+  const post = "https://www.instagram.com/p/AAA111/";
+  const bg = load({ native: app(true), tabs: { 1: { id: 1, url: PROFILE } } });
+  const items = [
+    { url: post, kind: "gallery", type: "image", name: "Post" },
+    { url: PROFILE, kind: "gallery", type: "image", name: "@fulano" },
+    // Only the addresses gallery-dl is known to take, as it knows them.
+    { url: "https://example.com/p/AAA111/", kind: "gallery", type: "image" },
+    { url: "https://www.instagram.com/fulano/p/AAA111/", kind: "gallery", type: "image" },
+    { url: "https://scontent.cdninstagram.com/c.jpg", kind: "direct", type: "image" },
+  ];
+  const res = plain(await bg.run("handle")({ type: "gallery-download", tabId: 1, pageUrl: PROFILE, items }, FROM_GALLERY));
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.sent, [post, PROFILE, "https://scontent.cdninstagram.com/c.jpg"]);
+  const [batch] = bg.sent.filter((msg) => msg.type === "media-batch");
+  assert.deepEqual(
+    batch.downloads.map((d) => [d.url, d.kind, d.category, d.subfolder, d.title ?? null]),
+    [
+      [post, "gallery", "image", "instagram.com", "Post"],
+      [PROFILE, "gallery", "image", "instagram.com", "@fulano"],
+      ["https://scontent.cdninstagram.com/c.jpg", "direct", "image", "instagram.com", null],
+    ],
+  );
+  const asked = bg.calls.filter(([name]) => name === "cookies").map(([, details]) => details.url);
+  assert.ok(asked.includes(post), "the login gallery-dl needs is the site's");
+});

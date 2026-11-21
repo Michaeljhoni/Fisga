@@ -900,6 +900,9 @@
         shownHeight: natural.h,
         name: clean(img.alt || img.title),
         source: best.from,
+        // The post a feed's or a grid's photo leads to (the background knows
+        // the sites whose posts gallery-dl takes whole).
+        postLink: linked && isHttp(linked.href) ? linked.href : "",
       });
     }
 
@@ -913,7 +916,9 @@
       for (const attr of BG_ATTRS) url ||= absolute(el.getAttribute(attr));
       if (!url && el.offsetWidth >= 120 && el.offsetHeight >= 120) url = absolute(bgUrl(getComputedStyle(el).backgroundImage));
       if (!isHttp(url)) continue;
-      add({ type: "image", kind: "direct", url, thumb: url, width: 0, height: 0, name: clean(el.getAttribute("aria-label") || el.title), source: "background" });
+      const linked = el.closest("a[href]");
+      const postLink = linked && isHttp(linked.href) ? linked.href : "";
+      add({ type: "image", kind: "direct", url, thumb: url, width: 0, height: 0, name: clean(el.getAttribute("aria-label") || el.title), source: "background", postLink });
     }
 
     // Links to media files ("download the original", galleries without a viewer).

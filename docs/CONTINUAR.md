@@ -68,7 +68,23 @@ Dados no Linux:
   guarda em `dirs::data_local_dir()/fisga/tools`; `DownloadInfo.note` mostra o andamento. `tools::yt_dlp()`
   monta o comando com essa pasta na frente do PATH. Fica fora dos instaladores porque somariam mais de
   100 MB, o yt-dlp envelheceria até a próxima versão e o Fisga teria de publicar o fonte do ffmpeg (GPL).
-  O CI baixa e roda tudo de verdade (`cargo test -p fisga-daemon -- --ignored`).
+  O CI baixa e roda tudo de verdade (`cargo test -p fisga-daemon -- --ignored`). O gallery-dl é outro
+  kit (`tools::Kit::Galleries`), buscado só no primeiro post ou perfil: `Source::Release` lê o
+  `releases/latest` da API (Codeberg no Windows, com o `SHA256SUMS` da release; no macOS as compilações
+  diárias de `gdl-org/builds` no GitHub, com o `digest` do asset), e arquivo e soma saem da mesma
+  resposta. O primeiro programa de cada kit (yt-dlp, gallery-dl) é atualizado no máximo uma vez por dia
+  (`<programa>.checked`).
+- **Posts e perfis pelo gallery-dl** (`gallery.rs`, `manager/gallery_files.rs`): a galeria da
+  extensão manda o post ou perfil como `SourceKind::Gallery` (`media-batch`). Ao rodar, o job chama
+  `gallery-dl --print 'prepare:FISGAFILE\t{_url!j}\t{filename!j}\t{extension!j}'` (lista sem baixar;
+  `_url` é a URL de cada arquivo), com `--cookies` (o arquivo temporário do `ytdlp.rs`), `--user-agent`,
+  o proxy pelo ambiente e `--range 1-5000`. Cada linha vira um download `Direct` (ou `Page` para os
+  `ytdl:`, que o yt-dlp baixa) em `<categoria>/<site>`, com o post como Referer e só os cookies do
+  host do arquivo; o que já está na pasta ou na lista fica de fora. Depois o job sai da lista
+  (`JobResult::Replaced`, `Response::Removed`, uma notificação). O gallery-dl (GPL-2.0-only) é um
+  programa separado: nada do código dele entra no Fisga. Na extensão, `galleryTarget()` do
+  `background.js` conhece os endereços de post, álbum e perfil de cada site (e os reescreve como o
+  gallery-dl os conhece); o `pong` do native host diz se há gallery-dl (`galleryDl`).
 - **Português e inglês** (`crates/fisga-i18n`): os textos ficam em português no código, dentro de
   `tr!("…")`/`trf!("… {}", x)`, e cada crate guarda o inglês em `i18n/en.txt` (o português numa linha,
   `= inglês` na seguinte). O teste `every_text_has_its_english` de cada crate falha com texto sem

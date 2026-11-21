@@ -55,11 +55,22 @@ fn write_message(output: &mut impl Write, value: &Value) -> io::Result<()> {
     output.flush()
 }
 
+/// Whether the gallery can hand posts and profiles to gallery-dl: on Windows
+/// and macOS Fisga fetches it the first time; elsewhere it is the system's
+/// package, there or not.
+fn gallery_dl_available() -> bool {
+    if cfg!(any(windows, target_os = "macos")) {
+        return true;
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path).any(|dir| dir.join("gallery-dl").is_file())
+}
+
 async fn handle(message: Incoming) -> Value {
     match message {
         Incoming::Ping => {
             let daemon = matches!(fisga_ipc::call(&Request::Ping).await, Ok(Response::Pong { .. }));
-            json!({ "type": "pong", "version": fisga_ipc::VERSION, "daemon": daemon })
+            json!({ "type": "pong", "version": fisga_ipc::VERSION, "daemon": daemon, "galleryDl": gallery_dl_available() })
         }
         // Not worth starting fisgad: the extension keeps what it read last.
         Incoming::Settings => match fisga_ipc::call(&Request::GetSettings).await {
@@ -184,6 +195,13 @@ mod tests {
         assert_eq!(downloads[0].subfolder.as_deref(), Some("e.com"));
         assert_eq!(downloads[0].page_url.as_deref(), Some("https://e.com/"));
         assert!(!downloads[0].confirm && downloads[0].start);
+        // A post for gallery-dl.
+        let post = parse(
+            br#"{"type":"media-batch","downloads":[{"url":"https://www.instagram.com/p/C1a2b3/","kind":"gallery","category":"image","subfolder":"instagram.com"}]}"#,
+        )
+        .unwrap();
+        let Incoming::MediaBatch { downloads } = post else { panic!("expected a media batch") };
+        assert_eq!(downloads[0].kind, fisga_ipc::SourceKind::Gallery);
         assert!(parse(br#"{"type":"nope"}"#).is_err());
         assert!(parse(b"[1,2]").is_err());
     }

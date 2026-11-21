@@ -17,6 +17,7 @@ optdepends=(
   'yt-dlp: videos from sites (YouTube and others)'
   'ffmpeg: merge audio and video from sites'
   'deno: YouTube, which needs a JavaScript runtime'
+  'gallery-dl: whole posts and profiles of social and art sites in the media gallery'
   'libnotify: notifications'
   'wl-clipboard: catch copied links on Wayland'
   'clamav: scan downloads with an antivirus'

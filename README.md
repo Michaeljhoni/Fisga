@@ -27,7 +27,9 @@
   link direto para o Fisga.
 - **Fotos e vídeos da página de uma vez:** o popup da extensão lista tudo o que a página tem, em
   abas (Vídeos, Fotos, Áudios), com o arquivo original e não a miniatura. Marque as que quiser (ou
-  todas) e elas vão para a fila, numa pasta com o nome do site.
+  todas) e elas vão para a fila, numa pasta com o nome do site. No Instagram, TikTok, X, DeviantArt,
+  Flickr, Reddit e Pinterest, uma foto traz o post inteiro (todas as fotos do carrossel, os
+  originais), e um perfil inteiro sai num clique, pelo gallery-dl.
 - **Janela "Novo download"**, como no IDM: confira nome, pasta e fila antes de começar.
 - **Filas e agendador:** quantos downloads ao mesmo tempo, horário para começar e parar, suspender
   ou desligar ao terminar.
@@ -88,14 +90,15 @@ git clone https://github.com/Michaeljhoni/Fisga.git
 cd Fisga && scripts/install-dev.sh
 ```
 
-Opcionais: `yt-dlp`, `ffmpeg` e `deno` (vídeos de sites; o YouTube precisa dos três), `libnotify`,
-`wl-clipboard` e `clamav`.
+Opcionais: `yt-dlp`, `ffmpeg` e `deno` (vídeos de sites; o YouTube precisa dos três), `gallery-dl`
+(posts e perfis inteiros na galeria da extensão), `libnotify`, `wl-clipboard` e `clamav`.
 
 ### Vídeos de sites
 
 No Windows e no macOS não é preciso instalar nada: no primeiro vídeo, o Fisga baixa o yt-dlp, o ffmpeg
 e o Deno (cerca de 150 MB, uma vez só; ocupam uns 300 MB no disco) dos sites de cada projeto e confere as somas. Quem já tem algum
-deles no PATH fica com o seu.
+deles no PATH fica com o seu. O gallery-dl (uns 25 MB) vem do mesmo jeito, no primeiro post ou perfil
+mandado pela galeria.
 
 ### Extensão do navegador
 
@@ -152,7 +155,8 @@ file into up to 32 connections, resumes interrupted downloads, has queues and a 
 with a Chrome and Firefox extension that catches the browser's downloads and adds a **Download** button
 over videos on any site (YouTube and others through yt-dlp). Its popup also lists every photo,
 video and audio of the page, in tabs, to download the originals at once into a folder named after
-the site. In Chrome, Edge, Brave and Vivaldi the
+the site; on Instagram, TikTok, X, DeviantArt, Flickr, Reddit and Pinterest a photo brings its whole
+post, and a whole profile takes one click, through gallery-dl. In Chrome, Edge, Brave and Vivaldi the
 extension is loaded from the folder that comes with Fisga (Developer mode → Load unpacked); the app
 shows how in ☰ → Install the extension in Chrome…. Get the Windows installer, the macOS
 `.dmg` or the Linux packages from the [latest release](https://github.com/Michaeljhoni/Fisga/releases/latest).

@@ -101,6 +101,16 @@ h1 { font-size: 16px; margin: 0; }
 main { flex: 1; overflow: auto; padding: 16px; }
 .status { margin: 24px auto; text-align: center; max-width: 560px; }
 .status[hidden] { display: none; }
+.hint {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 13px;
+}
+.hint[hidden] { display: none; }
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
@@ -164,6 +174,7 @@ main { flex: 1; overflow: auto; padding: 16px; }
   color: #fff;
 }
 .badge.original { background: rgba(22, 163, 74, 0.9); }
+.badge.post { background: rgba(124, 58, 237, 0.9); }
 .badge.drm { background: rgba(185, 28, 28, 0.92); }
 .card:has(.badge.drm) { cursor: not-allowed; opacity: 0.7; }
 .meta { padding: 8px 10px 10px; min-width: 0; }

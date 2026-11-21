@@ -17,9 +17,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use crate::{notify, ytdlp};
+use crate::tools::Kit;
+use crate::{gallery, notify, ytdlp};
 
 mod complete;
+mod gallery_files;
 mod grab;
 mod network;
 mod refresh;
@@ -48,6 +50,9 @@ pub enum JobResult {
     Completed(PathBuf),
     Paused,
     Failed(String),
+    /// It became other downloads (a gallery, its files) and leaves the list;
+    /// what was done, for the notification.
+    Replaced(String),
 }
 
 struct Job {
@@ -619,6 +624,11 @@ impl Manager {
             return;
         };
         let keep_name = request.file_name.is_some();
+        if request.kind == SourceKind::Gallery {
+            // What it holds is found when it runs (see `gallery`).
+            self.update(id, |info| info.probing = false);
+            return;
+        }
         if request.kind == SourceKind::Direct {
             let spec = RequestSpec { url: request.url.clone(), headers: self.headers(&request) };
             let result = fisga_core::probe(&self.client(), &spec).await;
@@ -926,8 +936,17 @@ impl Manager {
     /// Fetches the programs a video needs, if they are not here yet (see
     /// `tools`); the download `id` shows how it goes.
     pub async fn prepare_video(&self, id: u64) -> Result<(), String> {
+        self.prepare_tools(id, Kit::Videos).await
+    }
+
+    /// The same for gallery-dl (a gallery's posts and profiles).
+    pub async fn prepare_gallery(&self, id: u64) -> Result<(), String> {
+        self.prepare_tools(id, Kit::Galleries).await
+    }
+
+    async fn prepare_tools(&self, id: u64, kit: Kit) -> Result<(), String> {
         let noted = AtomicBool::new(false);
-        let result = crate::tools::ensure(&self.client(), |note| {
+        let result = crate::tools::ensure(&self.client(), kit, |note| {
             noted.store(true, Ordering::Relaxed);
             self.update(id, |info| info.note = Some(note));
         })
@@ -956,6 +975,7 @@ impl Manager {
         let result = match request.kind {
             SourceKind::Direct => self.run_direct(id, &request, path, limiter, cancel.clone()).await,
             SourceKind::Stream | SourceKind::Page => ytdlp::run(&self, id, &request, cancel.clone()).await,
+            SourceKind::Gallery => gallery::run(&self, id, &request, cancel.clone()).await,
         };
         self.finish(id, result);
     }
@@ -1033,6 +1053,9 @@ impl Manager {
     }
 
     fn finish(self: &Arc<Self>, id: u64, result: JobResult) {
+        if let JobResult::Replaced(done) = result {
+            return self.replaced(id, &done);
+        }
         let mut message = None;
         let (requeue, from_queue, queue) = self
             .inner
@@ -1082,6 +1105,8 @@ impl Manager {
                     info.error = Some(error.clone());
                     message = Some((tr!("Falha no download").to_string(), format!("{}\n{}", info.name, error)));
                 }
+                // Gone from the list already (see `replaced`).
+                JobResult::Replaced(_) => {}
             }
         });
         if let JobResult::Completed(path) = &result {
@@ -1089,6 +1114,19 @@ impl Manager {
         }
         if let Some((summary, body)) = message {
             notify::send(&summary, &body);
+        }
+        self.save();
+        self.schedule();
+    }
+
+    /// A download that became others (a gallery, its files) leaves the list.
+    fn replaced(self: &Arc<Self>, id: u64, done: &str) {
+        let gone = self.inner.lock().unwrap().jobs.remove(&id);
+        if let Some(job) = gone {
+            self.paths.release(id);
+            let _ = self.updates.send(Response::Removed { id });
+            tracing::info!(id, "{done}");
+            notify::send(tr!("Galeria"), &format!("{}\n{done}", job.info.name));
         }
         self.save();
         self.schedule();

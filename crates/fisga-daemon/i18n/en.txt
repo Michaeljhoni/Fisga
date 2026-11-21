@@ -297,3 +297,48 @@ outro download da lista usa o arquivo {}
 
 outro fisgad já está usando a lista de downloads ({})
 = another fisgad is already using the download list ({})
+
+Preparando as galerias, só na primeira vez: {} ({})
+= Getting galleries ready, first time only: {} ({})
+
+não foi possível preparar as galerias ({}): {}
+= could not get galleries ready ({}): {}
+
+resposta inválida de {}: {}
+= invalid answer from {}: {}
+
+{} não está na versão mais nova
+= {} is not in the newest release
+
+o gallery-dl não encontrou nenhum arquivo nesta página
+= gallery-dl found no files on this page
+
+o gallery-dl não sabe baixar desta página ({})
+= gallery-dl cannot download from this page ({})
+
+o site pediu login: entre na sua conta no navegador e baixe de novo pela galeria (gallery-dl: {})
+= the site asked for a login: sign in to your account in the browser and download again from the gallery (gallery-dl: {})
+
+Procurando os arquivos com o gallery-dl…
+= Looking for the files with gallery-dl…
+
+Procurando os arquivos com o gallery-dl… {} encontrados
+= Looking for the files with gallery-dl… {} found
+
+{} de {} arquivos foram para a fila, mas o gallery-dl parou antes do fim; tente de novo para buscar o resto. ({})
+= {} of {} files went to the queue, but gallery-dl stopped before the end; try again to fetch the rest. ({})
+
+Nada novo: os {} arquivos já estão na pasta ou na lista.
+= Nothing new: the {} files are already in the folder or in the list.
+
+{} arquivos na fila.
+= {} files in the queue.
+
+o gallery-dl não está instalado. Instale pelo gerenciador de pacotes da sua distro (ex.: pacman -S gallery-dl).
+= gallery-dl is not installed. Install it with your distro's package manager (e.g. pacman -S gallery-dl).
+
+não foi possível iniciar o gallery-dl: {}
+= could not start gallery-dl: {}
+
+Galeria
+= Gallery

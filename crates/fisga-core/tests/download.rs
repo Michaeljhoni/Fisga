@@ -307,6 +307,36 @@ async fn empty_file_is_downloaded() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_server_that_stops_answering_times_out() {
+    // Answers the probe, then takes the download's request and says nothing.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/files/mudo.bin", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        let mut first = true;
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let _ = socket.read(&mut [0; 4096]).await;
+            if std::mem::take(&mut first) {
+                let head = "HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n0123456789";
+                let _ = socket.write_all(head.as_bytes()).await;
+            } else {
+                held.push(socket);
+            }
+        }
+    });
+    let dir = temp_dir("mute");
+    let client = fisga_core::build_client().unwrap();
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let opts = DownloadOptions { idle_timeout: Duration::from_millis(500), max_retries: 0, ..Default::default() };
+    let target = Target::Dir { dir, file_name: None };
+
+    let started = Instant::now();
+    let result = download(&client, &RequestSpec::new(&url), target, &opts, tx, CancellationToken::new()).await;
+    assert!(matches!(result, Err(fisga_core::Error::Timeout)), "{result:?}");
+    assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn missing_file_fails_without_retrying() {
     let data = test_data(2 * 1024 * 1024);
     let server = serve(data, ServerOpts { ranges: true, missing_segments: true, ..Default::default() }).await;

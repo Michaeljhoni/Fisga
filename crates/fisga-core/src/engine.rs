@@ -25,7 +25,7 @@ use url::Url;
 
 use crate::control::{self, ControlFile, SegmentState};
 use crate::fileio::write_all_at;
-use crate::probe::{probe, ProbeResult};
+use crate::probe::{probe_within, ProbeResult};
 use crate::{filename, Error, RequestSpec, Result};
 
 /// Bytes buffered per connection before a positional write.
@@ -132,7 +132,7 @@ pub async fn download(
     }
     let probe = tokio::select! {
         _ = cancel.cancelled() => return Err(Error::Cancelled),
-        p = probe(client, spec) => p?,
+        p = probe_within(client, spec, opts.idle_timeout) => p?,
     };
     // The data comes from the redirect's target: credentials only if it is the same host.
     let followed = spec.for_final_url(&probe.final_url);
@@ -263,7 +263,14 @@ async fn single_stream(
     use tokio::io::AsyncWriteExt;
 
     let part = control::part_path(&final_path);
-    let resp = spec.apply(client.get(probe.final_url.clone())).send().await?;
+    let send = spec.apply(client.get(probe.final_url.clone())).send();
+    let resp = tokio::select! {
+        _ = cancel.cancelled() => {
+            let _ = tokio::fs::remove_file(&part).await;
+            return Ok(Outcome::Paused(final_path));
+        }
+        resp = tokio::time::timeout(opts.idle_timeout, send) => resp.map_err(|_| Error::Timeout)??,
+    };
     if !resp.status().is_success() {
         return Err(Error::Status(resp.status()));
     }
@@ -581,7 +588,7 @@ impl Ctx {
                         return Ok(());
                     }
                     if asked.elapsed() >= self.idle_timeout {
-                        return Err(Error::Other(tr!("tempo esgotado esperando a resposta do servidor").into()));
+                        return Err(Error::Timeout);
                     }
                 }
             }

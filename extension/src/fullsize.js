@@ -38,15 +38,14 @@
         if (/^\/profile_(images|banners)\//.test(u.pathname)) {
           return [withPath(u, (p) => p.replace(/_(normal|bigger|mini|reasonably_small|\d+x\d+)(\.\w+)$/, "$2"))];
         }
+        if (/^\/profile_banners\//.test(u.pathname)) return [withPath(u, (p) => p.replace(/\/\d+x\d+$/, ""))];
         if (!/^\/(media|ext_tw_video_thumb|amplify_video_thumb|tweet_video_thumb)\//.test(u.pathname)) return [];
-        const copy = new URL(u.href);
-        const legacy = /^(.*?)(\.(jpe?g|png|webp))(?::\w+)?$/i.exec(copy.pathname);
-        if (legacy) {
-          copy.pathname = legacy[1];
-          copy.searchParams.set("format", legacy[3].toLowerCase() === "jpeg" ? "jpg" : legacy[3].toLowerCase());
-        }
-        copy.searchParams.set("name", "orig");
-        return [copy.href];
+        const legacy = /^(.*?)(\.(jpe?g|png|webp|gif))(?::\w+)?$/i.exec(u.pathname);
+        const path = legacy ? legacy[1] : u.pathname;
+        let format = (legacy ? legacy[3] : u.searchParams.get("format") || "jpg").toLowerCase();
+        if (format === "jpeg" || format === "webp") format = "jpg";
+        const at = (fmt, name) => `${u.origin}${path}?format=${fmt}&name=${name}`;
+        return [at(format, "orig"), ...(format === "jpg" ? [at("png", "orig")] : []), at(format, "4096x4096"), at(format, "large")];
       },
     },
     {
@@ -75,9 +74,10 @@
       name: "pinterest",
       apply(u) {
         if (!hostIs(u, "pinimg.com")) return [];
-        const m = /^\/(\d+x\d*|[a-z]*\d+x\d*_RS|\d+x)\/(.+)$/.exec(u.pathname);
+        const m = /^\/(?:vwebp\/)?(\d+x\d*|[a-z]*\d+x\d*_RS|\d+x)\/(.+?)(\.\w+)$/.exec(u.pathname);
         if (!m) return [];
-        return [withPath(u, () => `/originals/${m[2]}`), withPath(u, () => `/736x/${m[2]}`)];
+        const exts = [m[3], ...[".jpg", ".png", ".gif", ".webp"].filter((e) => e !== m[3])];
+        return [...exts.map((e) => withPath(u, () => `/originals/${m[2]}${e}`)), withPath(u, () => `/736x/${m[2]}${m[3]}`)];
       },
     },
     {
@@ -85,16 +85,18 @@
       name: "imgur",
       apply(u) {
         if (!hostIs(u, "i.imgur.com")) return [];
-        const m = /^\/([A-Za-z0-9]{7}|[A-Za-z0-9]{5})[sbtmlh](\.\w+)$/.exec(u.pathname);
-        return m ? [withPath(u, () => `/${m[1]}${m[2]}`)] : [];
+        if (/\.gifv$/.test(u.pathname)) return [withPath(u, (p) => p.replace(/\.gifv$/, ".mp4"))];
+        const m = /^\/([A-Za-z0-9]{7}|[A-Za-z0-9]{5})(?:[sbtmlhrg]|_d)(\.\w+)$/.exec(u.pathname);
+        return m ? [`https://i.imgur.com/${m[1]}${m[2]}`] : [];
       },
     },
     {
       // Reddit: preview.redd.it/name.jpg?width=640&... → i.redd.it/name.jpg.
       name: "reddit",
       apply(u) {
-        if (u.hostname !== "preview.redd.it") return [];
-        const name = u.pathname.split("/").pop();
+        if (hostIs(u, "reddit.com") && u.pathname === "/media" && u.searchParams.get("url")) return [u.searchParams.get("url")];
+        if (u.hostname !== "preview.redd.it" && u.hostname !== "cf.preview.redd.it") return [];
+        const name = u.pathname.split("/").pop().replace(/^.*-v0-/, "");
         if (!/\.(jpe?g|png|gif|webp)$/i.test(name)) return [];
         return [`https://i.redd.it/${name}`];
       },
@@ -134,7 +136,7 @@
       apply(u) {
         if (!hostIs(u, "ytimg.com")) return [];
         const m = /^\/vi(?:_webp)?\/([\w-]{11})\/(?:hq720|(?:hq|mq|sd|oar)?default|(?:hq|mq|sd|oar)\d)\.(?:jpg|webp)$/.exec(u.pathname);
-        return m ? [`https://i.ytimg.com/vi/${m[1]}/maxresdefault.jpg`, `https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg`] : [];
+        return m ? ["maxresdefault", "sddefault", "hqdefault"].map((n) => `https://i.ytimg.com/vi/${m[1]}/${n}.jpg`) : [];
       },
     },
     {
@@ -168,7 +170,7 @@
         if (!hostIs(u, "artstation.com") || !/\/images\//.test(u.pathname)) return [];
         const size = /\/(smaller_square|small_square|micro_square|small|medium|large|4k)\//;
         if (!size.test(u.pathname)) return [];
-        return ["4k", "large"].map((s) => withPath(u, (p) => p.replace(size, `/${s}/`)));
+        return ["original", "8k", "4k", "large"].map((s) => withPath(u, (p) => p.replace(size, `/${s}/`)));
       },
     },
     {
@@ -178,7 +180,7 @@
         if (!hostIs(u, "behance.net")) return [];
         const m = /^\/(projects|project_modules)\/[^/]+\/(.+)$/.exec(u.pathname);
         if (!m) return [];
-        return [withPath(u, () => `/${m[1]}/source/${m[2]}`), withPath(u, () => `/${m[1]}/max_3840/${m[2]}`)];
+        return ["source", "fs", "max_3840"].map((size) => withPath(u, () => `/${m[1]}/${size}/${m[2]}`));
       },
     },
     {
@@ -186,10 +188,13 @@
       name: "wordpress",
       apply(u) {
         const out = [];
-        if (/\/wp-content\/uploads\//.test(u.pathname) && /-\d+x\d+(\.\w+)$/.test(u.pathname)) {
-          out.push(withPath(u, (p) => p.replace(/-\d+x\d+(\.\w+)$/, "$1")));
+        const photon = /^i[0-3]\.wp\.com$/.test(u.hostname) && /^\/([^/]+\.[^/]+)(\/.+)$/.exec(u.pathname);
+        if (photon) out.push(`https://${photon[1]}${photon[2]}`);
+        if (/\/wp-content\/(uploads|blogs\.dir)\//.test(u.pathname)) {
+          if (/(-uai)?-\d+x\d+(_c)?(\.\w+)$/.test(u.pathname)) out.push(withPath(u, (p) => p.replace(/(-uai)?-\d+x\d+(_c)?(\.\w+)$/, "$3")));
+          if (/-scaled(\.\w+)$/.test(u.pathname)) out.push(withPath(u, (p) => p.replace(/-scaled(\.\w+)$/, "$1")));
         }
-        if (hostIs(u, "wp.com") || /\/wp-content\//.test(u.pathname)) {
+        if (hostIs(u, "wp.com") || hostIs(u, "files.wordpress.com") || /\/wp-content\//.test(u.pathname)) {
           const plain = without(u, ["resize", "w", "h", "fit", "crop", "quality", "ssl", "strip", "zoom"]);
           if (plain !== u.href) out.push(plain);
         }
@@ -202,7 +207,9 @@
       apply(u) {
         if (!hostIs(u, "cdn.shopify.com", "shopify.com") && !/\/cdn\/shop\//.test(u.pathname)) return [];
         const copy = new URL(without(u, ["width", "height", "crop"]));
-        copy.pathname = copy.pathname.replace(/_(\d+x\d*|x\d+|pico|icon|thumb|small|compact|medium|large|grande)(_crop_\w+)?(@\dx)?(\.\w+)$/, "$4");
+        copy.pathname = copy.pathname
+          .replace(/\.(jpe?g|png)\.webp$/i, ".$1")
+          .replace(/_(\d+x\d*|x\d+|pico|icon|thumb|small|compact|medium|large|grande)(@\dx)?(_crop_\w+)?(\.progressive)?(\.\w+)$/, "$5");
         return copy.href !== u.href ? [copy.href] : [];
       },
     },
@@ -229,8 +236,10 @@
       // Cloudinary: /image/upload/w_300,c_fill/v123/x.jpg → /image/upload/v123/x.jpg.
       name: "cloudinary",
       apply(u) {
-        if (!hostIs(u, "cloudinary.com")) return [];
-        const m = /^(.*\/(?:image|video)\/upload\/)((?:[a-z]{1,3}_[^/]+\/)+)(v\d+\/.+|[^/]+\.\w+)$/.exec(u.pathname);
+        if (!hostIs(u, "cloudinary.com", "substackcdn.com")) return [];
+        const fetched = /\/image\/fetch\/(?:[^/]*\/)*?(https?(?::|%3A).+)$/i.exec(u.pathname);
+        if (fetched) return [decodeURIComponent(fetched[1])];
+        const m = /^(.*\/(?:image|video)\/upload\/)(?:s--[\w-]+--\/)?((?:[a-z]{1,3}_[^/]+\/)+)(v\d+\/.+|[^/]+\.\w+)$/.exec(u.pathname);
         return m ? [withPath(u, () => `${m[1]}${m[3]}`)] : [];
       },
     },
@@ -252,6 +261,18 @@
         if (!hostIs(u, "miro.medium.com", "cdn-images-1.medium.com")) return [];
         if (/^\/v2\/(?:[a-z]+:[^/]+\/)+/.test(u.pathname)) return [withPath(u, (p) => p.replace(/^\/v2\/(?:[a-z]+:[^/]+\/)+/, "/v2/"))];
         if (/^\/max\/\d+\//.test(u.pathname)) return [withPath(u, (p) => p.replace(/^\/max\/\d+\//, "/"))];
+        return [];
+      },
+    },
+    {
+      // Next.js (/_next/image?url=...&w=) and Cloudflare (/cdn-cgi/image/OPTS/SRC) resize proxies.
+      name: "proxies",
+      apply(u) {
+        if (u.pathname.endsWith("/_next/image") && u.searchParams.get("url")) {
+          return [new URL(u.searchParams.get("url"), u.origin).href];
+        }
+        const m = /^\/cdn-cgi\/image\/[^/]+\/(.+)$/.exec(u.pathname);
+        if (m) return [/^https?:/.test(m[1]) ? m[1].replace(/^(https?):\/(?!\/)/, "$1://") : `${u.origin}/${m[1]}`];
         return [];
       },
     },

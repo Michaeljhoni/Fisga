@@ -487,21 +487,134 @@ async function galleryScan(tabId) {
   return { ok: true, error, page: { url: tab.url, title: tab.title, folder: siteFolder(tab.url) }, items };
 }
 
-/** Is this address there, and what is it? HEAD, or one byte when HEAD is refused. */
+/** Width and height from the first bytes of a JPEG, PNG, GIF, WebP, AVIF/HEIF or BMP. */
+function imageSize(bytes) {
+  const b = bytes;
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const text = (at, n) => String.fromCharCode(...b.subarray(at, at + n));
+  if (b.length >= 24 && b[0] === 0x89 && text(1, 3) === "PNG") return { width: dv.getUint32(16), height: dv.getUint32(20) };
+  if (b.length >= 10 && text(0, 3) === "GIF") return { width: dv.getUint16(6, true), height: dv.getUint16(8, true) };
+  if (b.length >= 30 && text(0, 4) === "RIFF" && text(8, 4) === "WEBP") {
+    const kind = text(12, 4);
+    if (kind === "VP8 ") return { width: dv.getUint16(26, true) & 0x3fff, height: dv.getUint16(28, true) & 0x3fff };
+    if (kind === "VP8L") {
+      const bits = dv.getUint32(21, true);
+      return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+    }
+    if (kind === "VP8X") return { width: 1 + (b[24] | (b[25] << 8) | (b[26] << 16)), height: 1 + (b[27] | (b[28] << 8) | (b[29] << 16)) };
+  }
+  if (b.length >= 4 && b[0] === 0xff && b[1] === 0xd8) {
+    // JPEG: skip the segments (EXIF, ICC...) up to the frame header.
+    let i = 2;
+    while (i + 9 < b.length) {
+      if (b[i] !== 0xff) return null;
+      const marker = b[i + 1];
+      if (marker === 0xff) {
+        i++;
+        continue;
+      }
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { width: dv.getUint16(i + 7), height: dv.getUint16(i + 5) };
+      }
+      i += 2 + dv.getUint16(i + 2);
+    }
+    return null;
+  }
+  if (b.length >= 26 && text(0, 2) === "BM") return { width: dv.getInt32(18, true), height: Math.abs(dv.getInt32(22, true)) };
+  // AVIF/HEIF: the image's 'ispe' box.
+  for (let i = 4; i + 16 <= b.length; i++) {
+    if (b[i] === 0x69 && text(i, 4) === "ispe") return { width: dv.getUint32(i + 8), height: dv.getUint32(i + 12) };
+  }
+  return null;
+}
+
+/**
+ * Is this address there, and what is it? The first 64 KiB (their header
+ * gives a photo's size), never HEAD: some CDNs refuse it (X answers 503,
+ * Google 404) where GET works.
+ */
 async function probeUrl(url) {
   if (!/^https?:/i.test(url ?? "") || isBlocked(url)) return { ok: false };
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10000);
+  const timer = setTimeout(() => controller.abort(), 12000);
   try {
-    let res = await fetch(url, { method: "HEAD", credentials: "include", signal: controller.signal, redirect: "follow" });
-    if (!res.ok) {
-      res = await fetch(url, { headers: { Range: "bytes=0-0" }, credentials: "include", signal: controller.signal, redirect: "follow" });
-      res.body?.cancel().catch(() => {});
-    }
+    const res = await fetch(url, { headers: { Range: "bytes=0-65535" }, credentials: "include", signal: controller.signal, redirect: "follow" });
     const type = (res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
     const range = res.headers.get("content-range");
     const total = range ? Number(range.split("/")[1]) : Number(res.headers.get("content-length"));
-    return { ok: res.ok, status: res.status, type, size: Number.isFinite(total) && total > 0 ? total : null, url: res.url || url };
+    let dimensions = null;
+    if (res.ok && /^image\//.test(type) && res.body) {
+      const reader = res.body.getReader();
+      const chunks = [];
+      let length = 0;
+      while (length < 65536) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        length += value.length;
+      }
+      reader.cancel().catch(() => {});
+      const bytes = new Uint8Array(length);
+      let at = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, at);
+        at += chunk.length;
+      }
+      try {
+        dimensions = imageSize(bytes);
+      } catch {}
+    } else {
+      res.body?.cancel().catch(() => {});
+    }
+    return {
+      ok: res.ok,
+      status: res.status,
+      type,
+      size: Number.isFinite(total) && total > 0 ? total : null,
+      url: res.url || url,
+      width: dimensions?.width || 0,
+      height: dimensions?.height || 0,
+    };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * An HLS or DASH manifest: the best resolution it offers, whether it is
+ * protected (DRM: cannot be downloaded), and the quality playlists a master
+ * lists (shown once, as the master).
+ */
+async function probeManifest(url) {
+  if (!/^https?:/i.test(url ?? "") || isBlocked(url)) return { ok: false };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const res = await fetch(url, { credentials: "include", signal: controller.signal });
+    const text = (await res.text()).slice(0, 512 * 1024);
+    if (/^#EXTM3U/m.test(text)) {
+      const lines = text.split(/\r?\n/);
+      let height = 0;
+      const variants = [];
+      lines.forEach((line, i) => {
+        if (!/^#EXT-X-STREAM-INF/.test(line)) return;
+        height = Math.max(height, Number(/RESOLUTION=\d+x(\d+)/.exec(line)?.[1] ?? 0));
+        const next = lines.slice(i + 1).find((l) => l.trim() && !l.startsWith("#"));
+        if (next) variants.push(new URL(next.trim(), res.url || url).href);
+      });
+      const drm = /#EXT-X(?:-SESSION)?-KEY:[^\n]*(METHOD=SAMPLE-AES|KEYFORMAT="(com\.apple\.streamingkeydelivery|urn:uuid))/i.test(text);
+      return { ok: true, master: variants.length > 0, height, variants, drm };
+    }
+    if (/<MPD[\s>]/.test(text)) {
+      let height = 0;
+      for (const m of text.matchAll(/<Representation\b[^>]*\bheight="(\d+)"/g)) height = Math.max(height, Number(m[1]));
+      // Widevine and PlayReady.
+      const drm = /urn:uuid:(edef8ba9-79d6-4ace-a3c8-27dcd51d21ed|9a04f079-9840-4286-ab92-e65be0885f95)/i.test(text);
+      return { ok: true, master: true, height, variants: [], drm };
+    }
+    return { ok: res.ok, master: false, height: 0, variants: [], drm: false };
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };
   } finally {
@@ -576,6 +689,8 @@ async function handle(msg, sender) {
       return galleryScan(msg.tabId);
     case "gallery-probe":
       return probeUrl(msg.url);
+    case "gallery-manifest":
+      return probeManifest(msg.url);
     case "gallery-download":
       return galleryDownload(msg);
     case "media-candidates":

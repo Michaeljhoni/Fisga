@@ -461,6 +461,8 @@ const GALLERY_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Ga
 <audio id="audio" src="/media/musica.mp3" controls></audio>
 <p><a href="/media/extra.webm">Vídeo extra</a></p>
 <p><a href="https://www.youtube.com/watch?v=jNQXAC9IVRw" title="Me at the zoo"><img src="/img/320x180/yt.png"></a></p>
+<p><a href="/fake/2400x1600/foto.jpg">Foto JPEG</a> <a href="/fake/3000x2000/foto.webp">Foto WebP</a></p>
+<script>for (const u of ["/hls/master.m3u8", "/hls/720.m3u8", "/hls/drm.m3u8"]) fetch(u);</script>
 </body></html>`;
 
 async function gallerySite() {
@@ -477,6 +479,42 @@ async function gallerySite() {
       const body = png(w, h, w + h);
       res.writeHead(200, { "content-type": "image/png", "content-length": body.length });
       res.end(body);
+    } else if (/^\/fake\/(\d+)x(\d+)\/\w+\.(jpg|webp)$/.test(path)) {
+      // Only the header: enough for the gallery to read the size.
+      const [, w, h, ext] = /^\/fake\/(\d+)x(\d+)\/\w+\.(jpg|webp)$/.exec(path).map((v, i) => (i && i < 3 ? Number(v) : v));
+      let body;
+      if (ext === "jpg") {
+        const app0 = Buffer.from([0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 1, 1, 0, 0, 1, 0, 1, 0, 0]);
+        const exif = Buffer.concat([Buffer.from([0xff, 0xe1, 0x01, 0x02]), Buffer.alloc(256)]);
+        const sof = Buffer.from([0xff, 0xc0, 0x00, 0x11, 8, h >> 8, h & 255, w >> 8, w & 255, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+        body = Buffer.concat([Buffer.from([0xff, 0xd8]), app0, exif, sof, Buffer.alloc(4096), Buffer.from([0xff, 0xd9])]);
+      } else {
+        const vp8x = Buffer.alloc(18);
+        vp8x.write("VP8X", 0);
+        vp8x.writeUInt32LE(10, 4);
+        vp8x.writeUIntLE(w - 1, 12, 3);
+        vp8x.writeUIntLE(h - 1, 15, 3);
+        const riff = Buffer.alloc(12);
+        riff.write("RIFF", 0);
+        riff.writeUInt32LE(4 + vp8x.length, 4);
+        riff.write("WEBP", 8);
+        body = Buffer.concat([riff, vp8x, Buffer.alloc(2048)]);
+      }
+      res.writeHead(200, { "content-type": ext === "jpg" ? "image/jpeg" : "image/webp", "content-length": body.length });
+      res.end(body);
+    } else if (path.startsWith("/hls/")) {
+      const playlists = {
+        "/hls/master.m3u8": "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720\n720.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2400000,RESOLUTION=1920x1080\n1080.m3u8\n",
+        "/hls/720.m3u8": "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nseg0.ts\n#EXT-X-ENDLIST\n",
+        "/hls/drm.m3u8": '#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://key",KEYFORMAT="com.apple.streamingkeydelivery"\n#EXTINF:4,\nseg0.ts\n#EXT-X-ENDLIST\n',
+      };
+      if (!playlists[path]) {
+        res.writeHead(404);
+        res.end();
+      } else {
+        res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" });
+        res.end(playlists[path]);
+      }
     } else if (/^\/media\/\w+\.(mp4|webm|mp3)$/.test(path)) {
       const type = path.endsWith(".mp3") ? "audio/mpeg" : path.endsWith(".webm") ? "video/webm" : "video/mp4";
       const body = Buffer.alloc(300 * 1024);
@@ -528,7 +566,7 @@ async function galleryScenario(sw) {
   await openPage(base + "/");
   const { sessionId: gallery, targetId } = await openGallery(sw);
   await sleep(2500); // the originals' checks
-  const state = await evaluate(gallery, GALLERY_STATE());
+  const state = await evaluate(gallery, GALLERY_STATE(2000));
   await evaluate(gallery, "document.querySelector('[data-tab=image]').click()");
   await sleep(300);
   await shot(gallery, "gallery-photos");
@@ -568,10 +606,16 @@ async function galleryScenario(sw) {
     videoFile: urls("video").includes("/media/filme.mp4") && urls("video").includes("/media/extra.webm"),
     videoPage: urls("video").includes("https://www.youtube.com/watch?v=jNQXAC9IVRw"),
     audio: urls("audio").includes("/media/musica.mp3"),
-    sentAll: sent.length === state.image.length + state.video.length + (state.audio?.length ?? 0),
+    sentAll: sent.length === state.image.length + state.video.length - 1 + (state.audio?.length ?? 0),
     sentOriginal: sent.some((d) => d.url.endsWith("/flor.png") && d.category === "image"),
     sentFolder: sent.length > 0 && sent.every((d) => d.subfolder === "127.0.0.1"),
     sentCategories: sent.some((d) => d.category === "video" && d.kind === "page") && sent.some((d) => d.category === "music"),
+    jpegSize: (state.image ?? []).some((c) => c.url.endsWith("/foto.jpg") && c.detail.includes("2400×1600")),
+    webpSize: (state.image ?? []).some((c) => c.url.endsWith("/foto.webp") && c.detail.includes("3000×2000")),
+    hlsMasterOnly: urls("video").includes("/hls/master.m3u8") && !urls("video").includes("/hls/720.m3u8"),
+    hlsResolution: (state.video ?? []).some((c) => c.url.endsWith("/hls/master.m3u8") && c.badges.includes("HLS 1080p")),
+    drmFlagged: (state.video ?? []).some((c) => c.url.endsWith("/hls/drm.m3u8") && c.badges.some((b) => /DRM/.test(b))),
+    drmNotSent: !sent.some((d) => d.url.endsWith("/hls/drm.m3u8")),
   };
   const pass = Object.values(expect).every(Boolean);
   log(JSON.stringify({ expect, result }));

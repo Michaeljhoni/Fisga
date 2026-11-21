@@ -12,6 +12,12 @@ const first = (url) => candidates(url)[0];
 test("X/Twitter: the original size", () => {
   assert.equal(first("https://pbs.twimg.com/media/GaBcDeF?format=jpg&name=small"), "https://pbs.twimg.com/media/GaBcDeF?format=jpg&name=orig");
   assert.equal(first("https://pbs.twimg.com/media/GaBcDeF.png:large"), "https://pbs.twimg.com/media/GaBcDeF?format=png&name=orig");
+  assert.deepEqual(candidates("https://pbs.twimg.com/media/GaBcDeF?format=webp&name=small"), [
+    "https://pbs.twimg.com/media/GaBcDeF?format=jpg&name=orig",
+    "https://pbs.twimg.com/media/GaBcDeF?format=png&name=orig",
+    "https://pbs.twimg.com/media/GaBcDeF?format=jpg&name=4096x4096",
+    "https://pbs.twimg.com/media/GaBcDeF?format=jpg&name=large",
+  ], "webp is served as jpg; fallbacks when orig is refused");
   assert.equal(first("https://pbs.twimg.com/profile_images/1/abc_normal.jpg"), "https://pbs.twimg.com/profile_images/1/abc.jpg");
 });
 
@@ -29,17 +35,35 @@ test("Wikimedia: the file, not its thumbnail", () => {
 test("Pinterest, Imgur, Reddit, Flickr", () => {
   assert.deepEqual(candidates("https://i.pinimg.com/236x/1a/2b/3c/abc.jpg"), [
     "https://i.pinimg.com/originals/1a/2b/3c/abc.jpg",
+    "https://i.pinimg.com/originals/1a/2b/3c/abc.png",
+    "https://i.pinimg.com/originals/1a/2b/3c/abc.gif",
+    "https://i.pinimg.com/originals/1a/2b/3c/abc.webp",
     "https://i.pinimg.com/736x/1a/2b/3c/abc.jpg",
-  ]);
+  ], "the original may be of another type");
   assert.equal(first("https://i.imgur.com/AbCdEfGm.jpg"), "https://i.imgur.com/AbCdEfG.jpg");
   assert.deepEqual(candidates("https://i.imgur.com/AbCdEfG.jpg"), [], "seven letters: already the original");
   assert.equal(first("https://preview.redd.it/xyz123.jpg?width=640&crop=smart&auto=webp&s=abc"), "https://i.redd.it/xyz123.jpg");
+  assert.equal(first("https://preview.redd.it/meu-gato-dormindo-v0-xyz123.jpeg?width=1080&s=abc"), "https://i.redd.it/xyz123.jpeg");
+  assert.equal(first("https://www.reddit.com/media?url=https%3A%2F%2Fi.redd.it%2Fxyz123.png"), "https://i.redd.it/xyz123.png");
+  assert.equal(first("https://i.imgur.com/AbCdEfG.gifv"), "https://i.imgur.com/AbCdEfG.mp4");
+  assert.equal(first("https://i.imgur.com/AbCdEfG_d.webp?maxwidth=520"), "https://i.imgur.com/AbCdEfG.webp");
   assert.equal(first("https://live.staticflickr.com/65535/123_abcdef_m.jpg"), "https://live.staticflickr.com/65535/123_abcdef_b.jpg");
 });
 
 test("CDNs that resize by address", () => {
   assert.equal(first("https://example.com/wp-content/uploads/2024/05/foto-300x200.jpg"), "https://example.com/wp-content/uploads/2024/05/foto.jpg");
-  assert.equal(first("https://i0.wp.com/example.com/a.jpg?resize=300%2C200&ssl=1"), "https://i0.wp.com/example.com/a.jpg");
+  assert.deepEqual(candidates("https://i0.wp.com/example.com/a.jpg?resize=300%2C200&ssl=1"), [
+    "https://example.com/a.jpg",
+    "https://i0.wp.com/example.com/a.jpg",
+  ], "the site's own file, then the proxy without resizing");
+  assert.equal(first("https://example.com/wp-content/uploads/2024/05/panorama-scaled.jpg"), "https://example.com/wp-content/uploads/2024/05/panorama.jpg");
+  assert.equal(first("https://loja.com/cdn/shop/products/tenis_800x.progressive.jpg.webp?v=1"), "https://loja.com/cdn/shop/products/tenis.jpg?v=1");
+  assert.equal(
+    first("https://res.cloudinary.com/demo/image/fetch/w_300/https%3A%2F%2Fexample.com%2Ffoto.jpg"),
+    "https://example.com/foto.jpg",
+  );
+  assert.equal(first("https://site.com/_next/image?url=%2Fimg%2Fcapa.png&w=640&q=75"), "https://site.com/img/capa.png");
+  assert.equal(first("https://site.com/cdn-cgi/image/width=400,quality=75/uploads/foto.jpg"), "https://site.com/uploads/foto.jpg");
   assert.equal(first("https://cdn.shopify.com/s/files/1/0/products/tenis_200x200.jpg?v=1"), "https://cdn.shopify.com/s/files/1/0/products/tenis.jpg?v=1");
   assert.equal(first("https://m.media-amazon.com/images/I/71abc._AC_SX300_.jpg"), "https://m.media-amazon.com/images/I/71abc.jpg");
   assert.equal(first("https://i.ebayimg.com/images/g/abc/s-l300.jpg"), "https://i.ebayimg.com/images/g/abc/s-l1600.jpg");
@@ -53,6 +77,10 @@ test("CDNs that resize by address", () => {
   assert.equal(first("https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg"), "https://i.ytimg.com/vi/jNQXAC9IVRw/maxresdefault.jpg");
   assert.equal(first("https://i.ytimg.com/vi/dxsTUMwd09c/hq720.jpg?sqp=-oay&rs=AOn4"), "https://i.ytimg.com/vi/dxsTUMwd09c/maxresdefault.jpg");
   assert.deepEqual(candidates("https://i.ytimg.com/vi/dxsTUMwd09c/maxresdefault.jpg"), [], "already the largest");
+  assert.deepEqual(candidates("https://i.ytimg.com/vi/dxsTUMwd09c/mqdefault.jpg").slice(1), [
+    "https://i.ytimg.com/vi/dxsTUMwd09c/sddefault.jpg",
+    "https://i.ytimg.com/vi/dxsTUMwd09c/hqdefault.jpg",
+  ], "maxres does not exist for every video");
 });
 
 test("signed or unknown addresses are left alone", () => {

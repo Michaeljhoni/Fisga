@@ -73,12 +73,17 @@
 
   function format(item) {
     if (item.kind === "page") return item.generic ? t("galleryGeneric") : t("galleryViaPage");
-    if (item.kind === "stream") return /\.mpd(\?|$)/i.test(item.url) || /dash/i.test(item.detail || "") ? "DASH" : "HLS";
+    if (item.kind === "stream") {
+      const kind = /\.mpd(\?|$)/i.test(item.url) || /dash/i.test(item.detail || "") ? "DASH" : "HLS";
+      return item.height ? `${kind} ${item.height}p` : kind;
+    }
     const ext = /\.(\w{2,5})$/.exec(fileName(addressOf(item)))?.[1];
     return ext ? ext.toUpperCase() : item.type === "image" ? t("galleryPhoto") : "";
   }
   function isSmall(item) {
-    if (item.type !== "image" || item.original) return false;
+    if (item.type !== "image") return false;
+    if (item.checked && item.width && item.height) return item.width < SMALL && item.height < SMALL;
+    if (item.original) return false;
     const w = item.width || item.shownWidth || 0;
     const h = item.height || item.shownHeight || 0;
     return w > 0 && h > 0 && w < SMALL && h < SMALL;
@@ -118,6 +123,7 @@
     if (kind) badges.append(node("span", "badge", kind));
     const duration = formatDuration(item.duration);
     if (duration) badges.append(node("span", "badge", duration));
+    if (item.drm) badges.append(node("span", "badge drm", t("galleryDrm")));
     if (item.original) badges.append(node("span", "badge original", t("galleryOriginal")));
     if (item.sent) badges.append(node("span", "badge original", t("galleryQueued")));
     el.setAttribute("aria-selected", String(selected.has(item.url)));
@@ -226,7 +232,8 @@
 
   // ----------------------------------------------------------- selecting
   function toggle(item, range) {
-    const list = shown();
+    if (item.drm) return; // protected: it cannot be downloaded
+    const list = shown().filter((other) => !other.drm);
     if (range && anchor && list.includes(anchor)) {
       const [a, b] = [list.indexOf(anchor), list.indexOf(item)].sort((x, y) => x - y);
       const on = selected.has(anchor.url);
@@ -240,7 +247,7 @@
     updateBar();
   }
   $("select-all").addEventListener("click", () => {
-    for (const item of shown()) selected.add(item.url);
+    for (const item of shown()) if (!item.drm) selected.add(item.url);
     render();
   });
   $("select-none").addEventListener("click", () => {
@@ -289,6 +296,7 @@
    * files is dropped; one whose server could not be asked stays as it is.
    */
   async function probe(item) {
+    if (item.kind === "stream") return probeStream(item);
     if (item.kind !== "direct") return;
     const list = item.candidates?.length ? item.candidates : [item.url];
     let refused = 0;
@@ -300,8 +308,13 @@
         if (res.ok && accepts(item, res.type)) {
           item.best = address;
           item.size = res.size ?? item.size;
-          if (address !== item.thumb && address !== list[list.length - 1]) {
-            item.original = address;
+          if (address !== item.thumb && address !== list[list.length - 1]) item.original = address;
+          // The file's own size, read from its first bytes.
+          if (res.width && res.height) {
+            item.width = res.width;
+            item.height = res.height;
+            item.checked = true;
+          } else if (item.original) {
             item.width = 0;
             item.height = 0;
           }
@@ -312,6 +325,23 @@
     }
     if (asked && refused === asked) item.dead = true;
   }
+  /** The best resolution of a stream, its protection, and the quality lists a master already holds. */
+  async function probeStream(item) {
+    const res = await api.runtime.sendMessage({ type: "gallery-manifest", url: item.url }).catch(() => null);
+    if (!res?.ok) return;
+    item.height = res.height || 0;
+    item.drm = res.drm;
+    if (item.drm) selected.delete(item.url);
+    for (const variant of res.variants ?? []) {
+      const copy = items.find((other) => other.url === variant && other !== item);
+      if (copy) {
+        copy.dead = true;
+        selected.delete(copy.url);
+      }
+    }
+    if (res.variants?.length) render();
+  }
+
   function queueProbe(item) {
     if (item.probe) return item.probe;
     item.probe = new Promise((resolve) => pending.push({ item, resolve }));
@@ -419,7 +449,19 @@
     items = res.items.map((item) => {
       const old = before.get(item.url);
       return old
-        ? { ...item, best: old.best, original: old.original, size: old.size ?? item.size, dead: old.dead, sent: old.sent, probe: old.probe }
+        ? {
+            ...item,
+            best: old.best,
+            original: old.original,
+            size: old.size ?? item.size,
+            width: old.checked ? old.width : item.width,
+            height: old.checked ? old.height : item.height,
+            checked: old.checked,
+            drm: old.drm,
+            dead: old.dead,
+            sent: old.sent,
+            probe: old.probe,
+          }
         : { ...item };
     });
     for (const key of [...selected]) if (!items.some((item) => item.url === key)) selected.delete(key);
@@ -430,6 +472,8 @@
     }
     if (!items.some((item) => item.type === current)) current = TYPES.find((type) => items.some((item) => item.type === type)) ?? "video";
     render();
+    // Streams first: their checks hide the quality lists a master holds.
+    for (const item of items) if (item.kind === "stream") queueProbe(item);
   }
 
   scan();

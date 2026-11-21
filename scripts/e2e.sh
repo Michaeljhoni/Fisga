@@ -136,12 +136,14 @@ grep "opções de qualidade" "$SANDBOX/err"
 "$BIN/fisga" confirm "$id" --if-exists rename
 wait_state "$id" concluído 60
 test "$(stat -c %s "$DL/3145728 (1).bin")" -eq 3145728; echo "saved as '3145728 (1).bin'"
-inode="$(stat -c %i "$DL/3145728.bin")"
+# Another file under that name (its inode may be reused once it is
+# deleted: the content tells them apart).
+printf 'outro arquivo' > "$DL/3145728.bin"
 host "{\"type\":\"download\",\"url\":\"$OWN\",\"kind\":\"direct\"}" | grep -q '"pending":true'
 id="$(last_id)"; wait_state "$id" aguardando 5
 "$BIN/fisga" confirm "$id" --if-exists overwrite
 wait_state "$id" concluído 60
-test "$(stat -c %i "$DL/3145728.bin")" != "$inode"; test ! -e "$DL/3145728 (2).bin"
+test ! -e "$DL/3145728 (2).bin"
 test "$(stat -c %s "$DL/3145728.bin")" -eq 3145728; echo "existing file replaced"
 
 step "clipboard: a copied link to a file asks to download it"

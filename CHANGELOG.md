@@ -2,6 +2,37 @@
 
 Cada versão tem uma seção `## X.Y.Z`; o texto dela vira a descrição da release no GitHub.
 
+## 1.4.0
+
+- **Fotos e vídeos da página de uma vez:** no popup da extensão, **Baixar fotos e vídeos da
+  página…** (ou no clique direito da página) lista tudo o que a página tem, nas abas **Vídeos**,
+  **Fotos** e **Áudios**. Vem o arquivo original, não a miniatura: o maior tamanho que a página
+  oferece, a foto para onde a miniatura leva, e o original nos sites que põem o tamanho no endereço
+  (X, Wikipedia, Pinterest, Reddit, Imgur, Flickr, WordPress, Shopify, Unsplash e outros). Os vídeos
+  de feeds e buscas (YouTube, Instagram, TikTok, X...) vêm inteiros, pelo yt-dlp; transmissões
+  HLS/DASH mostram a resolução, e as protegidas (DRM) ficam marcadas. Marque as que quiser, ou
+  todas: vão para a fila, cada uma na pasta do seu tipo, dentro de uma pasta com o nome do site.
+- **Instalar a extensão no Chrome:** ☰ → **Instalar a extensão no Chrome…** mostra o passo a passo,
+  com a pasta certa e botões para copiar (também em Preferências → Navegador e no fim do instalador
+  do Windows). A Chrome Web Store não tem a extensão do Fisga.
+- **Downloads mais seguros:** dois downloads com o mesmo nome na mesma pasta não se misturam mais;
+  a lista de downloads resiste a uma queda de energia; um link que expira no meio do download é
+  renovado sozinho; um servidor que não responde não trava mais a fila; pausar um vídeo para também
+  o ffmpeg; um arquivo vazio baixa; nomes reservados do Windows (CON, NUL...) não quebram o download.
+- **Extensão:** uma página não consegue mais fingir o Alt+clique; com vários players na página, o
+  botão manda o vídeo do player certo; o botão aparece também em players dentro de shadow DOM; nas
+  redes sociais (X, Instagram, Reddit, Facebook) ele manda o post do vídeo; a captura de downloads
+  só cancela o do navegador depois que o Fisga aceita; downloads de janelas privadas ficam com o
+  navegador, e os contêineres do Firefox mandam os cookies certos.
+- **Windows:** o Fisga abre uma vez só (com ele na bandeja, abrir de novo criava uma segunda cópia);
+  só o seu usuário conversa com o seu `fisgad`; atualizar e desinstalar esperam o `fisgad` fechar.
+- **Interface:** os links mandados pelo navegador não se perdem quando o Fisga abre só para eles;
+  cancelar o desligamento agendado funciona sempre; janelas fechadas liberam a memória; o limite de
+  velocidade não muda enquanto você digita; "Novo download" responde mesmo com as Preferências
+  abertas; os dias do agendador seguem o idioma.
+- **Terminal:** `fisga stop` espera o serviço fechar; `fisga add --wait` termina com erro se o
+  download não chegou ao fim; sites excluídos aceitam nomes da rede local, IPv6 e acentos.
+
 ## 1.3.1
 
 - **Extensão da Chrome Web Store sem YouTube:** as regras da loja do Chrome proíbem baixar do

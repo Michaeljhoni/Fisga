@@ -655,16 +655,12 @@ impl Ctx {
             }
             status => return Err(Error::Status(status)),
         }
-        let range_start = resp
-            .headers()
-            .get(CONTENT_RANGE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("bytes "))
-            .and_then(|v| v.split('-').next())
-            .and_then(|v| v.trim().parse::<u64>().ok());
-        if range_start.is_some_and(|s| s != from) {
+        let range = resp.headers().get(CONTENT_RANGE).and_then(|v| v.to_str().ok()).and_then(content_range);
+        if range.is_some_and(|(start, _)| start != from) {
             return Err(Error::Other(tr!("Content-Range diferente do pedido").into()));
         }
+        // Some servers send at most so much per request: less than asked for.
+        let short_end = range.map(|(_, last)| last).filter(|last| *last < end);
         self.streaming(index);
 
         let mut stream = resp.bytes_stream();
@@ -687,7 +683,10 @@ impl Ctx {
                 }
                 Ok(None) => {
                     self.flush(index, &mut buf, &mut offset).await?;
-                    return if self.gone(index, offset) {
+                    // A short answer that came whole is no failure: the rest
+                    // is asked for next, right away.
+                    let whole = short_end.is_some_and(|last| offset == last + 1);
+                    return if whole || self.gone(index, offset) {
                         Ok(())
                     } else {
                         Err(Error::Other(tr!("conexão encerrada antes do fim do segmento").into()))
@@ -731,6 +730,13 @@ impl Ctx {
             }
         }
     }
+}
+
+/// The first and last bytes of `bytes 0-1023/4096`.
+fn content_range(value: &str) -> Option<(u64, u64)> {
+    let (first, last) = value.strip_prefix("bytes ")?.split('/').next()?.split_once('-')?;
+    let (first, last) = (first.trim().parse().ok()?, last.trim().parse().ok()?);
+    (first <= last).then_some((first, last))
 }
 
 /// `Retry-After` in seconds (the HTTP-date form is rare on file servers).
@@ -1174,6 +1180,14 @@ mod tests {
         assert!(!paths.take(3, &dir.join("a (1).jpg")), "now download 2's");
         assert!(resolve_target(Target::File(theirs), "x", "http://a/1", Some(&mine)).is_err());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn content_ranges() {
+        assert_eq!(content_range("bytes 0-1023/4096"), Some((0, 1023)));
+        assert_eq!(content_range("bytes 100-199/*"), Some((100, 199)));
+        assert_eq!(content_range("bytes */4096"), None);
+        assert_eq!(content_range("bytes 9-1/20"), None);
     }
 
     #[test]

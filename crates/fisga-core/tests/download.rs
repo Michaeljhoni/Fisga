@@ -28,6 +28,8 @@ struct ServerOpts {
     busy: Arc<AtomicUsize>,
     /// Range requests other than the probe's (`bytes=0-0`) get 404.
     missing_segments: bool,
+    /// Range answers carry at most this many bytes (0 = no limit).
+    cap: usize,
 }
 
 struct TestServer {
@@ -117,6 +119,7 @@ async fn handle(
         let (status, start, end) = match range {
             Some((start, end)) if opts.ranges => {
                 counter.fetch_add(1, Ordering::Relaxed);
+                let end = if opts.cap > 0 { end.min(start + opts.cap - 1) } else { end };
                 ("206 Partial Content", start, end)
             }
             _ => ("200 OK", 0, data.len() - 1),
@@ -405,6 +408,20 @@ async fn a_server_that_stops_answering_times_out() {
     let result = download(&client, &RequestSpec::new(&url), target, &opts, tx, CancellationToken::new()).await;
     assert!(matches!(result, Err(fisga_core::Error::Timeout)), "{result:?}");
     assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_server_that_caps_each_answer_is_followed_without_waiting() {
+    let data = test_data(2 * 1024 * 1024);
+    let server = serve(data.clone(), ServerOpts { ranges: true, cap: 128 * 1024, ..Default::default() }).await;
+    let dir = temp_dir("capped");
+
+    let started = Instant::now();
+    let (result, _) = run(&server.url, Target::Dir { dir: dir.clone(), file_name: None }, 4, CancellationToken::new()).await;
+    let Outcome::Completed(path) = result.unwrap() else { panic!("not completed") };
+    assert_eq!(std::fs::read(path).unwrap(), *data);
+    // Each short answer used to count as a failure, and wait 2 s.
+    assert!(started.elapsed() < Duration::from_secs(4), "took {:?}", started.elapsed());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

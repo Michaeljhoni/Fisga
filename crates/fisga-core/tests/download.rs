@@ -283,6 +283,30 @@ async fn busy_server_gets_fewer_connections() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn empty_file_is_downloaded() {
+    // An empty file has no byte 0: 416 with `bytes */0` to the probe's range.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/files/vazio.txt", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let _ = socket.read(&mut [0; 4096]).await;
+                let head = "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = socket.write_all(head.as_bytes()).await;
+            });
+        }
+    });
+    let dir = temp_dir("empty");
+
+    let (result, events) = run(&url, Target::Dir { dir: dir.clone(), file_name: None }, 4, CancellationToken::new()).await;
+    let Outcome::Completed(path) = result.unwrap() else { panic!("not completed") };
+    assert_eq!(path, dir.join("vazio.txt"));
+    assert_eq!(std::fs::read(&path).unwrap(), b"");
+    assert!(!dir.join("vazio.txt.fisga-part").exists());
+    assert!(matches!(events.first(), Some(EngineEvent::Started { total: Some(0), .. })));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn missing_file_fails_without_retrying() {
     let data = test_data(2 * 1024 * 1024);
     let server = serve(data, ServerOpts { ranges: true, missing_segments: true, ..Default::default() }).await;

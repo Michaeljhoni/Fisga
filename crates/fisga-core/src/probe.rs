@@ -58,14 +58,17 @@ async fn probe_once(client: &Client, spec: &RequestSpec) -> Result<ProbeResult> 
         .send()
         .await?;
     let status = resp.status();
-    if !status.is_success() {
+    let headers = resp.headers();
+    let header = |name| headers.get(name).and_then(|v: &reqwest::header::HeaderValue| v.to_str().ok());
+    // An empty file has no byte 0: the server answers 416 with `bytes */0`.
+    let empty = status == StatusCode::RANGE_NOT_SATISFIABLE && header(CONTENT_RANGE).and_then(content_range_total) == Some(0);
+    if !status.is_success() && !empty {
         return Err(Error::Status(status));
     }
 
-    let headers = resp.headers();
-    let header = |name| headers.get(name).and_then(|v: &reqwest::header::HeaderValue| v.to_str().ok());
-
-    let (total, ranges) = if status == StatusCode::PARTIAL_CONTENT {
+    let (total, ranges) = if empty {
+        (Some(0), true)
+    } else if status == StatusCode::PARTIAL_CONTENT {
         let total = header(CONTENT_RANGE).and_then(content_range_total);
         (total, total.is_some())
     } else {
@@ -103,5 +106,6 @@ mod tests {
     fn content_range() {
         assert_eq!(super::content_range_total("bytes 0-0/12345"), Some(12345));
         assert_eq!(super::content_range_total("bytes 0-0/*"), None);
+        assert_eq!(super::content_range_total("bytes */0"), Some(0));
     }
 }

@@ -259,22 +259,52 @@ async fn single_stream(
     events: mpsc::UnboundedSender<EngineEvent>,
     cancel: CancellationToken,
 ) -> Result<Outcome> {
+    let part = control::part_path(&final_path);
+    // A broken connection is tried again as a segment is, but from the
+    // start: without Range support nothing else can be asked for.
+    let mut failures = 0u32;
+    loop {
+        match stream_once(client, spec, probe, &part, opts, &events, &cancel).await {
+            Ok(true) => return Ok(Outcome::Completed(finalize(&part, final_path).await?)),
+            Ok(false) => break,
+            Err(e) if e.is_permanent() || failures >= opts.max_retries => return Err(e),
+            Err(e) => {
+                failures += 1;
+                tracing::warn!(attempt = failures, error = %e, "a conexão única falhou; recomeçando do início");
+                if !sleep_or_cancel(&cancel, backoff(failures)).await {
+                    break;
+                }
+            }
+        }
+    }
+    // Paused: what arrived is of no use to the next attempt.
+    let _ = tokio::fs::remove_file(&part).await;
+    Ok(Outcome::Paused(final_path))
+}
+
+/// One attempt of the single connection, from the start of the file: true
+/// when it came whole, false when the download was paused.
+async fn stream_once(
+    client: &Client,
+    spec: &RequestSpec,
+    probe: &ProbeResult,
+    part: &Path,
+    opts: &DownloadOptions,
+    events: &mpsc::UnboundedSender<EngineEvent>,
+    cancel: &CancellationToken,
+) -> Result<bool> {
     use tokio::io::AsyncWriteExt;
 
-    let part = control::part_path(&final_path);
     let send = spec.apply(client.get(probe.final_url.clone())).send();
     let resp = tokio::select! {
-        _ = cancel.cancelled() => {
-            let _ = tokio::fs::remove_file(&part).await;
-            return Ok(Outcome::Paused(final_path));
-        }
+        _ = cancel.cancelled() => return Ok(false),
         resp = tokio::time::timeout(opts.idle_timeout, send) => resp.map_err(|_| Error::Timeout)??,
     };
     if !resp.status().is_success() {
         return Err(Error::Status(resp.status()));
     }
     let total = resp.content_length().or(probe.total);
-    let mut file = tokio::fs::File::create(&part).await?;
+    let mut file = tokio::fs::File::create(part).await?;
     let mut stream = resp.bytes_stream();
     let mut downloaded = 0u64;
     let mut meter = SpeedMeter::new(0);
@@ -282,11 +312,7 @@ async fn single_stream(
 
     loop {
         let next = tokio::select! {
-            _ = cancel.cancelled() => {
-                drop(file);
-                let _ = tokio::fs::remove_file(&part).await;
-                return Ok(Outcome::Paused(final_path));
-            }
+            _ = cancel.cancelled() => return Ok(false),
             // Giving up here means starting over: wait much longer.
             next = tokio::time::timeout(opts.idle_timeout.saturating_mul(10), stream.next()) => next,
         };
@@ -297,10 +323,8 @@ async fn single_stream(
             Ok(Some(Ok(chunk))) => {
                 file.write_all(&chunk).await?;
                 downloaded += chunk.len() as u64;
-                if !limit(&opts.limiters, chunk.len(), &cancel).await {
-                    drop(file);
-                    let _ = tokio::fs::remove_file(&part).await;
-                    return Ok(Outcome::Paused(final_path));
+                if !limit(&opts.limiters, chunk.len(), cancel).await {
+                    return Ok(false);
                 }
             }
         }
@@ -331,7 +355,7 @@ async fn single_stream(
         active_connections: 0,
         segments: Vec::new(),
     }));
-    Ok(Outcome::Completed(finalize(&part, final_path).await?))
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------

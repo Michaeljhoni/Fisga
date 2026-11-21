@@ -216,6 +216,31 @@ async fn server_without_ranges_uses_one_stream() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_broken_single_connection_starts_over() {
+    let data = test_data(300 * 1024);
+    // No Range support; the download's first answer breaks halfway.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/files/inteiro.bin", listener.local_addr().unwrap());
+    let body = data.clone();
+    tokio::spawn(async move {
+        let mut answers = 0;
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let _ = socket.read(&mut [0; 4096]).await;
+            answers += 1;
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            let _ = socket.write_all(head.as_bytes()).await;
+            let end = if answers == 2 { body.len() / 2 } else { body.len() };
+            let _ = socket.write_all(&body[..end]).await;
+        }
+    });
+    let dir = temp_dir("restart");
+
+    let (result, _) = run(&url, Target::Dir { dir: dir.clone(), file_name: None }, 4, CancellationToken::new()).await;
+    let Outcome::Completed(path) = result.unwrap() else { panic!("not completed") };
+    assert_eq!(std::fs::read(path).unwrap(), *data);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn pause_and_resume() {
     let data = test_data(8 * 1024 * 1024);
     let slow = serve(data.clone(), ServerOpts { ranges: true, delay: Duration::from_millis(8), ..Default::default() }).await;

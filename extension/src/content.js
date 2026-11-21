@@ -34,6 +34,7 @@
   let busy = false;
   let hideTimer = 0;
   let pointer = null;
+  let pointerPath = []; // what the pointer is over, shadow trees included
   let framePending = false;
   let dismissals = []; // { el, key }: videos whose button the user closed
 
@@ -128,24 +129,49 @@
   // of the frame (or the previous video of an embed) loaded before.
   const loadStarts = new WeakMap();
 
-  // Media inside open shadow roots or created without being in the DOM tree we
-  // scanned still fires play/loadedmetadata; composedPath() gives the real target.
-  for (const type of ["loadstart", "play", "playing", "loadedmetadata"]) {
-    document.addEventListener(
-      type,
-      (e) => {
-        const el = e.composedPath?.()[0] ?? e.target;
-        if (!(el instanceof HTMLMediaElement)) return;
-        track(el);
-        if (type === "loadstart") {
-          loadStarts.set(el, Date.now());
-        } else if (type !== "loadedmetadata" && enabled && eligible(el)) {
-          attach(el);
-          scheduleHide(SHOW_ON_PLAY_MS);
-        }
-      },
-      true,
-    );
+  // Media the scans missed is found by its events; composedPath() gives the
+  // real target. These events do not leave a shadow root: each shadow root
+  // gets its own listeners (watchRoot).
+  const MEDIA_EVENTS = ["loadstart", "play", "playing", "loadedmetadata"];
+  function onMediaEvent(e) {
+    const el = e.composedPath?.()[0] ?? e.target;
+    if (!(el instanceof HTMLMediaElement)) return;
+    track(el);
+    if (e.type === "loadstart") {
+      loadStarts.set(el, Date.now());
+    } else if (e.type !== "loadedmetadata" && enabled && eligible(el)) {
+      attach(el);
+      scheduleHide(SHOW_ON_PLAY_MS);
+    }
+  }
+  for (const type of MEDIA_EVENTS) document.addEventListener(type, onMediaEvent, true);
+
+  // Players inside shadow roots (open or closed), found through the
+  // elements under the pointer: scanned and watched like the document.
+  const watchedRoots = new WeakSet();
+  function shadowRootOf(el) {
+    try {
+      // Closed roots: chrome.dom in Chrome, openOrClosedShadowRoot in Firefox.
+      return api.dom?.openOrClosedShadowRoot?.(el) ?? el.openOrClosedShadowRoot ?? el.shadowRoot ?? null;
+    } catch {
+      return null;
+    }
+  }
+  function watchRoot(root) {
+    if (watchedRoots.has(root)) return;
+    watchedRoots.add(root);
+    scan(root);
+    observer.observe(root, { childList: true, subtree: true });
+    for (const type of MEDIA_EVENTS) root.addEventListener(type, onMediaEvent, true);
+  }
+  function watchShadowRoots(path) {
+    for (const node of path) {
+      if (node instanceof ShadowRoot) watchRoot(node);
+      else if (node instanceof Element && node !== ui?.host) {
+        const root = shadowRootOf(node);
+        if (root) watchRoot(root);
+      }
+    }
   }
 
   function eligible(el) {
@@ -192,6 +218,7 @@
       pointer = { x: e.clientX, y: e.clientY };
       if (framePending || !enabled) return;
       framePending = true;
+      pointerPath = e.composedPath();
       requestAnimationFrame(onPointerFrame);
     },
     { capture: true, passive: true },
@@ -199,6 +226,8 @@
   function onPointerFrame() {
     framePending = false;
     if (!pointer || !enabled) return;
+    watchShadowRoots(pointerPath);
+    pointerPath = [];
     const el = mediaAt(pointer.x, pointer.y);
     if (el) {
       attach(el);

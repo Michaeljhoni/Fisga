@@ -79,6 +79,8 @@ const proc = spawn(
   ],
   { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] },
 );
+// The profile takes hundreds of MB: gone once Chrome closes.
+proc.on("exit", () => rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }));
 const cdp = new CDP(proc.stdio[3], proc.stdio[4]);
 
 async function evaluate(session, expression) {
@@ -641,15 +643,37 @@ const TWO_PLAYERS = `<!doctype html><body style="font:16px sans-serif;padding:20
   })();
 </script></body>`;
 
+// Players inside an open and a closed shadow root (custom elements). Their
+// media events never reach the document, and document scans miss them.
+const SHADOW_PLAYERS = `<!doctype html><body style="font:16px sans-serif;padding:20px">
+<div style="display:flex;gap:40px">
+<div id="open-host" style="width:400px;height:225px"></div>
+<div id="closed-host" style="width:400px;height:225px"></div>
+</div>
+<script>
+  for (const [id, mode, src] of [["open-host", "open", "/media/aberto.mp4"], ["closed-host", "closed", "/media/fechado.mp4"]]) {
+    const root = document.getElementById(id).attachShadow({ mode });
+    const video = document.createElement("video");
+    video.src = src;
+    video.muted = true;
+    video.style.cssText = "display:block;width:400px;height:225px;background:#000";
+    root.append(video);
+  }
+</script></body>`;
+
 // A local site for the takeover and the force key: a link like Civitai's,
 // whose address has no extension and whose name only comes in the
 // Content-Disposition of the redirect's target, and a link to a plain page.
 async function localSite() {
   const { createServer } = await import("node:http");
   const server = createServer((req, res) => {
-    if (req.url === "/two") {
+    if (req.url === "/two" || req.url === "/shadow") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(TWO_PLAYERS);
+      res.end(req.url === "/two" ? TWO_PLAYERS : SHADOW_PLAYERS);
+    } else if (/^\/media\/\w+\.mp4$/.test(req.url)) {
+      const body = Buffer.alloc(300 * 1024);
+      res.writeHead(200, { "content-type": "video/mp4", "content-length": body.length });
+      res.end(body);
     } else if (/^\/hls\/\w+\/master\.m3u8$/.test(req.url)) {
       res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" });
       res.end("#EXTM3U\n#EXT-X-VERSION:3\n");
@@ -839,6 +863,19 @@ async function twoPlayersScenario(sw, base) {
   return { name: "two-players", pass, results };
 }
 
+// Players inside an open and a closed shadow root get the button too.
+async function shadowScenario(sw, base) {
+  log(`--- shadow: ${base}/shadow`);
+  const page = await openPage(base + "/shadow");
+  const results = await clickEach(sw, page, [
+    ["open-host", base + "/media/aberto.mp4"],
+    ["closed-host", base + "/media/fechado.mp4"],
+  ]);
+  const pass = results.every((r) => r.sent?.url === r.expected);
+  log(JSON.stringify(results));
+  return { name: "shadow", pass, results };
+}
+
 // The Chrome Web Store package (dist-store): on YouTube no button and no
 // media, and YouTube addresses are refused; a link elsewhere still goes.
 async function storeScenario(sw) {
@@ -905,6 +942,7 @@ try {
       force: forceScenario,
       "fake-force": fakeForceScenario,
       "two-players": twoPlayersScenario,
+      shadow: shadowScenario,
     };
     if (local[s]) {
       const { server, base } = await localSite();

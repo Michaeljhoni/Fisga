@@ -46,13 +46,14 @@ impl Address {
         if path.is_empty() || path.ends_with('/') {
             return Err(Error::Other(tr!("o endereço FTP é de uma pasta, não de um arquivo").into()));
         }
-        if path.contains(['\r', '\n']) {
-            return Err(Error::Other(tr!("endereço FTP inválido").into()));
-        }
         let (user, password) = match url.username() {
             "" => ("anonymous".to_string(), "fisga@".to_string()),
             user => (decode(user), decode(url.password().unwrap_or_default())),
         };
+        // Each goes into a command line: a line break would add commands of its own.
+        if [&path, &user, &password].iter().any(|text| text.contains(['\r', '\n', '\0'])) {
+            return Err(Error::Other(tr!("endereço FTP inválido").into()));
+        }
         let name = filename::from_url(url).unwrap_or_else(|| "download".to_string());
         Ok(Address {
             host: host.trim_start_matches('[').trim_end_matches(']').to_string(),
@@ -406,6 +407,10 @@ mod tests {
         assert_eq!(login.path, "/home/ana/a.zip", "%2F: from the root");
         assert!(at("ftp://ftp.exemplo.com/pub/").is_err(), "a folder");
         assert!(at("ftp://ftp.exemplo.com/a%0D%0ADELE%20b").is_err(), "no commands smuggled in the path");
+        assert!(at("ftp://ana%0D%0ADELE%20b:x@ftp.exemplo.com/a.zip").is_err(), "nor in the user");
+        assert!(at("ftp://ana:x%0ADELE%20b@ftp.exemplo.com/a.zip").is_err(), "nor in the password");
+        assert!(at("ftp://ana:x%00y@ftp.exemplo.com/a.zip").is_err());
+        assert!(at("ftp://ftp.exemplo.com/a%00.zip").is_err());
         assert!(is_ftp("FTP://x/a") && !is_ftp("https://x/a"));
     }
 

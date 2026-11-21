@@ -474,7 +474,7 @@ async function sendToApp(payload) {
     throw new Error(text);
   }
   if (reply?.type === "added") return { id: reply.id, pending: Boolean(reply.pending) };
-  throw new Error(reply?.message || "resposta inválida do app");
+  throw new Error(reply?.message || message("badReply", "Invalid answer from the Fisga app."));
 }
 
 async function sendMedia(target, { referrer, pageUrl, title, tab }) {
@@ -569,7 +569,7 @@ async function galleryScan(tabId) {
       frame.result = await api.tabs.sendMessage(tabId, { type: "collect-media" }, { frameId: frame.frameId }).catch(() => null);
     }
   }
-  if (!frames.length && !error) error = "nenhum quadro respondeu";
+  if (!frames.length && !error) error = message("noFrames", "No frame of the page answered.");
 
   await restore();
   const sniffed = mediaByTab.get(tabId) ?? [];
@@ -692,7 +692,7 @@ async function galleryDownload(msg) {
       }
       throw new Error(text);
     }
-    if (reply?.type !== "added-batch") throw new Error(reply?.message || "resposta inválida do app");
+    if (reply?.type !== "added-batch") throw new Error(reply?.message || message("badReply", "Invalid answer from the Fisga app."));
     ids.push(...reply.ids);
   }
   return { ok: true, ids, folder };
@@ -704,7 +704,7 @@ function fromExtensionPage(sender) {
 }
 
 async function handle(msg, sender) {
-  if (/^gallery-/.test(msg?.type ?? "") && !fromExtensionPage(sender)) return { ok: false, error: "mensagem desconhecida" };
+  if (/^gallery-/.test(msg?.type ?? "") && !fromExtensionPage(sender)) return { ok: false, error: message("unknownMessage", "Unknown message.") };
   switch (msg?.type) {
     case "gallery-open": {
       const tab = await api.tabs.get(msg.tabId);
@@ -740,7 +740,7 @@ async function handle(msg, sender) {
       syncWithApp();
       return ping();
     default:
-      return { ok: false, error: "mensagem desconhecida" };
+      return { ok: false, error: message("unknownMessage", "Unknown message.") };
   }
 }
 
@@ -843,7 +843,7 @@ api.downloads.onErased.addListener((id) => judged.delete(id));
 /** A link clicked with the force key held: to Fisga, whatever it is. */
 async function forceLink(msg, sender) {
   const url = msg.url;
-  if (!/^https?:/i.test(url ?? "")) throw new Error("link sem endereço http(s)");
+  if (!/^https?:/i.test(url ?? "")) throw new Error(message("notHttpLink", "This link has no http(s) address."));
   const kind = linkKind(url);
   const { id, pending } = await sendToApp({
     url,
@@ -876,9 +876,9 @@ api.runtime.onInstalled.addListener(async () => {
 async function sendLinks(info, tab, onlySelected) {
   const reply = await api.tabs.sendMessage(tab.id, { type: "collect-links", selection: onlySelected }, { frameId: info.frameId ?? 0 });
   const links = (reply?.links ?? []).filter((url) => !isBlocked(url));
-  if (!links.length) throw new Error("nenhum link na página");
+  if (!links.length) throw new Error(message("noLinks", "No links on the page."));
   const answer = await api.runtime.sendNativeMessage(HOST, { type: "links", pageUrl: info.frameUrl || info.pageUrl || tab.url, links });
-  if (answer?.type !== "shown") throw new Error(answer?.message || "resposta inválida do app");
+  if (answer?.type !== "shown") throw new Error(answer?.message || message("badReply", "Invalid answer from the Fisga app."));
 }
 
 api.contextMenus.onClicked.addListener(async (info, tab) => {

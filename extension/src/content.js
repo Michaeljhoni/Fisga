@@ -519,7 +519,7 @@
         setState("ok", res.pending ? t("sentConfirm", "Confirme no Fisga") : t("sent", "Enviado"));
       } else {
         setState("err", t("failed", "Erro"));
-        showToast(res?.error || "Erro desconhecido");
+        showToast(res?.error || t("unknownError", "Unknown error."));
       }
     } catch (err) {
       setState("err", t("failed", "Erro"));

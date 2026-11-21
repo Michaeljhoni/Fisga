@@ -95,6 +95,11 @@ jobs:
         with:
           node-version: 22
 
+      # The background in a VM with a fake browser API, the gallery's
+      # thumbnail-to-original rules, and both languages' texts.
+      - name: Extension unit tests
+        run: node --test "extension/test/*.test.mjs"
+
       - name: Store packages
         run: |
           bash extension/build.sh

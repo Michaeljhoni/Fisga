@@ -42,6 +42,8 @@ pt_BR.Hosts=Ligando o Fisga aos navegadores...
 en.Hosts=Connecting Fisga to the browsers...
 pt_BR.Firefox=Instalar a extensão do Fisga no Firefox
 en.Firefox=Install Fisga's extension in Firefox
+pt_BR.ChromeGuide=Abrir o Fisga e ver como instalar a extensão no Chrome
+en.ChromeGuide=Open Fisga and see how to install the extension in Chrome
 
 [Tasks]
 Name: "autostart"; Description: "{cm:Autostart}"
@@ -68,7 +70,11 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 [Run]
 Filename: "{app}\bin\fisga.exe"; Parameters: "install-hosts"; Flags: runhidden; StatusMsg: "{cm:Hosts}"
 Filename: "https://addons.mozilla.org/firefox/addon/fisga@fisga.local/"; Description: "{cm:Firefox}"; Flags: postinstall shellexec skipifsilent; Check: FirefoxInstalled
-Filename: "{app}\bin\fisga-gui.exe"; Description: "{cm:LaunchProgram,Fisga}"; Flags: postinstall nowait skipifsilent
+; With Chrome, Brave or Vivaldi, launching Fisga also shows how to load its
+; extension there (the Chrome Web Store does not carry it). One launch only:
+; the two entries never show together.
+Filename: "{app}\bin\fisga-gui.exe"; Parameters: "--chrome-guide"; Description: "{cm:ChromeGuide}"; Flags: postinstall nowait skipifsilent; Check: ChromiumInstalled
+Filename: "{app}\bin\fisga-gui.exe"; Description: "{cm:LaunchProgram,Fisga}"; Flags: postinstall nowait skipifsilent; Check: not ChromiumInstalled
 ; An update Fisga installed itself (fisgad's update.rs): silent, and Fisga opens again.
 Filename: "{app}\bin\fisga-gui.exe"; Flags: nowait; Check: Relaunch
 
@@ -86,6 +92,27 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM fisga-gui.exe"; Flags: runhi
 function FirefoxInstalled: Boolean;
 begin
   Result := RegKeyExists(HKLM, 'SOFTWARE\Mozilla\Mozilla Firefox') or RegKeyExists(HKCU, 'SOFTWARE\Mozilla\Mozilla Firefox');
+end;
+
+{ Chrome, Brave or Vivaldi (Edge comes with Windows, and does not count). }
+function ChromiumInstalled: Boolean;
+var
+  I: Integer;
+  Key: String;
+begin
+  Result := False;
+  for I := 0 to 2 do
+  begin
+    case I of
+      0: Key := 'chrome.exe';
+      1: Key := 'brave.exe';
+    else
+      Key := 'vivaldi.exe';
+    end;
+    Key := 'SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\' + Key;
+    if RegKeyExists(HKLM, Key) or RegKeyExists(HKCU, Key) then
+      Result := True;
+  end;
 end;
 
 { /relaunch=yes: started by Fisga to update itself, which it closed. }

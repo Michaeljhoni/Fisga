@@ -315,6 +315,7 @@ fn main_menu() -> gio::Menu {
     let section = gio::Menu::new();
     section.append(Some(tr!("Filas e agendador")), Some("win.queues"));
     section.append(Some(tr!("Preferências")), Some("win.preferences"));
+    section.append(Some(tr!("Instalar a extensão no Chrome…")), Some("win.chrome-guide"));
     section.append(Some(tr!("Procurar atualizações")), Some("win.check-update"));
     section.append(Some(tr!("Sobre o Fisga")), Some("win.about"));
     menu.append_section(None, &section);
@@ -915,6 +916,8 @@ impl MainWindow {
         }
         let parent = window.clone();
         simple("about", Box::new(move || about(&parent)));
+        let parent = window.clone();
+        simple("chrome-guide", Box::new(move || crate::chrome_guide::show(parent.upcast_ref())));
         let (parent, a) = (window.clone(), app.clone());
         simple(
             "check-update",

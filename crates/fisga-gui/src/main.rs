@@ -7,6 +7,8 @@
 //!   it this way when the browser sends a download and no GUI is open.
 //! - `fisga-gui --background` runs without a window, in the tray (session
 //!   autostart); the browser's downloads are confirmed from there.
+//! - `fisga-gui --chrome-guide` opens the main window and, over it, how to
+//!   install the extension in Chrome (the Windows installer's last page).
 //!
 //! The app id is fixed (`io.fisga.Fisga`), so a second launch is forwarded to the
 //! running instance through D-Bus, and compositors can match its windows.
@@ -21,6 +23,7 @@ static I18N: fisga_i18n::Table = fisga_i18n::Table::new(include_str!("../i18n/en
 mod app;
 mod autostart;
 mod batch;
+mod chrome_guide;
 mod cards;
 mod confirm;
 mod festive;
@@ -162,6 +165,11 @@ fn main() -> glib::ExitCode {
             s.run_in_background();
         } else if !has("--pending") {
             s.show_main_window();
+            if has("--chrome-guide") {
+                if let Some(window) = s.main_window() {
+                    chrome_guide::show(window.upcast_ref());
+                }
+            }
         }
         glib::ExitCode::SUCCESS
     });

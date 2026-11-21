@@ -93,6 +93,8 @@ https://github.com/Michaeljhoni/Fisga/issues
 
 ## Chrome Web Store
 
+- **Removida da loja em 11/11/2026** ("download não autorizado de conteúdo protegido"; o Google
+  disse que o item não volta). O resto desta seção fica como registro.
 - **ID na loja:** `jjpcgkejmdnabpjfdfeagdnobpimlhnb` (está nos `allowed_origins` do native host
   desde a 1.3.0; enviar à análise um pacote só depois de publicada uma versão do Fisga com ele).
 - **O pacote não baixa do YouTube** (a loja recusou a 1.3.0 por isso): o `build.sh` tira o content

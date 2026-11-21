@@ -13,9 +13,12 @@ na página (stream HLS/DASH, arquivos MP4/MP3, ou "detectar automaticamente", qu
 sites como YouTube). O **×** esconde o botão naquele vídeo; ele volta sozinho no próximo vídeo
 (mesmo quando o site troca de vídeo sem recarregar, como o YouTube), e o popup da extensão tem
 **Mostrar de novo o botão Baixar nesta página**. O popup também lista as mídias detectadas na aba,
-para baixar sem o botão. A extensão da Chrome Web Store é a exceção: pelas regras da loja, ela não
-funciona no YouTube (sem botão, e os endereços do YouTube são recusados); a que vem com o Fisga,
-carregada sem compactação, e a do Firefox funcionam.
+para baixar sem o botão.
+
+No Chrome, Edge, Brave e Vivaldi, a extensão é carregada da pasta que vem com o Fisga (modo do
+desenvolvedor → **Carregar sem compactação**); ☰ → **Instalar a extensão no Chrome…** mostra o passo a
+passo, com a pasta e botões para copiar o endereço e o caminho. A Chrome Web Store não tem a extensão
+do Fisga.
 
 ## Peças
 

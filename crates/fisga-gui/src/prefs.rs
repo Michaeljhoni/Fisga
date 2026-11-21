@@ -270,6 +270,13 @@ fn browser_page(browser: &BrowserSettings) -> (gtk::Box, Box<dyn Fn() -> Browser
     note.add_css_class("dim-label");
     note.add_css_class("caption");
     page.append(&note);
+    let guide = gtk::Button::builder().label(tr!("Instalar a extensão no Chrome…")).halign(gtk::Align::Start).build();
+    guide.connect_clicked(|button| {
+        if let Some(parent) = button.root().and_downcast::<gtk::Window>() {
+            crate::chrome_guide::show(&parent);
+        }
+    });
+    page.append(&guide);
 
     let read = move || {
         let buffer = types.buffer();

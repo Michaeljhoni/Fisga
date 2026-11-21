@@ -183,6 +183,20 @@ sleep 2
 shot 5e-grabber
 xdotool windowfocus --sync "$grabber" key Escape
 
+echo "== how to install the extension in Chrome (fisga-gui --chrome-guide, to the running GUI)"
+# Where the packages put it: <prefix>/share next to <prefix>/bin.
+guide_dir="$BIN/../share/fisga/extension/chrome"
+mkdir -p "$guide_dir"
+cp "$(dirname "$0")/../../extension/manifest.chrome.json" "$guide_dir/manifest.json"
+"$BIN/fisga-gui" --chrome-guide
+guide="$(find_window "^Instalar a extensão no Chrome$")"
+sleep 1
+shot 5f-guia-chrome
+xdotool windowfocus --sync "$guide" key Escape
+for _ in $(seq 1 25); do xdotool search --name "^Instalar a extensão no Chrome$" >/dev/null 2>&1 || break; sleep 0.2; done
+if xdotool search --name "^Instalar a extensão no Chrome$" >/dev/null 2>&1; then echo "guide still open"; exit 1; fi
+rm -r "$BIN/../share"
+
 echo "== the holidays' themes, out of their weeks"
 pkill -f "$BIN/fisga-gui" || true
 for _ in $(seq 1 25); do pgrep -f "$BIN/fisga-gui" >/dev/null || break; sleep 0.2; done

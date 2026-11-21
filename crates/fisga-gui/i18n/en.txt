@@ -1015,3 +1015,40 @@ Natal
 
 Ano-novo
 = New Year
+
+# The "Instalar a extensão no Chrome" window (chrome_guide.rs).
+Instalar a extensão no Chrome…
+= Install the extension in Chrome…
+
+Instalar a extensão no Chrome
+= Install the extension in Chrome
+
+Copiado
+= Copied
+
+Copiar caminho
+= Copy path
+
+Abrir a pasta
+= Open the folder
+
+A extensão liga o navegador ao Fisga: o botão <b>Baixar</b> sobre os vídeos, a captura dos downloads e o menu do botão direito. No Chrome, Edge, Brave e Vivaldi, ela é instalada a partir da pasta que vem com o Fisga:
+= The extension connects the browser to Fisga: the <b>Download</b> button over videos, the takeover of downloads and the right-click menu. In Chrome, Edge, Brave and Vivaldi, it is installed from the folder that comes with Fisga:
+
+Abra uma aba nova e vá para <b>chrome://extensions</b> (no Edge, <b>edge://extensions</b>).
+= Open a new tab and go to <b>chrome://extensions</b> (in Edge, <b>edge://extensions</b>).
+
+Ligue o <b>Modo do desenvolvedor</b>, no canto de cima, à direita (no Edge, na coluna da esquerda).
+= Turn on <b>Developer mode</b>, in the top right corner (in Edge, in the left column).
+
+Não achei a pasta da extensão junto do Fisga. Ela fica em <b>share/fisga/extension/chrome</b>, na pasta onde o Fisga foi instalado.
+= The extension's folder was not found next to Fisga. It is <b>share/fisga/extension/chrome</b>, in the folder where Fisga was installed.
+
+Clique em <b>Carregar sem compactação</b> e escolha esta pasta (na janela que abre, dá para colar o caminho na barra de endereço):
+= Click <b>Load unpacked</b> and pick this folder (in the window that opens, the path can be pasted in the address bar):
+
+Pronto: a <b>Integração Fisga</b> aparece na lista. Fixe o ícone dela (na peça de quebra-cabeça, ao lado da barra de endereço): o popup mostra se ela está conectada ao Fisga.
+= Done: <b>Fisga Integration</b> shows in the list. Pin its icon (in the puzzle piece, next to the address bar): its popup shows whether it is connected to Fisga.
+
+Deixe o modo do desenvolvedor ligado e a pasta onde está: sem eles, o navegador desliga a extensão. As atualizações do Fisga trazem a extensão nova junto, e o navegador passa a usá-la quando é aberto de novo.
+= Keep developer mode on and the folder where it is: without them, the browser turns the extension off. Fisga's updates bring the new extension along, and the browser uses it the next time it opens.

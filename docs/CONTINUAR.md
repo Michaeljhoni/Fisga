@@ -359,7 +359,11 @@ Capturar do navegador, clicar no link de novo na página, e ver o download conti
      as imagens das lojas estão em `extension/store/`, a política de privacidade em `PRIVACY.md`.
 - Lojas de extensão: a Chrome Web Store recusou a 1.3.0 em 10/11/2026 por "facilitar download do
   YouTube" (política de produtos proibidos) e manteve a recusa na contestação; daí o pacote da loja
-  sem YouTube, desde a 1.3.1 (o cenário `store` do `real-clicks.mjs` confere). A loja deu à extensão o ID `jjpcgkejmdnabpjfdfeagdnobpimlhnb`
+  sem YouTube, desde a 1.3.1 (o cenário `store` do `real-clicks.mjs` confere). Em 11/11/2026 o item
+  foi removido de vez ("download não autorizado de conteúdo protegido"; não volta). No Chrome a
+  extensão é a carregada sem compactação: o app mostra como (`chrome_guide.rs`, ☰ → Instalar a
+  extensão no Chrome…, `fisga-gui --chrome-guide`, que o instalador do Windows abre no fim quando acha
+  Chrome, Brave ou Vivaldi). Não reenviar a extensão à Chrome Web Store, nem por outra conta. A loja deu à extensão o ID `jjpcgkejmdnabpjfdfeagdnobpimlhnb`
   (`CHROME_STORE_EXTENSION_ID`); o `ocifdbhjaijkdgcnpigjlemkmahkojcm` (`CHROME_EXTENSION_ID`, da chave
   do manifesto) segue valendo para a extensão carregada sem compactação. Os dois estão nos
   `allowed_origins` dos manifestos do native host (`hosts.rs`). No

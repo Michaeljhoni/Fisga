@@ -98,10 +98,18 @@ deles no PATH fica com o seu.
 
 - **Firefox:** [addons.mozilla.org](https://addons.mozilla.org/firefox/addon/fisga@fisga.local/)
   (em análise pela Mozilla; até sair, use o modo de desenvolvedor abaixo).
-- **Chrome, Edge, Brave, Vivaldi:** a Chrome Web Store vem em breve. Por enquanto, abra
-  `chrome://extensions`, ligue o **Modo do desenvolvedor**, clique em **Carregar sem compactação** e
-  escolha a pasta `chrome` da extensão. A versão da Chrome Web Store não baixa do YouTube (regra da
-  loja); a da pasta `chrome`, sim.
+- **Chrome, Edge, Brave, Vivaldi:** a extensão não está na Chrome Web Store; ela vem junto com o
+  Fisga e é instalada em quatro passos. O Fisga mostra o passo a passo, com a pasta certa e botões
+  para copiar: ☰ → **Instalar a extensão no Chrome…** (também em Preferências → Navegador, e no fim
+  do instalador do Windows).
+  1. Abra uma aba nova e vá para `chrome://extensions` (no Edge, `edge://extensions`).
+  2. Ligue o **Modo do desenvolvedor**, no canto de cima, à direita (no Edge, na coluna da esquerda).
+  3. Clique em **Carregar sem compactação** e escolha a pasta `chrome` da extensão (tabela abaixo).
+  4. Pronto: a **Integração Fisga** aparece na lista. Fixe o ícone dela na barra: o popup mostra se
+     ela está conectada ao Fisga.
+
+  Deixe o modo do desenvolvedor ligado e a pasta onde está: sem eles, o navegador desliga a
+  extensão. As atualizações do Fisga trazem a extensão nova junto.
 - **Firefox, modo de desenvolvedor:** `about:debugging` → **Este Firefox** → **Carregar extensão
   temporária** → o `manifest.json` da pasta `firefox` (sai quando o Firefox fecha).
 
@@ -139,7 +147,9 @@ No Windows, o `fisga.exe` fica em `%LOCALAPPDATA%\Programs\Fisga\bin`; no macOS,
 Internet Download Manager (IDM) written from scratch in Rust with a GTK 4 interface. It splits each
 file into up to 32 connections, resumes interrupted downloads, has queues and a scheduler, and comes
 with a Chrome and Firefox extension that catches the browser's downloads and adds a **Download** button
-over videos on any site (YouTube and others through yt-dlp). Get the Windows installer, the macOS
+over videos on any site (YouTube and others through yt-dlp). In Chrome, Edge, Brave and Vivaldi the
+extension is loaded from the folder that comes with Fisga (Developer mode → Load unpacked); the app
+shows how in ☰ → Install the extension in Chrome…. Get the Windows installer, the macOS
 `.dmg` or the Linux packages from the [latest release](https://github.com/Michaeljhoni/Fisga/releases/latest).
 The interface follows the system's language, Brazilian Portuguese or English (or pick one in
 Preferences → General → Language).

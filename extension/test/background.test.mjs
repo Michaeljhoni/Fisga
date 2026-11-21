@@ -468,6 +468,16 @@ test("the posts, albums and profiles gallery-dl takes, site by site", () => {
     "https://www.reddit.com/r/pics/",
     "https://www.pinterest.com/search/pins/?q=bolo",
     "https://www.pinterest.com/ideas/",
+    // "Pin it" buttons on any site, wrapping a blog's photos.
+    "https://www.pinterest.com/pin/create/button/?url=https%3A%2F%2Fblog.example%2F&media=x.jpg",
+    "https://br.pinterest.com/pin/find/?url=https%3A%2F%2Fblog.example%2F",
+    "https://www.pinterest.com/fulana/followers/",
+    // The sites' own other pages are not profiles.
+    "https://help.instagram.com/1234567890",
+    "https://about.instagram.com/blog",
+    "https://help.x.com/en",
+    "https://x.com/premium",
+    "https://www.deviantart.com/notifications",
     "https://notinstagram.com/p/C1a2b3/",
     "https://example.com/p/C1a2b3/",
     "ftp://www.instagram.com/p/C1a2b3/",
@@ -507,7 +517,8 @@ test("with gallery-dl, a profile is one more item and its grid's photos are thei
   assert.equal(res.page.galleryDl, true);
   assert.equal(res.page.galleryHint, false);
   const [first, ...rest] = res.items;
-  assert.deepEqual([first.kind, first.whole, first.url, first.name], ["gallery", "profile", PROFILE, "@fulano"]);
+  assert.deepEqual([first.kind, first.whole, first.target, first.name], ["gallery", "profile", PROFILE, "@fulano"]);
+  assert.equal(first.url, `${PROFILE}#gallery`, "a key of its own");
   assert.deepEqual(
     rest.map((item) => item.post ?? null),
     ["https://www.instagram.com/p/AAA111/", "https://www.instagram.com/p/BBB222/", null, null],
@@ -521,6 +532,8 @@ test("on a post's page its photos are the post; without gallery-dl, a hint inste
     url: post,
     title: "Fulano no Instagram",
     items: [
+      // The carousel's video, which yt-dlp gets from the post's address.
+      { type: "video", kind: "page", url: post },
       { type: "image", kind: "direct", url: "https://scontent.cdninstagram.com/1.jpg" },
       { type: "image", kind: "direct", url: "https://scontent.cdninstagram.com/og.jpg", source: "meta" },
     ],
@@ -530,8 +543,9 @@ test("on a post's page its photos are the post; without gallery-dl, a hint inste
     plain(await load({ native: app(galleryDl), tabs, frames: { 0: page } }).run("handle")({ type: "gallery-scan", tabId: 1 }, FROM_GALLERY));
   const withIt = await scan(true);
   assert.deepEqual(
-    withIt.items.map((item) => [item.kind, item.post ?? item.url]),
-    [["gallery", post], ["direct", post], ["direct", post]],
+    withIt.items.map((item) => [item.kind, item.target ?? item.post]),
+    [["gallery", post], ["page", post], ["direct", post], ["direct", post]],
+    "the whole post, though its video is listed by the same address",
   );
   assert.equal(withIt.items[0].thumb, "https://scontent.cdninstagram.com/og.jpg", "the page's picture");
   assert.equal(withIt.items[0].name, "Fulano no Instagram");
@@ -569,4 +583,16 @@ test("a post goes to the app for gallery-dl, into the site's folder, with the si
   );
   const asked = bg.calls.filter(([name]) => name === "cookies").map(([, details]) => details.url);
   assert.ok(asked.includes(post), "the login gallery-dl needs is the site's");
+});
+
+test("a post linked from another site goes to its own site's folder", async () => {
+  const blog = "https://www.blog.example/viagem";
+  const bg = load({ native: app(true), tabs: { 1: { id: 1, url: blog } } });
+  const items = [
+    { url: "https://x.com/fulano/status/1", kind: "gallery", type: "image" },
+    { url: "https://www.blog.example/foto.jpg", kind: "direct", type: "image" },
+  ];
+  await bg.run("handle")({ type: "gallery-download", tabId: 1, pageUrl: blog, items }, FROM_GALLERY);
+  const [batch] = bg.sent.filter((msg) => msg.type === "media-batch");
+  assert.deepEqual(batch.downloads.map((d) => d.subfolder), ["x.com", "blog.example"]);
 });

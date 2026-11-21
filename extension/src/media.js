@@ -68,12 +68,14 @@
     const pad = (n) => String(n).padStart(2, "0");
     return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
   }
-  /** The address to download: the one checked, else the one the page gave. */
-  const addressOf = (item) => item.best || item.url;
+  /** The address to download: a whole post's or profile's, the one checked, else the one the page gave. */
+  const addressOf = (item) => item.target || item.best || item.url;
   /** A photo of a post (a carousel's, a feed's) that goes as its whole post, by gallery-dl in the app. */
   const viaPost = (item) => Boolean(page?.galleryDl && item.kind !== "gallery" && item.type === "image" && item.post);
   /** What goes to the app for a card: its post, or its file. */
   const sentAs = (item) => (viaPost(item) ? item.post : addressOf(item));
+  /** A post's video (yt-dlp, by the post's address) is in the whole post too. */
+  const postOf = (item) => (item.kind === "page" && item.post) || sentAs(item);
   /** A whole album or profile: maybe thousands of files, so picked one by one, never with others. */
   const isWhole = (item) => item.kind === "gallery" && item.whole !== "post";
   function wholeLabel(item) {
@@ -425,16 +427,20 @@
       ),
     );
     // Each file once: two thumbnails may lead to the same original. Each
-    // post once too: its photos are all in it.
+    // post once too: its photos are all in it, and so is its video (sent to
+    // yt-dlp by the post's own address): gallery-dl gets it with the rest.
+    const asGallery = (item) => item.kind === "gallery" || viaPost(item);
+    const whole = new Set(chosen.filter((item) => !item.dead && !item.drm && asGallery(item)).map(sentAs));
     const unique = new Map();
     let left = 0;
     for (const item of chosen) {
       if (item.dead || item.drm) left++;
+      else if (!asGallery(item) && whole.has(postOf(item))) continue;
       else if (!unique.has(sentAs(item))) unique.set(sentAs(item), item);
-      else if (!viaPost(item) && item.kind !== "gallery") left++;
+      else if (!asGallery(item)) left++;
     }
     const live = [...unique.values()];
-    const posts = live.some((item) => item.kind === "gallery" || viaPost(item));
+    const posts = live.some(asGallery);
     for (const item of chosen) if (item.dead || item.drm) selected.delete(item.url);
     let res;
     try {
@@ -444,7 +450,7 @@
         pageUrl: page?.url,
         items: live.map((item) => ({
           url: sentAs(item),
-          kind: viaPost(item) ? "gallery" : item.kind,
+          kind: asGallery(item) ? "gallery" : item.kind,
           type: item.type,
           name: item.name,
           frameUrl: item.frameUrl,
@@ -456,7 +462,7 @@
     // What the app took is queued, even when a later part failed.
     const taken = new Set(res?.sent ?? []);
     for (const item of chosen) {
-      if (taken.has(sentAs(item))) {
+      if (taken.has(sentAs(item)) || taken.has(postOf(item))) {
         item.sent = true;
         selected.delete(item.url);
       }
@@ -518,7 +524,7 @@
     items = res.items.map((fresh) => {
       const old = before.get(fresh.url);
       if (!old) return { ...fresh };
-      for (const key of ["thumb", "name", "frameUrl", "frameId", "duration", "detail", "source", "candidates", "verify", "generic", "post", "whole"]) {
+      for (const key of ["thumb", "name", "frameUrl", "frameId", "duration", "detail", "source", "candidates", "verify", "generic", "post", "whole", "target"]) {
         if (fresh[key] !== undefined) old[key] = fresh[key];
       }
       if (!old.checked && !old.original) {

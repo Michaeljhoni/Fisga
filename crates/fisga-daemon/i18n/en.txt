@@ -325,8 +325,11 @@ Procurando os arquivos com o gallery-dl…
 Procurando os arquivos com o gallery-dl… {} encontrados
 = Looking for the files with gallery-dl… {} found
 
-{} de {} arquivos foram para a fila, mas o gallery-dl parou antes do fim; tente de novo para buscar o resto. ({})
-= {} of {} files went to the queue, but gallery-dl stopped before the end; try again to fetch the rest. ({})
+{} O gallery-dl terminou com um erro e pode ter deixado algo de fora: mande a página de novo pela galeria.{}
+= {} gallery-dl ended with an error and may have left something out: send the page again from the gallery.{}
+
+Esperando o gallery-dl terminar outra página…
+= Waiting for gallery-dl to finish another page…
 
 Nada novo: os {} arquivos já estão na pasta ou na lista.
 = Nothing new: the {} files are already in the folder or in the list.

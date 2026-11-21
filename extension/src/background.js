@@ -537,14 +537,27 @@ function siteFolder(url) {
 // does not hold whole (a carousel shows one at a time, a feed thumbnails,
 // a slideshow is a video): the app lists their files with gallery-dl, when
 // it has it, and each one goes to the queue. Words of their paths that are
-// the sites' own pages, not users.
+// the sites' own pages, not users (or, for Pinterest's boards, a profile's tabs).
 const NOT_USERS = {
-  instagram: "about accounts api challenge developer direct emails explore graphql legal locations oauth p privacy reel reels session settings stories terms topics tv web",
-  x: "account bookmarks communities compose explore hashtag home i intent jobs lists login logout messages notifications privacy search settings share signup tos",
-  deviantart: "about core-membership daily-deviations developers forum groups join search settings shop status tag team topic users watch",
+  instagram: "about accounts ads api challenge creators developer direct download emails explore graphql legal lite locations nametag oauth p privacy reel reels session settings stories terms topics tv web your_activity",
+  x: "about account bookmarks communities compose download explore hashtag home i intent jobs lists login logout messages notifications premium privacy rules search settings share signup tos verified-choose",
+  deviantart: "about account checkout core-membership daily-deviations developers deviations forum groups join messages notifications popular search settings shop status tag team topic users watch",
   pinterest: "_ about business categories explore ideas login logout news_hub pin search settings shopping today",
+  // A user's pages that are neither a board nor the profile's pins.
+  pinterestBoard: "_community _profile _shop _tools followers following more_ideas",
 };
 const notUser = (site, word) => NOT_USERS[site].split(" ").includes(word.toLowerCase());
+// The sites' own hosts (help.instagram.com, about.x.com... are not profiles).
+const GALLERY_HOSTS = {
+  instagram: /^(?:www\.)?instagram\.com$/,
+  tiktok: /^(?:www\.|m\.)?tiktok\.com$/,
+  x: /^(?:www\.|mobile\.)?(?:x|twitter)\.com$/,
+  deviantart: /^(?:www\.)?deviantart\.com$/,
+  flickr: /^(?:www\.|m\.)?flickr\.com$/,
+  reddit: /^(?:www\.|old\.|new\.|np\.|m\.)?reddit\.com$/,
+  // pinterest.com and its countries' (br.pinterest.com, pinterest.co.uk, pinterest.com.mx...).
+  pinterest: /^(?:www\.|[a-z]{2}\.)?pinterest\.(?:com|[a-z]{2})(?:\.[a-z]{2})?$/,
+};
 
 /**
  * What gallery-dl can take at `url`: { url, whole, name }, `whole` being
@@ -559,7 +572,7 @@ function galleryTarget(url) {
   const p = u.pathname.split("/").filter(Boolean);
   const name = /^[\w.-]+$/;
   const at = (n) => p[n] ?? "";
-  if (hostMatches(host, ["instagram.com"])) {
+  if (GALLERY_HOSTS.instagram.test(host)) {
     const post = at(0) === "p" ? at(1) : at(1) === "p" ? at(2) : "";
     if (/^[\w-]+$/.test(post)) return { url: `https://www.instagram.com/p/${post}/`, whole: "post", name: "" };
     const user = at(0);
@@ -568,19 +581,19 @@ function galleryTarget(url) {
     }
     return null;
   }
-  if (hostMatches(host, ["tiktok.com"])) {
+  if (GALLERY_HOSTS.tiktok.test(host)) {
     const user = /^@([\w.-]+)$/.exec(at(0))?.[1];
     if (!user) return null;
     if (at(1) === "photo" && /^\d+$/.test(at(2))) return { url: `https://www.tiktok.com/@${user}/photo/${at(2)}`, whole: "post", name: "" };
     return p.length === 1 ? { url: `https://www.tiktok.com/@${user}`, whole: "profile", name: `@${user}` } : null;
   }
-  if (hostMatches(host, ["x.com", "twitter.com"])) {
+  if (GALLERY_HOSTS.x.test(host)) {
     const user = at(0);
     if (!/^\w{1,15}$/.test(user) || notUser("x", user)) return null;
     if (at(1) === "status" && /^\d+$/.test(at(2))) return { url: `https://x.com/${user}/status/${at(2)}`, whole: "post", name: "" };
     return p.length === 1 || (p.length === 2 && at(1) === "media") ? { url: `https://x.com/${user}/media`, whole: "profile", name: `@${user}` } : null;
   }
-  if (hostMatches(host, ["deviantart.com"])) {
+  if (GALLERY_HOSTS.deviantart.test(host)) {
     const user = at(0);
     if (!/^[\w-]+$/.test(user) || notUser("deviantart", user)) return null;
     if (at(1) === "art" && name.test(at(2))) return { url: `https://www.deviantart.com/${user}/art/${at(2)}`, whole: "post", name: "" };
@@ -589,14 +602,14 @@ function galleryTarget(url) {
     }
     return p.length === 1 || (at(1) === "gallery" && p.length <= 3) ? { url: `https://www.deviantart.com/${user}/gallery`, whole: "profile", name: user } : null;
   }
-  if (hostMatches(host, ["flickr.com"])) {
+  if (GALLERY_HOSTS.flickr.test(host)) {
     const user = at(1);
     if (at(0) !== "photos" || !/^[\w@-]+$/.test(user) || user === "tags") return null;
     if (/^\d+$/.test(at(2))) return { url: `https://www.flickr.com/photos/${user}/${at(2)}/`, whole: "post", name: "" };
     if (["albums", "sets"].includes(at(2)) && /^\d+$/.test(at(3))) return { url: `https://www.flickr.com/photos/${user}/albums/${at(3)}`, whole: "album", name: user };
     return p.length === 2 || (p.length === 3 && /^page\d+$/.test(at(2))) ? { url: `https://www.flickr.com/photos/${user}/`, whole: "profile", name: user } : null;
   }
-  if (hostMatches(host, ["reddit.com"])) {
+  if (GALLERY_HOSTS.reddit.test(host)) {
     if (at(0) === "r" && /^\w+$/.test(at(1)) && at(2) === "comments" && /^\w+$/.test(at(3))) {
       return { url: `https://www.reddit.com/r/${at(1)}/comments/${at(3)}/`, whole: "post", name: "" };
     }
@@ -606,13 +619,14 @@ function galleryTarget(url) {
     }
     return null;
   }
-  // pinterest.com and its countries' (br.pinterest.com, pinterest.co.uk, pinterest.com.mx...).
-  if (/(^|\.)pinterest\.(?:com|[a-z]{2})(?:\.[a-z]{2})?$/.test(host)) {
-    if (at(0) === "pin") return /^[\w-]+$/.test(at(1)) ? { url: `https://${host}/pin/${at(1)}/`, whole: "post", name: "" } : null;
+  if (GALLERY_HOSTS.pinterest.test(host)) {
+    // A pin's id has digits: not /pin/create/button/ (a "Pin it" link) nor /pin/find/.
+    if (at(0) === "pin") return /^(?=[\w-]*\d)[\w-]+$/.test(at(1)) ? { url: `https://${host}/pin/${at(1)}/`, whole: "post", name: "" } : null;
     const user = at(0);
     if (!name.test(user) || notUser("pinterest", user)) return null;
+    // The profile's own tabs are the profile.
     const tab = ["_saved", "_created", "pins"].includes(at(1));
-    if (p.length === 2 && name.test(at(1)) && !tab) {
+    if (p.length === 2 && name.test(at(1)) && !tab && !notUser("pinterestBoard", at(1))) {
       return { url: `https://${host}/${user}/${at(1)}/`, whole: "album", name: `${user}/${at(1)}` };
     }
     return p.length === 1 || (p.length === 2 && tab) ? { url: `https://${host}/${user}/`, whole: "profile", name: user } : null;
@@ -712,19 +726,21 @@ async function galleryScan(tabId) {
   // Posts gallery-dl can take: a photo that links to one (a feed's, a
   // grid's) or, linking nowhere, sits in the post the page is. The page
   // itself, a post, an album or a profile, is one more item when the app has
-  // gallery-dl (unless the page is already listed, as a post's video).
+  // gallery-dl: its key is its own (the page may be listed already, as a
+  // post's video for yt-dlp), its address the `target`.
   const here = galleryTarget(tab.url);
   for (const item of items) {
-    if (item.type !== "image") continue;
-    const post = item.postLink ? galleryTarget(item.postLink) : here;
+    // A post's video, for yt-dlp: the whole post, when sent too, holds it.
+    const post = item.kind === "page" ? galleryTarget(item.url) : item.type !== "image" ? null : item.postLink ? galleryTarget(item.postLink) : here;
     if (post?.whole === "post") item.post = post.url;
     delete item.postLink;
   }
   const app = here || items.some((item) => item.post) ? await ping() : {};
   const galleryDl = Boolean(app.ok && app.galleryDl);
-  if (here && galleryDl && !seen.has(here.url)) {
+  if (here && galleryDl) {
     const cover = here.whole === "post" ? items.find((item) => item.type === "image" && item.source === "meta")?.url : "";
-    items.unshift({ type: "image", kind: "gallery", url: here.url, whole: here.whole, name: here.name || tab.title || here.url, thumb: cover || "", source: "gallery-dl" });
+    const name = here.name || tab.title || here.url;
+    items.unshift({ type: "image", kind: "gallery", url: `${here.url}#gallery`, target: here.url, whole: here.whole, name, thumb: cover || "", source: "gallery-dl" });
   }
   // A Firefox container or a private window: the address checks cannot use
   // its cookies, so a refused check proves nothing there.
@@ -966,7 +982,8 @@ async function galleryDownload(msg) {
       userAgent: navigator.userAgent,
       cookies: await cookiesOf(item.url),
       category: item.type === "image" ? "image" : item.type === "audio" ? "music" : "video",
-      subfolder: folder,
+      // A post goes to its own site's folder, wherever it was linked from.
+      subfolder: kind === "gallery" ? siteFolder(item.url) : folder,
       start: true,
     });
   }

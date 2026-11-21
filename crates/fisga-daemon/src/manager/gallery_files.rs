@@ -1,13 +1,14 @@
 //! The files a gallery (a post, a profile...) holds, found by gallery-dl
 //! (see `crate::gallery`), as downloads of their own.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::Context;
 use fisga_i18n::tr;
-use fisga_ipc::{AddRequest, Category, Cookie};
+use fisga_ipc::{AddRequest, Category, Cookie, Response, State};
 
 use super::{auto_dir, folder_name, Manager};
 use crate::gallery::Found;
@@ -37,31 +38,42 @@ fn cookies_for(url: &str, cookies: &[Cookie]) -> Vec<Cookie> {
 
 impl Manager {
     /// The files gallery-dl found for the gallery `id`, as downloads of
-    /// their own: in its queue, each in its type's folder (inside the site's,
-    /// when the gallery has one), with the gallery's address as their page.
-    /// A file already in its folder, or in the list, is left out, as
-    /// gallery-dl itself skips what it has: a profile fetched again brings
-    /// what is new. Returns how many were added.
+    /// their own: in its queue, where it is, each in its type's folder
+    /// (inside the site's, when the gallery has one), with the gallery's
+    /// address as their page. What is already done is left out, as
+    /// gallery-dl itself skips what it has, so a profile fetched again brings
+    /// what is new: a file in its folder, or one the list has (by its folder
+    /// and name, or by its address when it has no name). A download of the
+    /// file that failed before starting, as signed links do once expired,
+    /// gets the new link and goes back to the queue. Returns how many were
+    /// added or sent back.
     pub fn add_gallery_files(self: &Arc<Self>, id: u64, files: Vec<Found>) -> anyhow::Result<usize> {
-        let (request, queue, category, mut taken) = {
+        let (request, queue, category, mut by_path, mut addresses) = {
             let inner = self.inner.lock().unwrap();
             let job = inner.jobs.get(&id).context(tr!("download não encontrado"))?;
-            // What the list already holds, by folder and name.
-            let taken: HashSet<PathBuf> = inner
-                .jobs
-                .values()
-                .flat_map(|other| {
-                    let named = other.request.output_dir.as_ref().zip(other.request.file_name.as_ref());
-                    [named.map(|(dir, name)| dir.join(name)), other.info.path.clone()]
-                })
-                .flatten()
-                .collect();
-            (job.request.clone(), job.info.queue, job.info.category, taken)
+            // Where each download of the list goes, with its state.
+            let mut by_path: HashMap<PathBuf, (u64, State)> = HashMap::new();
+            for other in inner.jobs.values() {
+                let named = other.request.output_dir.as_ref().zip(other.request.file_name.as_ref()).map(|(dir, name)| dir.join(name));
+                for path in [named, other.info.path.clone()].into_iter().flatten() {
+                    by_path.insert(path, (other.info.id, other.info.state));
+                }
+            }
+            let addresses: HashSet<String> = inner.jobs.values().map(|other| other.request.url.clone()).collect();
+            (job.request.clone(), job.info.queue, job.info.category, by_path, addresses)
         };
         let settings = self.settings();
         let subfolder = request.subfolder.as_deref().and_then(folder_name);
-        let mut added = 0;
+        let mut added = Vec::new();
+        let mut renewed = 0;
         for found in files.into_iter().take(fisga_ipc::MAX_BATCH) {
+            // Removed meanwhile: the rest stays out.
+            if !self.inner.lock().unwrap().jobs.contains_key(&id) {
+                break;
+            }
+            if !addresses.insert(found.url.clone()) {
+                continue;
+            }
             let guess = found.name.clone().or_else(|| url::Url::parse(&found.url).ok().as_ref().and_then(fisga_core::filename::from_url));
             let file_category = match Category::detect(guess.as_deref().unwrap_or_default(), found.kind) {
                 Category::Other => category,
@@ -72,14 +84,25 @@ impl Manager {
                 (None, Some(dir)) => dir.clone(),
                 (None, None) => auto_dir(&settings, file_category),
             };
+            let cookies = cookies_for(&found.url, &request.cookies);
             if let Some(name) = &found.name {
                 let path = dir.join(name);
-                if fisga_ipc::existing(&path) != fisga_ipc::Existing::Nothing || !taken.insert(path) {
-                    continue;
+                let on_disk = fisga_ipc::existing(&path);
+                match by_path.get(&path).copied() {
+                    Some((other, State::Failed)) if on_disk == fisga_ipc::Existing::Nothing => {
+                        renewed += usize::from(self.renew(other, &found.url, cookies, &request.url));
+                        continue;
+                    }
+                    Some(_) => continue,
+                    // A partial file no download holds is another link's: the
+                    // engine leaves it alone and takes a free name.
+                    None if on_disk == fisga_ipc::Existing::File => continue,
+                    None => {}
                 }
+                by_path.insert(path, (0, State::Queued));
             }
             let file = AddRequest {
-                cookies: cookies_for(&found.url, &request.cookies),
+                cookies,
                 url: found.url,
                 kind: found.kind,
                 referrer: Some(request.url.clone()),
@@ -94,12 +117,66 @@ impl Manager {
                 ..Default::default()
             };
             match self.insert(file) {
-                Ok(_) => added += 1,
+                Ok(new) => added.push(new),
                 Err(e) => tracing::warn!(id, error = %e, "um arquivo da galeria ficou de fora"),
             }
         }
-        tracing::info!(id, added, "arquivos da galeria na fila");
-        Ok(added)
+        self.place_after(id, &added);
+        tracing::info!(id, added = added.len(), renewed, "arquivos da galeria na fila");
+        Ok(added.len() + renewed)
+    }
+
+    /// A gallery's file whose download failed (its signed link expired, most
+    /// often) gets the link gallery-dl found now, and goes back to the queue.
+    fn renew(&self, id: u64, url: &str, cookies: Vec<Cookie>, page: &str) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(job) = inner.jobs.get_mut(&id).filter(|job| job.info.state == State::Failed) else { return false };
+        job.request.url = url.to_string();
+        job.request.cookies = cookies;
+        job.request.referrer = Some(page.to_string());
+        job.info.url = url.to_string();
+        job.info.state = State::Queued;
+        job.info.error = None;
+        let _ = self.updates.send(Response::Update { item: job.info.clone() });
+        self.dirty.store(true, Ordering::Relaxed);
+        tracing::info!(id, "download da galeria com o link novo");
+        true
+    }
+
+    /// Puts `ids`, new downloads at the end of the queue, right after
+    /// `anchor` in its queue (among the unfinished ones), in their order: a
+    /// gallery's files take its place, and download before the galleries
+    /// sent after it.
+    fn place_after(&self, anchor: u64, ids: &[u64]) {
+        if ids.is_empty() {
+            return;
+        }
+        let mut inner = self.inner.lock().unwrap();
+        let Some(queue) = inner.jobs.get(&anchor).map(|job| job.info.queue) else { return };
+        let mut line: Vec<(i64, u64)> = inner
+            .jobs
+            .values()
+            .filter(|job| job.info.queue == queue && job.info.state != State::Completed && !ids.contains(&job.info.id))
+            .map(|job| (job.info.order, job.info.id))
+            .collect();
+        line.sort();
+        let mut orders: Vec<i64> = line.iter().map(|(order, _)| *order).collect();
+        orders.extend(ids.iter().filter_map(|id| inner.jobs.get(id).map(|job| job.info.order)));
+        orders.sort();
+        for i in 1..orders.len() {
+            orders[i] = orders[i].max(orders[i - 1] + 1);
+        }
+        let mut order: Vec<u64> = line.into_iter().map(|(_, id)| id).collect();
+        let at = order.iter().position(|id| *id == anchor).map_or(order.len(), |at| at + 1);
+        order.splice(at..at, ids.iter().copied());
+        for (id, position) in order.into_iter().zip(orders) {
+            let job = inner.jobs.get_mut(&id).expect("id from map");
+            if job.info.order != position {
+                job.info.order = position;
+                let _ = self.updates.send(Response::Update { item: job.info.clone() });
+            }
+        }
+        self.dirty.store(true, Ordering::Relaxed);
     }
 }
 
@@ -214,5 +291,69 @@ mod tests {
         std::fs::write(photos.join("5_n.jpg"), "x").unwrap();
         let newer = parse_line("FISGAFILE\t\"http://127.0.0.1:9/v/t51/5_n.jpg\"\t\"5_n\"\t\"jpg\"").unwrap();
         assert_eq!(manager.add_gallery_files(again, vec![newer]).unwrap(), 0);
+    }
+
+    fn post(manager: &Arc<Manager>, url: &str) -> u64 {
+        let request = AddRequest {
+            url: url.into(),
+            kind: SourceKind::Gallery,
+            category: Some(Category::Image),
+            subfolder: Some("x.com".into()),
+            start: false,
+            ..Default::default()
+        };
+        manager.add_many(vec![request]).unwrap()[0]
+    }
+
+    #[tokio::test]
+    async fn a_failed_file_gets_the_new_link_and_nameless_ones_come_once() {
+        let manager = manager();
+        let photos = manager.settings().download_dir.unwrap().join("Imagens").join("x.com");
+        let gallery = post(&manager, "https://x.com/fulano/status/1");
+        let file = |url: &str, name: Option<&str>| Found { url: url.into(), kind: SourceKind::Direct, name: name.map(Into::into) };
+        // Sent before: its signed link expired before it started.
+        let failed = manager
+            .add(AddRequest {
+                url: "http://127.0.0.1:9/media/A.jpg?token=old".into(),
+                file_name: Some("A.jpg".into()),
+                output_dir: Some(photos.clone()),
+                start: false,
+                ..Default::default()
+            })
+            .unwrap();
+        manager.update(failed, |info| {
+            info.state = State::Failed;
+            info.error = Some("HTTP 403".into());
+        });
+        let found = vec![
+            file("http://127.0.0.1:9/media/A.jpg?token=new", Some("A.jpg")),
+            file("http://127.0.0.1:9/media/B", None),
+            file("http://127.0.0.1:9/media/B", None),
+        ];
+        assert_eq!(manager.add_gallery_files(gallery, found.clone()).unwrap(), 2, "A renewed, B once");
+        let renewed = manager.list().into_iter().find(|item| item.id == failed).unwrap();
+        assert_eq!((renewed.state, renewed.url.as_str(), renewed.error), (State::Queued, "http://127.0.0.1:9/media/A.jpg?token=new", None));
+        let request = manager.inner.lock().unwrap().jobs[&failed].request.clone();
+        assert_eq!(request.url, "http://127.0.0.1:9/media/A.jpg?token=new");
+        assert_eq!(request.referrer.as_deref(), Some("https://x.com/fulano/status/1"));
+        // Sent again: nothing new, the nameless one included.
+        assert_eq!(manager.add_gallery_files(gallery, found).unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_galleries_files_take_its_place_in_the_queue() {
+        let manager = manager();
+        let first = post(&manager, "https://x.com/fulano/status/1");
+        let second = post(&manager, "https://x.com/fulano/status/2");
+        let found = (1..=3).map(|n| Found { url: format!("http://127.0.0.1:9/{n}.jpg"), kind: SourceKind::Direct, name: Some(format!("{n}.jpg")) });
+        assert_eq!(manager.add_gallery_files(first, found.collect()).unwrap(), 3);
+        let mut line: Vec<(i64, String)> = manager.list().into_iter().map(|item| (item.order, item.name)).collect();
+        line.sort();
+        let names: Vec<&str> = line.iter().map(|(_, name)| name.as_str()).collect();
+        assert_eq!(names[1..4], ["1.jpg", "2.jpg", "3.jpg"], "{names:?}: after the first gallery, before the second");
+        let orders: HashSet<i64> = line.iter().map(|(order, _)| *order).collect();
+        assert_eq!(orders.len(), 5, "every position its own");
+        let second_at = manager.list().into_iter().find(|item| item.id == second).unwrap().order;
+        assert_eq!(line.last().unwrap().0, second_at);
     }
 }

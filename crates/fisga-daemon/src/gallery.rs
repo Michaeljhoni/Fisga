@@ -73,13 +73,15 @@ pub fn parse_line(line: &str) -> Option<Found> {
 }
 
 /// The message of gallery-dl's last error in its log (`[instagram][error]
-/// ...`), else of its last warning.
-fn last_problem(log: &VecDeque<String>) -> Option<String> {
+/// ...`), else of its last warning; when it `failed`, else its last line
+/// (an option an old gallery-dl does not know: `gallery-dl: error: ...`).
+fn last_problem(log: &VecDeque<String>, failed: bool) -> Option<String> {
     let after = |level: &str| {
         let tag = format!("][{level}] ");
         log.iter().rev().find_map(|line| line.split_once(tag.as_str()).map(|(_, message)| message.trim().to_string()))
     };
-    after("error").or_else(|| after("warning")).filter(|message| !message.is_empty())
+    let last = || log.iter().rev().map(|line| line.trim()).find(|line| !line.is_empty()).map(str::to_string);
+    after("error").or_else(|| after("warning")).or_else(|| last().filter(|_| failed)).filter(|message| !message.is_empty())
 }
 
 /// gallery-dl's complaint, with what to do when it is a known one.
@@ -94,8 +96,13 @@ fn explain(problem: Option<String>) -> String {
     if ["login", "authoriz", "authrequired", "auth required", "401", "403"].iter().any(|word| lower.contains(word)) {
         return trf!("o site pediu login: entre na sua conta no navegador e baixe de novo pela galeria (gallery-dl: {})", problem);
     }
-    format!("gallery-dl: {problem}")
+    format!("gallery-dl: {}", problem.strip_prefix("gallery-dl: ").unwrap_or(&problem))
 }
+
+/// One listing at a time: gallery-dl paces its requests to a site within one
+/// run, and several at once with the user's login (a whole grid sent
+/// together) would look like a flood to the site.
+static LISTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// What came of asking gallery-dl.
 enum Listing {
@@ -115,6 +122,16 @@ pub async fn run(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel: 
     if let Err(error) = prepared {
         return JobResult::Failed(error);
     }
+    let _turn = match LISTING.try_lock() {
+        Ok(turn) => turn,
+        Err(_) => {
+            manager.update(id, |info| info.note = Some(tr!("Esperando o gallery-dl terminar outra página…").into()));
+            tokio::select! {
+                turn = LISTING.lock() => turn,
+                _ = cancel.cancelled() => return JobResult::Paused,
+            }
+        }
+    };
     manager.update(id, |info| {
         info.note = Some(tr!("Procurando os arquivos com o gallery-dl…").into());
         info.connections = 1;
@@ -124,6 +141,9 @@ pub async fn run(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel: 
         Listing::Failed(error) => return JobResult::Failed(error),
         Listing::Done { files, complete, problem } => (files, complete, problem),
     };
+    if cancel.is_cancelled() {
+        return JobResult::Paused;
+    }
     if files.is_empty() {
         return JobResult::Failed(explain(problem));
     }
@@ -132,15 +152,20 @@ pub async fn run(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel: 
         Ok(added) => added,
         Err(e) => return JobResult::Failed(e.to_string()),
     };
-    match (complete, added) {
-        (false, _) => JobResult::Failed(trf!(
-            "{} de {} arquivos foram para a fila, mas o gallery-dl parou antes do fim; tente de novo para buscar o resto. ({})",
-            added,
-            found,
-            explain(problem)
+    let done = match added {
+        0 => trf!("Nada novo: os {} arquivos já estão na pasta ou na lista.", found),
+        _ => trf!("{} arquivos na fila.", added),
+    };
+    // gallery-dl also ends with an error after listing everything (one dead
+    // link in a post): what it found is queued either way, and the page sent
+    // again brings only what is missing.
+    match complete {
+        true => JobResult::Replaced(done),
+        false => JobResult::Replaced(trf!(
+            "{} O gallery-dl terminou com um erro e pode ter deixado algo de fora: mande a página de novo pela galeria.{}",
+            done,
+            problem.map(|problem| format!(" ({problem})")).unwrap_or_default()
         )),
-        (true, 0) => JobResult::Replaced(trf!("Nada novo: os {} arquivos já estão na pasta ou na lista.", found)),
-        (true, _) => JobResult::Replaced(trf!("{} arquivos na fila.", added)),
     }
 }
 
@@ -157,6 +182,8 @@ fn apply_proxy(command: &mut Command, proxy: &ProxySettings) {
             }
         }
         Some(url) => {
+            // Read from the environment (its default, made sure of).
+            command.args(["-o", "proxy-env=true"]);
             for name in crate::ytdlp::PROXY_VARIABLES {
                 command.env(name, &url);
             }
@@ -173,6 +200,10 @@ fn command(request: &AddRequest, cookies: Option<&Path>, proxy: &ProxySettings) 
 /// `program` (a gallery-dl) asked to list the files at the gallery's address.
 pub(crate) fn listing(mut command: Command, request: &AddRequest, cookies: Option<&Path>, proxy: &ProxySettings) -> Command {
     command
+        // Not the user's own settings for gallery-dl: with them, listing could
+        // write to their download archive (as if fetched) or run their post
+        // processors. The login is the browser's (the cookies below).
+        .arg("--config-ignore")
         // One line per file, instead of the file; nothing else on stdout.
         .args(["--print", PRINT])
         // UTF-8, whatever the system's code page (Windows), and each line as
@@ -276,9 +307,9 @@ async fn list(manager: &Arc<Manager>, id: u64, request: &AddRequest, cancel: &Ca
     }
     let status = child.wait().await;
     drop(cookies);
-    let problem = last_problem(&log);
     match status {
         Ok(status) => {
+            let problem = last_problem(&log, !status.success());
             if !status.success() {
                 tracing::warn!(id, %status, problem = problem.as_deref().unwrap_or(""), "o gallery-dl terminou com erro");
             }
@@ -351,13 +382,18 @@ mod tests {
             "[instagram][warning] HTTP redirect to login page (https://www.instagram.com/accounts/login/)",
             "[instagram][error] AuthorizationError: Login required",
         ]);
-        assert_eq!(last_problem(&auth).as_deref(), Some("AuthorizationError: Login required"));
-        assert!(explain(last_problem(&auth)).starts_with("o site pediu login"));
+        assert_eq!(last_problem(&auth, true).as_deref(), Some("AuthorizationError: Login required"));
+        assert!(explain(last_problem(&auth, true)).starts_with("o site pediu login"));
         let warned = log(&["[twitter][info] Requesting guest token", "[twitter][warning] Tweet 1 unavailable"]);
-        assert_eq!(last_problem(&warned).as_deref(), Some("Tweet 1 unavailable"));
+        assert_eq!(last_problem(&warned, false).as_deref(), Some("Tweet 1 unavailable"));
         let unsupported = log(&["[gallery-dl][error] Unsupported URL 'https://example.com/'"]);
-        assert!(explain(last_problem(&unsupported)).starts_with("o gallery-dl não sabe baixar desta página"));
+        assert!(explain(last_problem(&unsupported, true)).starts_with("o gallery-dl não sabe baixar desta página"));
         assert_eq!(explain(None), "o gallery-dl não encontrou nenhum arquivo nesta página");
+        // An old gallery-dl that does not know an option: argparse's own line.
+        let old = log(&["usage: gallery-dl [OPTION]... URL...", "gallery-dl: error: unrecognized arguments: --print", ""]);
+        assert_eq!(last_problem(&old, true).as_deref(), Some("gallery-dl: error: unrecognized arguments: --print"));
+        let quiet = log(&["[instagram][info] nothing here"]);
+        assert_eq!(last_problem(&quiet, false), None, "an info line is no problem");
         assert_eq!(strip_colors("\u{1b}[1;31m[x][error] Falhou\u{1b}[0m"), "[x][error] Falhou");
     }
 
@@ -373,6 +409,7 @@ mod tests {
         let line = args(&command(&request, Some(&cookies), &none));
         let at = |flag: &str| line.iter().position(|a| a == flag).map(|i| line[i + 1].as_str());
         assert_eq!(at("--print"), Some(PRINT));
+        assert_eq!(line[0], "--config-ignore", "not the user's own archive or post processors");
         assert_eq!(at("--user-agent"), Some("Mozilla/5.0 (X11; Linux x86_64)"));
         assert_eq!(at("--cookies"), Some(cookies.to_string_lossy().as_ref()));
         assert_eq!(at("--range"), Some("1-5000"));

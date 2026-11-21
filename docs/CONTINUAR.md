@@ -79,14 +79,23 @@ Dados no Linux:
 - **Posts e perfis pelo gallery-dl** (`gallery.rs`, `manager/gallery_files.rs`): a galeria da
   extensão manda o post ou perfil como `SourceKind::Gallery` (`media-batch`). Ao rodar, o job chama
   `gallery-dl --print 'prepare:FISGAFILE\t{_url!j}\t{filename!j}\t{extension!j}'` (lista sem baixar;
-  `_url` é a URL de cada arquivo), com `--cookies` (o arquivo temporário do `ytdlp.rs`), `--user-agent`,
+  `_url` é a URL de cada arquivo; `--config-ignore`, porque com o download desligado a configuração do
+  próprio usuário ainda gravaria no arquivo de histórico dele e rodaria os pós-processadores dele),
+  com `--cookies` (o arquivo temporário do `ytdlp.rs`), `--user-agent`,
   o proxy pelo ambiente e `--range 1-5000`. Cada linha vira um download `Direct` (ou `Page` para os
   `ytdl:`, que o yt-dlp baixa) em `<categoria>/<site>`, com o post como Referer e só os cookies do
-  host do arquivo; o que já está na pasta ou na lista fica de fora. Depois o job sai da lista
-  (`JobResult::Replaced`, `Response::Removed`, uma notificação). O gallery-dl (GPL-2.0-only) é um
+  host do arquivo, no lugar do post na fila (`place_after`). Fica de fora o arquivo completo na pasta
+  e o que a lista tem (pelo caminho, ou pela URL quando não há nome); um download da lista que falhou
+  sem deixar arquivo ganha a URL nova e volta à fila (`renew`). Uma listagem por vez (`LISTING`): o
+  gallery-dl espaça os pedidos dentro de um processo, não entre vários. Depois o job sai da lista
+  (`JobResult::Replaced`, `Response::Removed`, uma notificação), mesmo quando o gallery-dl termina com
+  erro depois de achar arquivos (o código de saída soma erros de um link só). O gallery-dl (GPL-2.0-only) é um
   programa separado: nada do código dele entra no Fisga. Na extensão, `galleryTarget()` do
-  `background.js` conhece os endereços de post, álbum e perfil de cada site (e os reescreve como o
-  gallery-dl os conhece); o `pong` do native host diz se há gallery-dl (`galleryDl`).
+  `background.js` conhece os endereços de post, álbum e perfil de cada site, só nos hosts principais
+  (e os reescreve como o gallery-dl os conhece); o `pong` do native host diz se há gallery-dl
+  (`galleryDl`). O cartão da própria página tem chave própria (`<url>#gallery`) e o endereço em
+  `target`, porque a página pode já estar na lista como o vídeo de um post (para o yt-dlp); no envio,
+  o post inteiro cobre esse vídeo (`postOf` no `media.js`).
 - **Português e inglês** (`crates/fisga-i18n`): os textos ficam em português no código, dentro de
   `tr!("…")`/`trf!("… {}", x)`, e cada crate guarda o inglês em `i18n/en.txt` (o português numa linha,
   `= inglês` na seguinte). O teste `every_text_has_its_english` de cada crate falha com texto sem

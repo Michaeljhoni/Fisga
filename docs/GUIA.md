@@ -367,11 +367,16 @@ O que a galeria procura é o arquivo de verdade, não a miniatura:
   perfil, álbum ou pasta do Pinterest, o primeiro cartão é ele mesmo: **Post inteiro**, **Perfil
   inteiro** ou **Álbum inteiro** (até 5000 arquivos; perfis e álbuns não entram no **Selecionar
   todas**). No Fisga, o post aparece na lista enquanto o gallery-dl procura os arquivos, com quantos
-  já achou; depois dá lugar a eles, cada um um download comum em `Imagens/<site>` (vídeos em
-  `Vídeos/<site>`). O que já está na pasta ou na lista não vem de novo: mandar o mesmo perfil outro
-  dia traz só o que é novo. O gallery-dl usa os cookies do site (o seu login) num arquivo temporário,
-  apagado quando ele termina; se o site pedir login, entre na conta no navegador e mande de novo. Sem
-  o gallery-dl (Linux sem o pacote), as fotos vão como antes e a galeria avisa como instalá-lo.
+  já achou; depois dá lugar a eles, no mesmo ponto da fila, cada um um download comum em
+  `Imagens/<site>` (vídeos em `Vídeos/<site>`; o site é o do post, mesmo vindo de outra página). Os
+  posts mandados juntos são procurados um de cada vez, para o site não ver uma enxurrada de pedidos
+  com o seu login. O que já está na pasta ou na lista não vem de novo: mandar o mesmo perfil outro dia
+  traz só o que é novo, e um arquivo que tinha falhado (links assinados expiram) volta para a fila
+  com o link novo. Se o gallery-dl terminar com um erro depois de achar arquivos (um link morto num
+  post), eles vão para a fila do mesmo jeito e a notificação avisa. O gallery-dl usa os cookies do
+  site (o seu login) num arquivo temporário, apagado quando ele termina, e não lê a configuração
+  pessoal do gallery-dl; se o site pedir login, entre na conta no navegador e mande de novo. Sem o
+  gallery-dl (Linux sem o pacote), as fotos vão como antes e a galeria avisa como instalá-lo.
 
 Role a página antes de abrir a galeria (ou depois, e clique em **Atualizar**): muitos sites só
 carregam as fotos que aparecem na tela.

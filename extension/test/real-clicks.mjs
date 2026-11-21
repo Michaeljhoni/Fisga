@@ -15,7 +15,9 @@
 //   dismiss (the × hides the button; the popup and the next video bring it back),
 //   store (the Chrome Web Store package: nothing on YouTube, the rest still works),
 //   gallery (the media gallery on a local page: what it finds, the originals, what it sends),
-//   gallery-web (the gallery on real sites: GALLERY_URLS="url url", a report and screenshots)
+//   gallery-web (the gallery on real sites: GALLERY_URLS="url url", a report and screenshots);
+//   diagnostics: scan-local (what the scan finds on the local page; REFRESH=1 clicks Atualizar),
+//   gallery-timing (GALLERY_URLS: how fast the photos tab is checked), probe (PROBE_URLS)
 //   CHROME=/path/to/chrome overrides the browser; results go to extension/test/out/<label>/.
 import { spawn } from "node:child_process";
 import { deflateSync } from "node:zlib";
@@ -467,6 +469,7 @@ const GALLERY_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Ga
 <a href="/img/2000x1500/cachoeira.png"><img id="linked" src="/img/300x225/cachoeira-thumb.png"></a>
 <img id="full" src="/img/300x200/ponte-300.png" data-large-file="/img/1800x1200/ponte.png">
 <img id="wp" src="/wp-content/uploads/2024/05/flor-300x200.png">
+<img id="wp-small" src="/wp-content/uploads/2024/05/flor-150x100.png">
 <img id="icon" src="/img/16x16/icone.png">
 <div id="bg" style="width:320px;height:200px;background-image:url('/img/640x400/fundo.png')"></div>
 <video id="video" src="/media/filme.mp4" poster="/img/640x360/poster.png" width="320" height="180"></video>
@@ -482,12 +485,12 @@ async function gallerySite() {
   const server = createServer((req, res) => {
     const path = decodeURIComponent(req.url.split("?")[0]);
     const size = /^\/img\/(\d+)x(\d+)\//.exec(path);
-    const wp = /^\/wp-content\/uploads\/2024\/05\/flor(-300x200)?\.png$/.exec(path);
+    const wp = /^\/wp-content\/uploads\/2024\/05\/flor(-(\d+)x(\d+))?\.png$/.exec(path);
     if (path === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(GALLERY_PAGE);
     } else if (size || wp) {
-      const [w, h] = size ? [Number(size[1]), Number(size[2])] : wp[1] ? [300, 200] : [1200, 800];
+      const [w, h] = size ? [Number(size[1]), Number(size[2])] : wp[1] ? [Number(wp[2]), Number(wp[3])] : [1200, 800];
       const body = png(w, h, w + h);
       res.writeHead(200, { "content-type": "image/png", "content-length": body.length });
       res.end(body);
@@ -577,6 +580,8 @@ async function galleryScenario(sw) {
   log(`--- gallery: ${base}`);
   await openPage(base + "/");
   const { sessionId: gallery, targetId } = await openGallery(sw);
+  // "Atualizar" while the first checks run: what is sent must still be checked.
+  await evaluate(gallery, "document.getElementById('refresh').click()");
   await sleep(2500);
   // A tab's cards are checked (originals, sizes) only once the tab shows:
   // long enough on each for those checks to finish.
@@ -620,7 +625,9 @@ async function galleryScenario(sw) {
     videoFile: urls("video").includes("/media/filme.mp4") && urls("video").includes("/media/extra.webm"),
     videoPage: urls("video").includes("https://www.youtube.com/watch?v=jNQXAC9IVRw"),
     audio: urls("audio").includes("/media/musica.mp3"),
-    sentAll: sent.length === state.image.length + state.video.length - 1 + (state.audio?.length ?? 0),
+    // All but the protected stream, and the second thumbnail of the same original.
+    sentAll: sent.length === state.image.length + state.video.length - 1 + (state.audio?.length ?? 0) - 1,
+    sentOnce: sent.filter((d) => d.url.endsWith("/2024/05/flor.png")).length === 1,
     sentOriginal: sent.some((d) => d.url.endsWith("/flor.png") && d.category === "image"),
     sentFolder: sent.length > 0 && sent.every((d) => d.subfolder === "127.0.0.1"),
     sentCategories: sent.some((d) => d.category === "video" && d.kind === "page") && sent.some((d) => d.category === "music"),
@@ -1002,6 +1009,22 @@ try {
         log(JSON.stringify(state));
       }
       await shot(gallery, "gallery-timing");
+    }
+    if (s === "scan-local") {
+      // Diagnostics: what the scan returns for the local gallery page.
+      const { server, base } = await gallerySite();
+      await openPage(base + "/");
+      const result = await evaluate(sw, "chrome.tabs.query({ active: true, lastFocusedWindow: true }).then(([tab]) => galleryScan(tab.id))");
+      for (const item of result.items) log(JSON.stringify({ url: item.url.replace(base, ""), kind: item.kind, type: item.type, w: item.width, sw: item.shownWidth, cands: (item.candidates ?? []).map((c) => c.replace(base, "")) }));
+      const { sessionId: gallery } = await openGallery(sw);
+      if (process.env.REFRESH) await evaluate(gallery, "document.getElementById('refresh').click()");
+      await evaluate(gallery, "document.querySelector('[data-tab=image]').click()");
+      for (const wait of [300, 2500]) {
+        await sleep(wait);
+        const cards = await evaluate(gallery, "[...document.querySelectorAll('.card')].map((c) => c.title.split('/').slice(3).join('/') + ' | ' + c.querySelector('.detail').textContent)");
+        log(`after ${wait} ms: ${JSON.stringify(cards)}`);
+      }
+      server.close();
     }
     if (s === "probe") {
       // Diagnostics: the gallery's address check on PROBE_URLS, with its time.

@@ -593,7 +593,7 @@ async function galleryScan(tabId) {
       if (item.kind === "blob") {
         if (isExtractorPage(frameUrl) && isSingleVideoPage(frameUrl)) {
           push({ ...item, url: frameUrl, kind: "page", frameUrl, frameId: frame.frameId });
-        } else if (hasVideo(frame)) {
+        } else if (hasVideo(frame) || isExtractorPage(frameUrl)) {
           continue;
         } else if (/^https?:/.test(frameUrl)) {
           // yt-dlp's generic extractor may still find it in the page.
@@ -622,7 +622,10 @@ async function galleryScan(tabId) {
       frameId: candidate.frameId,
     });
   }
-  return { ok: true, error, page: { url: tab.url, title: tab.title, folder: siteFolder(tab.url) }, items };
+  // A Firefox container or a private window: the address checks cannot use
+  // its cookies, so a refused check proves nothing there.
+  const ownStore = Boolean(tab.incognito || (tab.cookieStoreId && !/^(firefox-default|0)$/.test(tab.cookieStoreId)));
+  return { ok: true, error, page: { url: tab.url, title: tab.title, folder: siteFolder(tab.url), ownStore }, items };
 }
 
 /** Width and height from the first bytes of a JPEG, PNG, GIF, WebP, AVIF/HEIF or BMP. */
@@ -666,22 +669,57 @@ function imageSize(bytes) {
   return null;
 }
 
+/** The site an address belongs to: its last two labels (three under a short second level such as com.br, co.uk). */
+function siteOf(hostname) {
+  const labels = (hostname || "").toLowerCase().split(".").filter(Boolean);
+  if (labels.length <= 2 || /^\d+$/.test(labels[labels.length - 1])) return labels.join(".");
+  const second = labels[labels.length - 2];
+  const short = second.length <= 3 && labels[labels.length - 1].length === 2;
+  return labels.slice(short ? -3 : -2).join(".");
+}
+/** Loopback, private networks and names without a dot (the local network). */
+function isPrivateHost(hostname) {
+  const host = (hostname || "").toLowerCase().replace(/^\[|\]$/g, "");
+  return (
+    !host.includes(".") ||
+    /\.(local|localhost|internal|lan|home\.arpa)$/.test(host) ||
+    /^(127|10)\.|^192\.168\.|^169\.254\.|^172\.(1[6-9]|2\d|3[01])\.|^0\./.test(host) ||
+    /^(::1?|f[cd][0-9a-f]{2}:.*|fe80:.*)$/.test(host)
+  );
+}
+/**
+ * How the gallery may ask for an address the page named: with the user's
+ * cookies only on the page's own site, and never inside the local network
+ * when the page is on the internet (a page must not make the extension
+ * call the router or localhost for it).
+ */
+function probePolicy(url, pageUrl) {
+  const u = parseUrl(url);
+  const page = parseUrl(pageUrl || "");
+  if (!u || !/^https?:$/.test(u.protocol) || isBlocked(url)) return null;
+  if (isPrivateHost(u.hostname) && !(page && isPrivateHost(page.hostname))) return null;
+  return page && siteOf(u.hostname) === siteOf(page.hostname) ? "include" : "omit";
+}
+
 /**
  * Is this address there, and what is it? The first 64 KiB (their header
  * gives a photo's size), never HEAD: some CDNs refuse it (X answers 503,
- * Google 404) where GET works.
+ * Google 404) where GET works. `light`: only whether it is there and what
+ * it is (no size read), for the checks right before sending.
  */
-async function probeUrl(url) {
-  if (!/^https?:/i.test(url ?? "") || isBlocked(url)) return { ok: false };
+async function probeUrl(url, pageUrl, light = false) {
+  const credentials = probePolicy(url, pageUrl);
+  if (!credentials) return { ok: false };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 12000);
   try {
-    const res = await fetch(url, { headers: { Range: "bytes=0-65535" }, credentials: "include", signal: controller.signal, redirect: "follow" });
+    const wanted = light ? "bytes=0-0" : "bytes=0-65535";
+    const res = await fetch(url, { headers: { Range: wanted }, credentials, signal: controller.signal, redirect: "follow" });
     const type = (res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
     const range = res.headers.get("content-range");
     const total = range ? Number(range.split("/")[1]) : Number(res.headers.get("content-length"));
     let dimensions = null;
-    if (res.ok && /^image\//.test(type) && res.body) {
+    if (!light && res.ok && /^image\//.test(type) && res.body) {
       const reader = res.body.getReader();
       const chunks = [];
       let length = 0;
@@ -725,13 +763,40 @@ async function probeUrl(url) {
  * protected (DRM: cannot be downloaded), and the quality playlists a master
  * lists (shown once, as the master).
  */
-async function probeManifest(url) {
-  if (!/^https?:/i.test(url ?? "") || isBlocked(url)) return { ok: false };
+/** At most `limit` bytes of an answer, as text: a playlist that never ends must not fill the memory. */
+async function readText(res, limit) {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks = [];
+  let length = 0;
+  while (length < limit) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    length += value.length;
+  }
+  reader.cancel().catch(() => {});
+  const bytes = new Uint8Array(Math.min(length, limit));
+  let at = 0;
+  for (const chunk of chunks) {
+    const part = chunk.subarray(0, bytes.length - at);
+    bytes.set(part, at);
+    at += part.length;
+    if (at >= bytes.length) break;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+const HLS_DRM = /#EXT-X(?:-SESSION)?-KEY:[^\n]*(METHOD=SAMPLE-AES|KEYFORMAT="(com\.apple\.streamingkeydelivery|urn:uuid))/i;
+
+async function probeManifest(url, pageUrl) {
+  const credentials = probePolicy(url, pageUrl);
+  if (!credentials) return { ok: false };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 12000);
   try {
-    const res = await fetch(url, { credentials: "include", signal: controller.signal });
-    const text = (await res.text()).slice(0, 512 * 1024);
+    const res = await fetch(url, { credentials, signal: controller.signal });
+    const text = await readText(res, 512 * 1024);
     if (/^#EXTM3U/m.test(text)) {
       const lines = text.split(/\r?\n/);
       let height = 0;
@@ -742,7 +807,12 @@ async function probeManifest(url) {
         const next = lines.slice(i + 1).find((l) => l.trim() && !l.startsWith("#"));
         if (next) variants.push(new URL(next.trim(), res.url || url).href);
       });
-      const drm = /#EXT-X(?:-SESSION)?-KEY:[^\n]*(METHOD=SAMPLE-AES|KEYFORMAT="(com\.apple\.streamingkeydelivery|urn:uuid))/i.test(text);
+      let drm = HLS_DRM.test(text);
+      // The keys usually sit in the quality playlists: look at the first one.
+      if (!drm && variants.length && probePolicy(variants[0], pageUrl)) {
+        const first = await fetch(variants[0], { credentials: probePolicy(variants[0], pageUrl), signal: controller.signal }).catch(() => null);
+        if (first?.ok) drm = HLS_DRM.test(await readText(first, 128 * 1024));
+      }
       return { ok: true, master: variants.length > 0, height, variants, drm };
     }
     if (/<MPD[\s>]/.test(text)) {
@@ -766,7 +836,8 @@ const GALLERY_CHUNK = 150;
 /** The gallery's selection, to the queue: each in its category's folder, inside the site's. */
 async function galleryDownload(msg) {
   const tab = await api.tabs.get(msg.tabId).catch(() => null);
-  const pageUrl = tab?.url || msg.pageUrl;
+  // The page the gallery listed, even if the tab moved on since.
+  const pageUrl = msg.pageUrl || tab?.url;
   const folder = siteFolder(pageUrl);
   const storeId = await cookieStoreOf(tab);
   const cookies = new Map();
@@ -794,21 +865,27 @@ async function galleryDownload(msg) {
   }
   if (!downloads.length) throw new Error(message("galleryNothingSelected", "Nenhuma mídia selecionada."));
   const ids = [];
+  // What the app took: after a failed part, the gallery marks only these as queued.
+  const sent = [];
   for (let i = 0; i < downloads.length; i += GALLERY_CHUNK) {
+    const chunk = downloads.slice(i, i + GALLERY_CHUNK);
     let reply;
     try {
-      reply = await api.runtime.sendNativeMessage(HOST, { type: "media-batch", downloads: downloads.slice(i, i + GALLERY_CHUNK) });
+      reply = await api.runtime.sendNativeMessage(HOST, { type: "media-batch", downloads: chunk });
     } catch (err) {
       const text = String(err?.message || err);
-      if (/not found|no such native application|forbidden/i.test(text)) {
-        throw new Error(message("hostMissing", "App Fisga não encontrado. Instale-o e rode: fisga install-hosts"));
-      }
-      throw new Error(text);
+      const error = /not found|no such native application|forbidden/i.test(text)
+        ? message("hostMissing", "App Fisga não encontrado. Instale-o e rode: fisga install-hosts")
+        : text;
+      return { ok: false, error, ids, sent, folder };
     }
-    if (reply?.type !== "added-batch") throw new Error(reply?.message || message("badReply", "Invalid answer from the Fisga app."));
+    if (reply?.type !== "added-batch") {
+      return { ok: false, error: reply?.message || message("badReply", "Invalid answer from the Fisga app."), ids, sent, folder };
+    }
     ids.push(...reply.ids);
+    sent.push(...chunk.map((download) => download.url));
   }
-  return { ok: true, ids, folder };
+  return { ok: true, ids, sent, folder };
 }
 
 /** Pages of the extension itself (popup, gallery), not content scripts. */
@@ -827,9 +904,9 @@ async function handle(msg, sender) {
     case "gallery-scan":
       return galleryScan(msg.tabId);
     case "gallery-probe":
-      return probeUrl(msg.url);
+      return probeUrl(msg.url, msg.pageUrl, Boolean(msg.light));
     case "gallery-manifest":
-      return probeManifest(msg.url);
+      return probeManifest(msg.url, msg.pageUrl);
     case "gallery-download":
       return galleryDownload(msg);
     case "media-candidates":

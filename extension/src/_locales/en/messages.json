@@ -67,5 +67,6 @@
   "galleryChecking": {"message": "Checking the original photos… $DONE$ of $TOTAL$", "placeholders": {"done": {"content": "$1"}, "total": {"content": "$2"}}},
   "gallerySent": {"message": "✓ $COUNT$ queued in Fisga, in the “$FOLDER$” folder.", "placeholders": {"count": {"content": "$1"}, "folder": {"content": "$2"}}},
   "galleryScanFailed": {"message": "Could not read the page: $ERROR$", "placeholders": {"error": {"content": "$1"}}},
-  "galleryDrm": {"message": "Protected (DRM)"}
+  "galleryDrm": {"message": "Protected (DRM)"},
+  "gallerySkipped": {"message": "$COUNT$ left out (repeated, protected or not found).", "placeholders": {"count": {"content": "$1"}}}
 }

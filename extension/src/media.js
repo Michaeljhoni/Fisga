@@ -75,7 +75,7 @@
     if (item.kind === "page") return item.generic ? t("galleryGeneric") : t("galleryViaPage");
     if (item.kind === "stream") {
       const kind = /\.mpd(\?|$)/i.test(item.url) || /dash/i.test(item.detail || "") ? "DASH" : "HLS";
-      return item.height ? `${kind} ${item.height}p` : kind;
+      return item.resolution ? `${kind} ${item.resolution}p` : kind;
     }
     const ext = /\.(\w{2,5})$/.exec(fileName(addressOf(item)))?.[1];
     return ext ? ext.toUpperCase() : item.type === "image" ? t("galleryPhoto") : "";
@@ -219,7 +219,7 @@
   }
 
   function updateBar() {
-    const chosen = items.filter((item) => selected.has(item.url));
+    const chosen = items.filter((item) => selected.has(item.url) && !item.dead);
     const counts = TYPES.map((type) => [type, chosen.filter((item) => item.type === type).length]).filter(([, n]) => n);
     const words = { video: "galleryCountVideos", image: "galleryCountPhotos", audio: "galleryCountAudio" };
     $("selected").textContent = chosen.length
@@ -281,8 +281,8 @@
     },
     { rootMargin: "300px" },
   );
-  function ask(url) {
-    return api.runtime.sendMessage({ type: "gallery-probe", url }).catch(() => ({ ok: false }));
+  function ask(url, light) {
+    return api.runtime.sendMessage({ type: "gallery-probe", url, pageUrl: page?.url, light }).catch(() => ({ ok: false }));
   }
   /** Is what the server sent the kind of file the card says? */
   function accepts(item, type) {
@@ -296,7 +296,7 @@
    * the right kind of file. A card whose candidates are all pages or missing
    * files is dropped; one whose server could not be asked stays as it is.
    */
-  async function probe(item) {
+  async function probe(item, light) {
     if (item.kind === "stream") return probeStream(item);
     if (item.kind !== "direct") return;
     const list = item.candidates?.length ? item.candidates : [item.url];
@@ -304,7 +304,7 @@
     let asked = 0;
     for (const candidate of list) {
       for (const address of [...(globalThis.FisgaFullsize?.candidates(candidate) ?? []), candidate]) {
-        const res = await ask(address);
+        const res = await ask(address, light);
         asked++;
         if (res.ok && accepts(item, res.type)) {
           item.best = address;
@@ -324,13 +324,19 @@
         if (res.ok || res.status === 404 || res.status === 410) refused++;
       }
     }
-    if (asked && refused === asked) item.dead = true;
+    // Where the checks cannot use the tab's cookies (a container, a private
+    // window), a refusal may only mean "log in": the card stays.
+    if (asked && refused === asked && !page?.ownStore) {
+      item.dead = true;
+      selected.delete(item.url);
+    }
   }
   /** The best resolution of a stream, its protection, and the quality lists a master already holds. */
   async function probeStream(item) {
-    const res = await api.runtime.sendMessage({ type: "gallery-manifest", url: item.url }).catch(() => null);
+    const res = await api.runtime.sendMessage({ type: "gallery-manifest", url: item.url, pageUrl: page?.url }).catch(() => null);
     if (!res?.ok) return;
-    item.height = res.height || 0;
+    // Its own field: a refresh renews the sizes the page reports.
+    item.resolution = res.height || 0;
     item.drm = res.drm;
     if (item.drm) selected.delete(item.url);
     for (const variant of res.variants ?? []) {
@@ -340,26 +346,37 @@
         selected.delete(copy.url);
       }
     }
-    if (res.variants?.length) render();
+    if (res.variants?.length) scheduleRender();
   }
 
-  function queueProbe(item) {
+  // Many checks end at once on big pages: one render per frame, not one each.
+  let renderQueued = false;
+  function scheduleRender() {
+    if (renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => {
+      renderQueued = false;
+      render();
+    });
+  }
+
+  function queueProbe(item, light = false) {
     if (item.probe) return item.probe;
-    item.probe = new Promise((resolve) => pending.push({ item, resolve }));
+    item.probe = new Promise((resolve) => pending.push({ item, light, resolve }));
     pump();
     return item.probe;
   }
   function pump() {
     while (running < PROBES && pending.length) {
-      const { item, resolve } = pending.shift();
+      const { item, light, resolve } = pending.shift();
       running++;
-      probe(item)
+      probe(item, light)
         .catch(() => {})
         .finally(() => {
           running--;
           const el = cards.get(item.url);
           if (el) fillCard(el, item);
-          if (item.dead) render();
+          if (item.dead) scheduleRender();
           resolve();
           pump();
         });
@@ -368,28 +385,34 @@
 
   // ------------------------------------------------------------- sending
   $("download").addEventListener("click", async () => {
-    const chosen = items.filter((item) => selected.has(item.url));
+    const chosen = items.filter((item) => selected.has(item.url) && !item.dead);
     if (!chosen.length || sending) return;
     sending = true;
     updateBar();
     const result = $("result");
     result.className = "result";
     // The originals (and the real files behind links) of what was picked
-    // before it showed on screen.
-    const photos = chosen.filter((item) => item.kind === "direct" && (item.type === "image" || item.verify));
+    // before it showed on screen, and the protection of the streams.
+    const checks = chosen.filter((item) => item.kind === "stream" || (item.kind === "direct" && (item.type === "image" || item.verify)));
     let done = 0;
-    result.textContent = t("galleryChecking", 0, photos.length);
+    result.textContent = t("galleryChecking", 0, checks.length);
     await Promise.all(
-      photos.map((item) =>
-        queueProbe(item).then(() => {
+      checks.map((item) =>
+        queueProbe(item, true).then(() => {
           done++;
-          result.textContent = t("galleryChecking", done, photos.length);
+          result.textContent = t("galleryChecking", done, checks.length);
         }),
       ),
     );
-    const live = chosen.filter((item) => !item.dead);
+    // Each file once: two thumbnails may lead to the same original.
+    const unique = new Map();
+    for (const item of chosen) if (!item.dead && !item.drm && !unique.has(addressOf(item))) unique.set(addressOf(item), item);
+    const live = [...unique.values()];
+    const left = chosen.length - live.length;
+    for (const item of chosen) if (item.dead || item.drm) selected.delete(item.url);
+    let res;
     try {
-      const res = await api.runtime.sendMessage({
+      res = await api.runtime.sendMessage({
         type: "gallery-download",
         tabId,
         pageUrl: page?.url,
@@ -401,20 +424,26 @@
           frameUrl: item.frameUrl,
         })),
       });
-      if (!res?.ok) throw new Error(res?.error || t("galleryFailed"));
-      for (const item of live) {
+    } catch (err) {
+      res = { ok: false, error: String(err?.message || err) };
+    }
+    // What the app took is queued, even when a later part failed.
+    const taken = new Set(res?.sent ?? []);
+    for (const item of chosen) {
+      if (taken.has(addressOf(item))) {
         item.sent = true;
         selected.delete(item.url);
       }
-      result.textContent = t("gallerySent", res.ids.length, res.folder);
-      result.className = "result ok";
-    } catch (err) {
-      result.textContent = String(err?.message || err);
-      result.className = "result err";
-    } finally {
-      sending = false;
-      render();
     }
+    if (res?.ok) {
+      result.textContent = t("gallerySent", res.ids.length, res.folder) + (left ? " " + t("gallerySkipped", left) : "");
+      result.className = "result ok";
+    } else {
+      result.textContent = res?.error || t("galleryFailed");
+      result.className = "result err";
+    }
+    sending = false;
+    render();
   });
 
   // ------------------------------------------------------------- scanning
@@ -438,6 +467,13 @@
     }
     page = res.page;
     $("page").textContent = [page.title, host(page.url)].filter(Boolean).join(" — ");
+    if (res.error && !res.items.length) {
+      $("status").textContent = t("galleryScanFailed", res.error);
+      items = [];
+      $("grid").replaceChildren();
+      updateBar();
+      return;
+    }
     if (res.blocked) {
       $("status").textContent = t("blockedSite");
       items = [];
@@ -445,25 +481,21 @@
       updateBar();
       return;
     }
-    // A refresh keeps what was already checked and picked.
+    // A refresh keeps the same objects for what it found again: a check
+    // still running writes into the object that will be sent, and the cards
+    // and the selection stay theirs. Only what the page says is renewed.
     const before = new Map(items.map((item) => [item.url, item]));
-    items = res.items.map((item) => {
-      const old = before.get(item.url);
-      return old
-        ? {
-            ...item,
-            best: old.best,
-            original: old.original,
-            size: old.size ?? item.size,
-            width: old.checked ? old.width : item.width,
-            height: old.checked ? old.height : item.height,
-            checked: old.checked,
-            drm: old.drm,
-            dead: old.dead,
-            sent: old.sent,
-            probe: old.probe,
-          }
-        : { ...item };
+    items = res.items.map((fresh) => {
+      const old = before.get(fresh.url);
+      if (!old) return { ...fresh };
+      for (const key of ["thumb", "name", "frameUrl", "frameId", "duration", "detail", "source", "candidates", "verify", "generic"]) {
+        if (fresh[key] !== undefined) old[key] = fresh[key];
+      }
+      if (!old.checked && !old.original) {
+        for (const key of ["width", "height", "shownWidth", "shownHeight"]) old[key] = fresh[key];
+      }
+      if (!old.size && fresh.size) old.size = fresh.size;
+      return old;
     });
     for (const key of [...selected]) if (!items.some((item) => item.url === key)) selected.delete(key);
     for (const key of [...cards.keys()]) if (!items.some((item) => item.url === key)) cards.delete(key);

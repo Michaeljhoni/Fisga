@@ -67,5 +67,6 @@
   "galleryChecking": {"message": "Conferindo as fotos originais… $DONE$ de $TOTAL$", "placeholders": {"done": {"content": "$1"}, "total": {"content": "$2"}}},
   "gallerySent": {"message": "✓ $COUNT$ na fila do Fisga, na pasta “$FOLDER$”.", "placeholders": {"count": {"content": "$1"}, "folder": {"content": "$2"}}},
   "galleryScanFailed": {"message": "Não foi possível ler a página: $ERROR$", "placeholders": {"error": {"content": "$1"}}},
-  "galleryDrm": {"message": "Protegido (DRM)"}
+  "galleryDrm": {"message": "Protegido (DRM)"},
+  "gallerySkipped": {"message": "$COUNT$ ficaram de fora (repetidas, protegidas ou não encontradas).", "placeholders": {"count": {"content": "$1"}}}
 }

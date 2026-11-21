@@ -823,6 +823,7 @@
       const link = el === mainPlayer ? null : videoLink(el);
       const post = !link && !here ? postLink(el) : "";
       const page = videoPage(link?.url || "") || (post ? { url: post, thumb: "" } : null) || here;
+      if (!page && !(el.currentSrc || el.src)) continue; // a placeholder: nothing loaded, nothing to offer
       if (page) {
         // The page's own video is named by the page; a feed's, by its link.
         const title = page.url === here?.url ? clean(document.title.replace(/\s+[-|–]\s+[^-|–]+$/, "")) : link?.title;

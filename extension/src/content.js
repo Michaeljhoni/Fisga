@@ -123,16 +123,23 @@
   if (document.documentElement) startObserving();
   else document.addEventListener("readystatechange", startObserving, { once: true });
 
+  // When each player last started loading a source (its loadstart): the
+  // background sends the stream loaded since then, not one that another player
+  // of the frame (or the previous video of an embed) loaded before.
+  const loadStarts = new WeakMap();
+
   // Media inside open shadow roots or created without being in the DOM tree we
   // scanned still fires play/loadedmetadata; composedPath() gives the real target.
-  for (const type of ["play", "playing", "loadedmetadata"]) {
+  for (const type of ["loadstart", "play", "playing", "loadedmetadata"]) {
     document.addEventListener(
       type,
       (e) => {
         const el = e.composedPath?.()[0] ?? e.target;
         if (!(el instanceof HTMLMediaElement)) return;
         track(el);
-        if (type !== "loadedmetadata" && enabled && eligible(el)) {
+        if (type === "loadstart") {
+          loadStarts.set(el, Date.now());
+        } else if (type !== "loadedmetadata" && enabled && eligible(el)) {
           attach(el);
           scheduleHide(SHOW_ON_PLAY_MS);
         }
@@ -467,6 +474,7 @@
       linkTitle: link?.title || null,
       title: document.title,
       duration: Number.isFinite(el.duration) ? el.duration : null,
+      loadedAt: loadStarts.get(el) ?? null,
     };
   }
 

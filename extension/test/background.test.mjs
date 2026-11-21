@@ -175,3 +175,23 @@ test("a change of the fragment alone keeps the tab's media", async () => {
   await bg.chrome.tabs.onUpdated.fire(1, { url: "https://site.example/video?id=2" });
   assert.equal(bg.run("mediaByTab.get(1)?.length ?? 0"), 0);
 });
+
+// ------------------------------------------------------- the overlay button
+/** What the button over a blob: player sends (resolveTarget), as content.js asks. */
+function pick(bg, msg, sender = { tab: { id: 1, url: "https://site.example/" }, frameId: 0 }) {
+  const full = { src: "blob:https://site.example/1", pageUrl: "https://site.example/", ...msg };
+  return bg.run(`resolveTarget(${JSON.stringify(full)}, ${JSON.stringify(sender)})`).then(plain);
+}
+
+test("the button sends the stream its own player loaded", async () => {
+  const bg = load();
+  const a = "https://cdn.example/a/master.m3u8";
+  const a720 = "https://cdn.example/a/720p.m3u8";
+  const b = "https://cdn.example/b/master.m3u8";
+  for (const url of [a, a720, b]) await sniff(bg, { url, type: HLS });
+  bg.run(`for (const c of mediaByTab.get(1)) c.ts = ${JSON.stringify({ [a]: 1000, [a720]: 1100, [b]: 2000 })}[c.url]`);
+  assert.equal((await pick(bg, { loadedAt: 1500 })).url, b, "the second player");
+  assert.equal((await pick(bg, { loadedAt: 900 })).url, a, "the first player: its master playlist");
+  assert.equal((await pick(bg, {})).url, a, "no load time: the page's first manifest");
+  assert.equal((await pick(bg, { loadedAt: 5000 })).url, b, "nothing loaded since: the latest");
+});

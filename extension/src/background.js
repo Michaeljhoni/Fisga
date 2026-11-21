@@ -321,11 +321,16 @@ async function resolveTarget(msg, sender) {
   const list = mediaByTab.get(tabId) ?? [];
   const sameFrame = list.filter((c) => c.frameId === sender.frameId);
   const pool = sameFrame.length ? sameFrame : list;
-  // The first manifest of a page is usually the master playlist (all qualities).
-  const stream = pool.filter((c) => c.kind === "stream").sort((a, b) => a.ts - b.ts)[0];
-  if (stream) return stream;
-  const direct = pool.filter((c) => c.kind === "direct").sort((a, b) => (b.size ?? 0) - (a.size ?? 0))[0];
-  if (direct) return direct;
+  // What the player loaded since it last started loading (content.js's
+  // loadedAt); without that time, everything the frame loaded.
+  const since = Number(msg.loadedAt) || 0;
+  const fresh = pool.filter((c) => c.ts >= since);
+  const streams = (l) => l.filter((c) => c.kind === "stream").sort((a, b) => a.ts - b.ts);
+  const largest = (l) => l.filter((c) => c.kind === "direct").sort((a, b) => (b.size ?? 0) - (a.size ?? 0))[0];
+  // The first manifest is usually the master playlist (all qualities); when
+  // nothing came since, the latest one is the closest guess.
+  const found = streams(fresh)[0] ?? largest(fresh) ?? streams(pool).at(-1) ?? largest(pool);
+  if (found) return found;
   // Nothing sniffed (e.g. the video has not started): let yt-dlp try the page.
   return { url: frameUrl, kind: "page" };
 }

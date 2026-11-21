@@ -609,13 +609,45 @@ async function galleryWebScenario(sw) {
   return { name: "gallery-web", report };
 }
 
+// Two MediaSource players (blob: addresses), like hls.js: each loads its
+// playlist after its loadstart, and the first one later moves to another video.
+const TWO_PLAYERS = `<!doctype html><body style="font:16px sans-serif;padding:20px">
+<div style="display:flex;gap:40px">
+<video id="a" muted style="width:400px;height:225px;background:#000"></video>
+<video id="b" muted style="width:400px;height:225px;background:#000"></video>
+</div>
+<script>
+  async function load(id, path) {
+    const video = document.getElementById(id);
+    const started = new Promise((r) => video.addEventListener("loadstart", r, { once: true }));
+    video.src = URL.createObjectURL(new MediaSource());
+    await started;
+    await fetch(path);
+  }
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  (async () => {
+    await load("a", "/hls/a/master.m3u8");
+    await wait(1200);
+    await load("b", "/hls/b/master.m3u8");
+    await wait(1200);
+    await load("a", "/hls/c/master.m3u8");
+    window.__ready = true;
+  })();
+</script></body>`;
+
 // A local site for the takeover and the force key: a link like Civitai's,
 // whose address has no extension and whose name only comes in the
 // Content-Disposition of the redirect's target, and a link to a plain page.
 async function localSite() {
   const { createServer } = await import("node:http");
   const server = createServer((req, res) => {
-    if (req.url === "/") {
+    if (req.url === "/two") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(TWO_PLAYERS);
+    } else if (/^\/hls\/\w+\/master\.m3u8$/.test(req.url)) {
+      res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" });
+      res.end("#EXTM3U\n#EXT-X-VERSION:3\n");
+    } else if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(`<!doctype html><body style="font:20px sans-serif;padding:40px">
         <p><a id="model" href="/api/download/models/1">Baixar modelo</a></p>
@@ -708,6 +740,52 @@ async function fakeForceScenario(sw, base) {
   return { name: "fake-force", pass, sent: after };
 }
 
+/** Hovers the element with this id until the button shows; its box, or null. */
+async function hoverElement(page, id) {
+  const box = await evaluate(page, `(() => { const r = document.getElementById(${JSON.stringify(id)}).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+  await moveTo(page, box.x, box.y);
+  for (let i = 0; i < 10; i++) {
+    await sleep(300);
+    await mouse(page, "mouseMoved", box.x + (i % 2), box.y);
+    if (await buttonShown(page)) return { at: box, button: await overlayBox(page, "main") };
+  }
+  return { at: box, button: null };
+}
+
+/** Clicks the button over each element in turn: what each one sent. */
+async function clickEach(sw, page, players) {
+  const results = [];
+  for (const [id, expected] of players) {
+    const { at, button } = await hoverElement(page, id);
+    if (!button) {
+      results.push({ player: id, expected, error: "button did not appear" });
+      continue;
+    }
+    const before = (await sent(sw)).length;
+    await click(page, button.x, button.y);
+    await sleep(1500);
+    results.push({ player: id, expected, sent: (await sent(sw)).slice(before)[0] ?? null });
+    await moveTo(page, 30, 700, at);
+    await sleep(3000); // the button hides
+  }
+  return results;
+}
+
+// Two blob: players in one frame: each button sends the playlist its own
+// player loaded last (the first player moved on to a third video).
+async function twoPlayersScenario(sw, base) {
+  log(`--- two-players: ${base}/two`);
+  const page = await openPage(base + "/two");
+  for (let i = 0; i < 20 && !(await evaluate(page, "window.__ready === true")); i++) await sleep(250);
+  const results = await clickEach(sw, page, [
+    ["a", base + "/hls/c/master.m3u8"],
+    ["b", base + "/hls/b/master.m3u8"],
+  ]);
+  const pass = results.every((r) => r.sent?.url === r.expected && r.sent?.kind === "stream");
+  log(JSON.stringify(results));
+  return { name: "two-players", pass, results };
+}
+
 // The Chrome Web Store package (dist-store): on YouTube no button and no
 // media, and YouTube addresses are refused; a link elsewhere still goes.
 async function storeScenario(sw) {
@@ -768,9 +846,10 @@ try {
     if (s === "store") report.push(await storeScenario(sw));
     if (s === "gallery") report.push(await galleryScenario(sw));
     if (s === "gallery-web") report.push(await galleryWebScenario(sw));
-    if (s === "takeover" || s === "force" || s === "fake-force") {
+    const local = { takeover: takeoverScenario, force: forceScenario, "fake-force": fakeForceScenario, "two-players": twoPlayersScenario };
+    if (local[s]) {
       const { server, base } = await localSite();
-      report.push(await { takeover: takeoverScenario, force: forceScenario, "fake-force": fakeForceScenario }[s](sw, base));
+      report.push(await local[s](sw, base));
       server.close();
     }
   }

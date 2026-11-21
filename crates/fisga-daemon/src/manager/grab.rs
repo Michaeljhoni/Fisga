@@ -184,12 +184,10 @@ impl Manager {
                             files.push(file);
                         }
                     }
-                    Some(Found::Page(next)) => {
-                        if level < depth && inside(&start, &next) && seen_pages.insert(next.to_string()) {
-                            queue.push_back((next, level + 1));
-                        }
+                    Some(Found::Page(next)) if level < depth && inside(&start, &next) && seen_pages.insert(next.to_string()) => {
+                        queue.push_back((next, level + 1));
                     }
-                    None => {}
+                    _ => {}
                 }
             }
         }

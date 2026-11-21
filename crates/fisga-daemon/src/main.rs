@@ -334,7 +334,8 @@ async fn serve_client(manager: Arc<Manager>, gui: Arc<Gui>, updater: Arc<Updater
                     }
                 }
                 // What was waiting for a GUI (it may have been launched for it).
-                for waiting in confirmer.then(|| gui.take_inbox()).unwrap_or_default() {
+                let inbox = if confirmer { gui.take_inbox() } else { Default::default() };
+                for waiting in inbox {
                     if write(&mut writer, &waiting).await.is_err() {
                         return;
                     }
